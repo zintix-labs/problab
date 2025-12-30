@@ -25,7 +25,7 @@ import (
 
 // Game 負責掌管單一遊戲的生命週期：讀取設定、建立模式處理器、串接邏輯並提供 spin 入口。
 type Game struct {
-	core                *core.Core
+	Core                *core.Core
 	GameSetting         *spec.GameSetting
 	GameName            string
 	GameId              spec.GID
@@ -44,7 +44,7 @@ type Game struct {
 // NewGame 建立 Game，使用呼叫端提供的 GameSetting
 func NewGame(gs *spec.GameSetting, reg *LogicRegistry, core *core.Core, isSim bool) (*Game, error) {
 	g := &Game{
-		core:        core,
+		Core:        core,
 		GameName:    gs.GameName,
 		GameSetting: gs,
 		IsSim:       isSim,
@@ -103,7 +103,7 @@ func (g *Game) init(reg *LogicRegistry) error {
 	modecount := len(g.GameSetting.GameModeSettings)
 	g.GameModeHandlerList = make([]*GameMode, modecount)
 	for i := 0; i < modecount; i++ {
-		g.GameModeHandlerList[i] = newGameMode(g.core, &g.GameSetting.GameModeSettings[i], i)
+		g.GameModeHandlerList[i] = newGameMode(g.Core, &g.GameSetting.GameModeSettings[i], i)
 	}
 
 	// 建立介面

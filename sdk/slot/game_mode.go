@@ -31,7 +31,7 @@ import (
 // 建議：
 // - 純 Base Game 通常 1~2 次 Yield（或甚至 0 次），poolSize 可小。
 // - 會在一次 spin 內多次產出 mode result（例如 base + free + bonus）時可提高。
-const poolSize int = 4
+const poolSize int = 3
 
 // GameMode 是「單一 GameMode」在執行期的工作站 (runtime workstation)。
 //

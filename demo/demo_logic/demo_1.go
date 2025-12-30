@@ -39,18 +39,19 @@ func init() {
 
 type game0001 struct {
 	fixed *fixed0001
+	ext   *ext0001
 }
 
 func buildGame0001(g *slot.Game) (slot.GameLogic, error) {
-	g1 := &game0001{
-		fixed: &fixed0001{
-			baseMaxStep:       1000,
-			freeMaxStep:       1000,
-			fillScreenIdx:     []int{0, 0, 0, 0, 0},
-			nowfillReelSetIdx: []int{0, 0, 0, 0, 0},
-			symbolTypes:       g.GameSetting.GameModeSettings[0].SymbolSetting.SymbolTypes,
-		},
+	fix := new(fixed0001)
+	if err := spec.DecodeFixed(g.GameSetting, fix); err != nil {
+		return nil, err
 	}
+	fix.fillReelsIdx = make([]int, g.GameSetting.GameModeSettings[0].ScreenSetting.Columns)
+	fix.screenFillPos = make([]int, g.GameSetting.GameModeSettings[0].ScreenSetting.Columns)
+	fix.symbolTypes = g.GameSetting.GameModeSettings[0].SymbolSetting.SymbolTypes
+	g1 := &game0001{fixed: fix}
+	g1.ext = g1.newext(g.GameSetting.GameModeSettings[0].ScreenSetting.ScreenSize, g.IsSim)
 	return g1, nil
 }
 
@@ -59,16 +60,54 @@ func buildGame0001(g *slot.Game) (slot.GameLogic, error) {
 // ============================================================
 
 type fixed0001 struct {
-	baseMaxStep       int
-	freeMaxStep       int
-	fillScreenIdx     []int
-	nowfillReelSetIdx []int
-	symbolTypes       []spec.SymbolType
+	MaxStep       int `yaml:"max_step"`
+	FreeRounds    int `yaml:"free_rounds"`
+	Trigger       int `yaml:"trigger"`
+	ScatterPay    int `yaml:"scatter_pay"`
+	fillReelsIdx  []int
+	screenFillPos []int
+	symbolTypes   []spec.SymbolType
 }
 
 // ============================================================
 // ** 遊戲需要的額外結構宣告: 需要實作Reset以及SnapShot **
 // ============================================================
+
+type ext0001 struct {
+	Triggered     bool  `json:"is_trigger"`
+	ScatterCount  int   `json:"scatters,omitzero"`
+	ScatterHitMap []int `json:"scatter_hits,omitzero"`
+	isSim         bool
+}
+
+func (g *game0001) newext(screensize int, isSim bool) *ext0001 {
+	return &ext0001{
+		Triggered:     false,
+		ScatterCount:  0,
+		ScatterHitMap: make([]int, 0, screensize),
+		isSim:         isSim,
+	}
+}
+
+func (e *ext0001) Reset() {
+	e.Triggered = false
+	e.ScatterCount = 0
+	e.ScatterHitMap = e.ScatterHitMap[:0]
+}
+
+func (e *ext0001) Snapshot() any {
+	if e.isSim {
+		return nil
+	}
+	hits := make([]int, len(e.ScatterHitMap))
+	copy(hits, e.ScatterHitMap)
+	ec := &ext0001{
+		Triggered:     e.Triggered,
+		ScatterCount:  e.ScatterCount,
+		ScatterHitMap: hits,
+	}
+	return ec
+}
 
 // ============================================================
 // ** 遊戲主邏輯入口 **
@@ -97,43 +136,53 @@ func (g *game0001) getBaseResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameMod
 	sg := mode.ScreenGenerator
 	sc := mode.ScreenCalculator
 	gmr := mode.GameModeResult
-	maxStep := g.fixed.baseMaxStep
+	maxStep := g.fixed.MaxStep
 	fillReelSet := &mode.GameModeSetting.GenScreenSetting.ReelSetGroup[1]
-
 	betMult := r.BetMult
+	fix := g.fixed
+	g.resetIdx()
 
 	for i := 0; i < 1; i++ {
-		// 1. 生成該round開局盤面
+
+		// 1. gen first screen
 		screen := sg.GenScreen()
-		g.resetIdx()
+		gmr.AddAct(buf.FinishAct, "gen_screen", screen, nil)
+
+		for i := range fix.fillReelsIdx {
+			fix.fillReelsIdx[i] = fillReelSet.Reels[i].ReelLUT.Pick(gh.Core)
+		}
 		for range maxStep {
-			// 2. 算分
+			// 2. calc win
 			sc.CalcScreen(betMult, screen, gmr)
+			hit := gmr.HitMapTmp()
 
-			// 3. Act完成
-			win := gmr.GetTmpWin() // 先記當下贏分避免提交後要重找
-			gmr.AddAct(buf.FinishAct, "GenAndCalcScreen", screen, nil)
-
-			// 4. 如果沒贏分退出
-			if win == 0 {
+			// 3. break loop when win == 0
+			if gmr.GetTmpWin() == 0 {
 				gmr.FinishStep()
 				break
 			}
+			// 4. record win
+			gmr.AddAct(buf.FinishAct, "win", nil, nil)
 
-			// 5. 消除掉落
-			// 5.1 消除
-			ops.Clear(screen, gmr.HitMapLastAct())
-			// 5.2 掉落
-			ops.Gravity(screen, sg.Cols, sg.Rows, g.fixed.fillScreenIdx)
+			// 5. clear hit symbol on screen
+			ops.Clear(screen, hit)
+			gmr.AddAct(buf.FinishStep, "clear", screen, nil)
 
-			// 6. 提交 Step結果
-			gmr.AddAct(buf.FinishStep, "Gravity", screen, nil) // 消除掉落盤面
+			// 6. gravity
+			ops.Gravity(screen, sg.Cols, sg.Rows, g.fixed.screenFillPos)
+			gmr.AddAct(buf.FinishStep, "gravity", screen, nil)
 
-			// 7. 補滿盤面
-			ops.FillScreen(screen, fillReelSet, g.fixed.fillScreenIdx, g.fixed.nowfillReelSetIdx, sg.Cols)
+			// 7. fill screen
+			ops.FillScreen(screen, fillReelSet, g.fixed.screenFillPos, g.fixed.fillReelsIdx, sg.Cols)
+			gmr.AddAct(buf.FinishStep, "fillscreen", screen, nil)
 		}
 
+		// trigger
 		gmr.Trigger = g.trigger(screen)
+		if gmr.Trigger > 0 {
+			gmr.UpdateTmpWin(fix.ScatterPay * betMult)
+			gmr.AddAct(buf.FinishAct, "trigger", nil, g.ext)
+		}
 		gmr.FinishRound()
 	}
 	return mode.YieldResult()
@@ -144,45 +193,48 @@ func (g *game0001) getFreeResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameMod
 	sg := mode.ScreenGenerator
 	sc := mode.ScreenCalculator
 	gmr := mode.GameModeResult
-	maxStep := g.fixed.freeMaxStep
+	maxStep := g.fixed.MaxStep
 	fillReelSet := &mode.GameModeSetting.GenScreenSetting.ReelSetGroup[1]
+	fix := g.fixed
 
 	betMult := r.BetMult
 
-	for i := 0; i < 10; i++ {
-		// 1. 生成該round開局盤面
+	for i := 0; i < fix.FreeRounds; i++ {
+		// 1. gen first screen
 		screen := sg.GenScreen()
+		gmr.AddAct(buf.FinishAct, "gen_screen", screen, nil)
 		g.resetIdx()
+
+		for i := range fix.fillReelsIdx {
+			fix.fillReelsIdx[i] = fillReelSet.Reels[i].ReelLUT.Pick(gh.Core)
+		}
 		for range maxStep {
-			// 2. 算分
+			// 2. calc win
 			sc.CalcScreen(betMult, screen, gmr)
+			hit := gmr.HitMapTmp()
 
-			// 3. Act完成
-			win := gmr.GetTmpWin() // 先記當下贏分避免提交後要重找
-			gmr.AddAct(buf.FinishAct, "GenAndCalcScreen", screen, nil)
-
-			// 4. 如果沒贏分退出
-			if win == 0 {
+			// 3. break loop when win == 0
+			if gmr.GetTmpWin() == 0 {
 				gmr.FinishStep()
 				break
 			}
+			// 4. record win
+			gmr.AddAct(buf.FinishAct, "win", nil, nil)
 
-			// 5. 消除掉落
-			// 5.1 消除
-			ops.Clear(screen, gmr.HitMapLastAct())
-			// 5.2 掉落
-			ops.Gravity(screen, sg.Cols, sg.Rows, g.fixed.fillScreenIdx)
+			// 5. clear hit symbol on screen
+			ops.Clear(screen, hit)
+			gmr.AddAct(buf.FinishStep, "clear", screen, nil)
 
-			// 6. 提交step結果
-			gmr.AddAct(buf.FinishAct, "Gravity", screen, nil) // 消除掉落盤面
+			// 6. gravity
+			ops.Gravity(screen, sg.Cols, sg.Rows, g.fixed.screenFillPos)
+			gmr.AddAct(buf.FinishStep, "gravity", screen, nil)
 
-			// 7. 補滿盤面
-			ops.FillScreen(screen, fillReelSet, g.fixed.fillScreenIdx, g.fixed.nowfillReelSetIdx, sg.Cols)
+			// 7. fill screen
+			ops.FillScreen(screen, fillReelSet, g.fixed.screenFillPos, g.fixed.fillReelsIdx, sg.Cols)
+			gmr.AddAct(buf.FinishStep, "fillscreen", screen, nil)
 		}
-
 		gmr.FinishRound()
 	}
-
 	return mode.YieldResult()
 }
 
@@ -192,22 +244,25 @@ func (g *game0001) getFreeResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameMod
 
 // 0 代表不觸發 > 0 各自觸發
 func (g *game0001) trigger(screen []int16) int {
-	symTypes := g.fixed.symbolTypes
-	count := 0
-	for _, v := range screen {
-		if symTypes[v] == spec.SymbolTypeScatter {
-			count++
+	g.ext.Reset()
+	ext := g.ext
+	symtype := g.fixed.symbolTypes
+	for i := 0; i < len(screen); i++ {
+		if symtype[screen[i]] == spec.SymbolTypeScatter {
+			ext.ScatterCount++
+			ext.ScatterHitMap = append(ext.ScatterHitMap, i)
 		}
 	}
-	if count > 2 {
+	if ext.ScatterCount >= g.fixed.Trigger {
+		ext.Triggered = true
 		return 1
 	}
 	return 0
 }
 
 func (g *game0001) resetIdx() {
-	for i := 0; i < len(g.fixed.fillScreenIdx); i++ {
-		g.fixed.fillScreenIdx[i] = 0
-		g.fixed.nowfillReelSetIdx[i] = 0
+	for i := 0; i < len(g.fixed.screenFillPos); i++ {
+		g.fixed.screenFillPos[i] = 0
+		g.fixed.fillReelsIdx[i] = 0
 	}
 }

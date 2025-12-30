@@ -99,6 +99,7 @@ func (s *Simulator) Sim(betMode int, round int, showpb bool) (*stats.StatReport,
 	m := s.mBuf[0]
 
 	bar := pb.StartNew(round)
+	bar.Set(pb.CleanOnFinish, true)
 	if !showpb {
 		bar.SetWriter(io.Discard)
 	}
@@ -146,6 +147,7 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 	wg := new(sync.WaitGroup)
 	wg.Add(mp)
 	bar := pb.StartNew(rounds * mp)
+	bar.Set(pb.CleanOnFinish, true)
 	if !showpb {
 		bar.SetWriter(io.Discard)
 	}
@@ -205,6 +207,7 @@ func (s *Simulator) SimPlayers(mp int, players int, initBets int, betMode int, r
 	wg.Add(mp) // 併發機台
 
 	bar := pb.StartNew(players)
+	bar.Set(pb.CleanOnFinish, true)
 	if !showpb {
 		bar.SetWriter(io.Discard)
 	}

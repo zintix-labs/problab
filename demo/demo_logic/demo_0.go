@@ -60,7 +60,7 @@ func buildGame0000(gh *slot.Game) (slot.GameLogic, error) {
 
 // fixed
 type fixed0000 struct {
-	DemoA       int    `yaml:"demo_a"`
+	FreeRound   int    `yaml:"free_round"`
 	DemoB       []int  `yaml:"demo_b"`
 	DemoC       string `yaml:"demo_c"`
 	symboltypes []spec.SymbolType
@@ -164,10 +164,11 @@ func (g *game0000) getFreeResult(betMult int, gh *slot.Game) *buf.GameModeResult
 	sg := mode.ScreenGenerator
 	sc := mode.ScreenCalculator
 	gmr := mode.GameModeResult
+	round := g.fixed.FreeRound
 	ext := g.ext
 	ext.Reset()
 
-	for i := 0; i < 1; i++ {
+	for i := 0; i < round; i++ {
 		// 1. 生成盤面
 		screen := sg.GenScreen()
 		gmr.AddAct(buf.FinishAct, "screen", screen, nil)
