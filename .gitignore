@@ -1,0 +1,144 @@
+# ==============================================================
+# Problab - Safe .gitignore
+# ==============================================================
+
+# 忽略快取
+.gocache
+
+# 忽略vscode個人化設置
+.vscode/settings
+.vscode/settings.txt
+
+# Mac OS
+.DS_Store
+
+# build 二進位輸出資料夾: 僅保留結構
+build/bin/*
+build/profiling/*
+
+# scripts
+scripts/bin/*
+
+# ------------------------------
+# Go toolchain / build artifacts
+# ------------------------------
+# Go build outputs
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go test binaries / profiles / coverage
+*.test
+*.out
+*.prof
+*.pprof
+*.trace
+coverage/
+coverprofile.out
+*.cover
+
+# Go workspace cache (optional but safe)
+.gocache/
+
+# ------------------------------
+# Project build outputs
+# ------------------------------
+# build 二進位輸出資料夾: 僅保留結構
+build/bin/*
+build/profiling/*
+
+# 常見輸出資料夾（若有）
+dist/
+out/
+bin/
+
+# ------------------------------
+# Logs / temp / runtime dumps
+# ------------------------------
+*.log
+logs/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.pid
+*.sock
+
+# pprof dumps / cpu/mem profiles
+*.heap
+*.cpu
+
+# ------------------------------
+# OS / editor / IDE
+# ------------------------------
+# Mac OS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# VSCode
+.vscode/*
+
+# JetBrains
+.idea/
+*.iml
+
+# ------------------------------
+# Node / frontend (dev panel)
+# ------------------------------
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+.yarn-cache/
+
+# Vite/webpack/etc.
+*.tsbuildinfo
+
+# ------------------------------
+# Python (tools / scripts)
+# ------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ------------------------------
+# Secrets / local-only configs
+# ------------------------------
+# env files (keep examples)
+.env
+.env.*
+!.env.example
+
+# credentials / keys / certificates (avoid leaking secrets)
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+*.der
+*.pass
+*.secret
+
+# local overrides (do NOT ignore repo configs; only local variants)
+*.local.yaml
+*.local.yml
+*.local.json
+config.local.*
+
+# generic secret folders
+secrets/
+**/secrets/
+
+# ------------------------------
+# scripts
+# ------------------------------
+scripts/bin/*
