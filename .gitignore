@@ -2,22 +2,30 @@
 # Problab - Safe .gitignore
 # ==============================================================
 
-# 忽略快取
+# ------------------------------
+# project ignore
+# ------------------------------
+
+# cache
 .gocache
 
-# 忽略vscode個人化設置
+# settings
 .vscode/settings
 .vscode/settings.txt
 
 # Mac OS
 .DS_Store
 
-# build 二進位輸出資料夾: 僅保留結構
+# build
 build/bin/*
 build/profiling/*
 
 # scripts
 scripts/bin/*
+
+# ==============================================================
+# General ignore
+# ==============================================================
 
 # ------------------------------
 # Go toolchain / build artifacts
@@ -142,3 +150,18 @@ secrets/
 # scripts
 # ------------------------------
 scripts/bin/*
+
+
+# ------------------------------
+# compress
+# ------------------------------
+*.zip
+*.7z
+*.tar
+*.tgz
+*.tar.gz
+*.tar.xz
+*.xz
+*.gz
+*.rar
+*.zst
