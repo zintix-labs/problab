@@ -1,0 +1,55 @@
+name: Go
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  # 1) Lint (fast feedback, separate from tests)
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          # Pin the version for reproducible CI results.
+          # Bump intentionally when you want to adopt new lint rules.
+          version: v1.60.3
+          args: --timeout=5m
+
+  # 2) Test & Build (correctness + race safety)
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Keep go.mod/go.sum tidy and consistent (prevents "works on my machine" deps drift).
+      - name: Check go.mod/go.sum is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      # Problab is a high-throughput engine: -race is the most valuable CI check.
+      # (Skip coverage here to keep CI fast and deterministic.)
+      - name: Test (race)
+        run: go test -v -race ./...
+
+      # Ensure everything compiles (cmd/, demo/, etc.)
+      - name: Build
+        run: go build -v ./...
