@@ -1,3 +1,9 @@
+// This file includes an implementation of exponential variates using the Ziggurat method.
+// Portions are adapted from the Go standard library:
+//   https://go.dev/src/math/rand/exp.go
+// Copyright (c) 2009 The Go Authors. All rights reserved.
+// Licensed under the BSD 3-Clause License.
+
 package core
 
 import "math"

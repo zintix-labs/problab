@@ -1,3 +1,17 @@
+// Copyright 2025 Zintix Labs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // Package core implements the PCG64 random number generator.
 //
 // The PCG algorithm is designed by Melissa O'Neill.
@@ -8,9 +22,6 @@
 package core
 
 import (
-	"crypto/rand"
-	"math"
-	"math/big"
 	"math/bits"
 	r2 "math/rand/v2"
 )
@@ -20,12 +31,6 @@ const is32bit = ^uint(0)>>32 == 0
 // PCG64 亂數產生器
 type PCG64 struct {
 	rng *r2.PCG
-}
-
-// newPCG64 使用加密隨機來源產生 seed，建立新的 PCG64 實例。
-func newPCG64() *PCG64 {
-	seed, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	return newPCG64WithSeed(seed.Int64())
 }
 
 // newPCG64WithSeed 以指定 seed 建立新的 PCG64 實例。

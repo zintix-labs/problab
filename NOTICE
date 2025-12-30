@@ -1,0 +1,14 @@
+Third-Party Notices
+
+This project includes or is derived from the following third-party software:
+
+1) Go standard library (math/rand, math/rand/v2)
+   Copyright (c) 2009 The Go Authors. All rights reserved.
+   License: BSD 3-Clause
+   Source: https://go.dev/src/
+
+Portions of the bounded random generation logic and the Ziggurat-based exponential
+sampling are adapted from the Go standard library sources referenced above.
+
+A copy of the BSD 3-Clause License is provided in:
+third_party/licenses/GO_BSD-3-Clause.txt

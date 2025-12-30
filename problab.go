@@ -1,3 +1,17 @@
+// Copyright 2025 Zintix Labs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // Package problab 提供 Problab 引擎的「組裝入口（assembler）」與「運行入口（runtime entry）」。
 //
 // 你可以把 Problab 視為一個「可被後端/模擬器使用的 runtime」，它負責把下列三個必需的地基組裝在一起，並提供建立 Machine 的入口：
