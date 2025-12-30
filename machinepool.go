@@ -40,7 +40,7 @@ type MachinePool struct {
 	gameId        spec.GID
 	gs            *spec.GameSetting
 	logic         *slot.LogicRegistry
-	cf            core.CoreFactory
+	cf            core.PRNGFactory
 	initSeed      int64
 	seedMaker     *seedMaker
 	pool          chan *Machine // 可用機台的通道，用於取得和歸還機台
@@ -65,7 +65,7 @@ type MachinePool struct {
 // 初始化內容包含：
 //   - 建立 pool（可用機台）與 broken（壞機台）兩個 channel
 //   - 預先建立 n 台機台並放入 pool，以便立即提供服務
-func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.CoreFactory, seed int64) (*MachinePool, error) {
+func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64) (*MachinePool, error) {
 	n = max(1, n) // 確保機台數量至少為1
 	p := &MachinePool{
 		gameName:  gs.GameName,

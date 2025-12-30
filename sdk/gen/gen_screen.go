@@ -60,10 +60,14 @@ func NewScreenGenerator(core *core.Core, screenSetting *spec.ScreenSetting, genS
 }
 
 // init 對於已經資料賦值的 ScreenGenerator 作初始化
-func (sg *ScreenGenerator) init() {
+func (sg *ScreenGenerator) init() error {
 	// 防止錯誤
-	sg.GenScreenSetting.Init()
-	sg.ScreenSetting.Init()
+	if err := sg.GenScreenSetting.Init(); err != nil {
+		return err
+	}
+	if err := sg.ScreenSetting.Init(); err != nil {
+		return err
+	}
 
 	// screenSetting 內容建立
 	sg.Cols = sg.ScreenSetting.Columns
@@ -85,6 +89,7 @@ func (sg *ScreenGenerator) init() {
 		log.Fatal("GenReelType wrong")
 	}
 	sg.Screen = make([]int16, sg.Cols*sg.Rows)
+	return nil
 }
 
 // GenScreen 生成盤面熱路徑函數

@@ -59,7 +59,7 @@ func (gs *GameSetting) valid() error {
 		}
 	}
 
-	// 檢查 GameModeSettingList 不能為空
+	// 檢查 GameModeSettings 不能為空
 	if len(gs.GameModeSettings) == 0 {
 		return errs.NewFatal("empty game_mode_settings")
 	}
@@ -70,6 +70,20 @@ func (gs *GameSetting) valid() error {
 		screenSetting := gms.ScreenSetting
 		if screenSetting.Columns <= 0 || screenSetting.Rows <= 0 {
 			return errs.NewFatal(fmt.Sprintf("invalid screen dimensions: cols=%d rows=%d", screenSetting.Columns, screenSetting.Rows))
+		}
+		count := int16(gms.SymbolSetting.SymbolCount)
+		rsGp := gms.GenScreenSetting.ReelSetGroup
+		if len(rsGp) != 0 {
+			for rsid := range rsGp {
+				rs := rsGp[rsid].Reels
+				for j := range rs {
+					for k, s := range rs[j].ReelSymbols {
+						if s < 0 || s > count {
+							return errs.NewFatal(fmt.Sprintf("symbol out of range: reelset %d reel %d index %d : %d", rsid, j, k, s))
+						}
+					}
+				}
+			}
 		}
 	}
 

@@ -50,7 +50,7 @@ func loadConfigFromFlags() (*svrcfg.SvrCfg, error) {
 	log, _ := logger.NewAsync(4096, cfg.norm())
 
 	lab, err := problab.NewAuto(
-		core.NewDefault(),
+		core.Default(),
 		problab.Configs(demo_configs.FS),
 		problab.Logics(demo_logic.Reg),
 	)

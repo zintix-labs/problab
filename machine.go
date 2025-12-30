@@ -62,7 +62,7 @@ type Machine struct {
 //   - 同時保留可追溯性（seed 會被記錄在 Machine.initseed）
 //
 // seed 只保證了新建的Machine起點，如果需要在任意局後將機台"重設"到任意Core節點，請利用Snapshot Restore來操作
-func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.CoreFactory, isSim bool) (*Machine, error) {
+func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, isSim bool) (*Machine, error) {
 	seed, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		return nil, errs.Wrap(err, "new crypto seed error in go std lib")
@@ -78,11 +78,11 @@ func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.CoreFacto
 //  1. core.New(cf.NewWithSeed(seed)) 建出 RNG 核心
 //  2. slot.NewGame(gs, reg, core, isSim) 依設定 + registry 建出 Slot 遊戲執行核心
 //  3. 初始化 Machine 需要的 buffers（SpinRequest/SpinResult）
-func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.CoreFactory, seed int64, isSim bool) (*Machine, error) {
+func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, isSim bool) (*Machine, error) {
 	m := &Machine{
 		gameName:    gs.GameName,
 		gameId:      spec.GID(gs.GameID),
-		core:        core.New(cf.NewWithSeed(seed)),
+		core:        core.New(cf.New(seed)),
 		gh:          nil,
 		BetUnits:    nil,
 		SpinRequest: nil,

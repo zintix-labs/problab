@@ -19,7 +19,7 @@
 // adapted from the Go standard library (math/rand), which is
 // licensed under the BSD 3-Clause License.
 
-package core
+package internal
 
 import (
 	"math/bits"
@@ -33,8 +33,8 @@ type PCG64 struct {
 	rng *r2.PCG
 }
 
-// newPCG64WithSeed 以指定 seed 建立新的 PCG64 實例。
-func newPCG64WithSeed(seed int64) *PCG64 {
+// NewPCG64WithSeed 以指定 seed 建立新的 PCG64 實例。
+func NewPCG64WithSeed(seed int64) *PCG64 {
 	x := uint64(seed) ^ (0x9e3779b97f4a7c15)
 	hi := splitmix64(x)
 	lo := splitmix64(x ^ 0xDA942042E4DD58B5)

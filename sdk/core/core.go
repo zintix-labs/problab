@@ -14,14 +14,10 @@
 
 package core
 
-import (
-	"crypto/rand"
-	"math"
-	"math/big"
-)
+import "github.com/zintix-labs/problab/sdk/core/internal"
 
-// CORE 定義 Core 所需的亂數來源，需同時支援取樣與狀態保存/還原。
-type CORE interface {
+// PRNG 定義 Core 所需的亂數來源，需同時支援取樣與狀態保存/還原。
+type PRNG interface {
 	RAND
 	Restorable
 }
@@ -61,49 +57,40 @@ type RAND interface {
 	IntN(int) int
 }
 
-type CoreFactory interface {
-	// NewWithSeed 以指定 seed 建立新的 CORE。
+type PRNGFactory interface {
+	// New 以指定 seed 建立新的 PRNG。
 	//
-	// 合約（很重要）：在同一個實作與同一個版本下，NewWithSeed(seed) 必須是「決定性」的——
+	// 合約（很重要）：在同一個實作與同一個版本下，New(seed) 必須是「決定性」的——
 	// 也就是相同的 seed 必須產生相同的初始內部狀態與輸出序列。
 	//
-	// 為什麼只保留 NewWithSeed？
+	// 為什麼只保留 New？
 	//   - Problab 需要可重現（審計/回放/併發模擬的多機台派生）。
 	//   - seed 的生命週期由 Problab 統一管理：外部未提供時由 Problab 產生並保存 baseSeed，
 	//     後續所有 Machine/Sim 皆由 baseSeed 以固定算法派生子 seed。
 	//   - 因此 Problab 內部永遠不需要呼叫「不帶 seed 的 New()」，避免行為不一致與難以重現。
-	NewWithSeed(int64) CORE
+	New(int64) PRNG
 }
 
-// Default 實作預設的 CoreFactory
-type Default struct{}
+// DefaultPRNG 實作預設的 CoreFactory
+type DefaultPRNG struct{}
 
-// NewWithSeed 滿足合約
-func (d *Default) NewWithSeed(seed int64) CORE {
-	return newPCG64WithSeed(seed)
+// New 滿足合約
+func (d *DefaultPRNG) New(seed int64) PRNG {
+	return internal.NewPCG64WithSeed(seed)
 }
 
-func NewDefault() *Default {
-	return &Default{}
+func Default() *DefaultPRNG {
+	return &DefaultPRNG{}
 }
 
 // Core 封裝 PRNG，並提供常用取樣與工具方法。
 type Core struct {
-	CORE
+	PRNG
 }
 
 // New 允許使用外部自實現的 PRNG 建立 Core。
-func New(rng CORE) *Core {
+func New(rng PRNG) *Core {
 	return &Core{rng}
-}
-
-func NewDefaultCore() *Core {
-	seed, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	return New(new(Default).NewWithSeed(seed.Int64()))
-}
-
-func NewDefaultCoreWithSeed(seed int64) *Core {
-	return New(new(Default).NewWithSeed(seed))
 }
 
 // Pick 從列表中隨機選取一個元素，若列表為空回傳 -1

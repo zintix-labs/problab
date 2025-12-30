@@ -86,7 +86,7 @@ func executeSimulator() { // 取得spin數
 	cfg.valid() // 基本檢查
 
 	lab, err := problab.NewAuto(
-		core.NewDefault(),
+		core.Default(),
 		problab.Configs(demo_configs.FS),
 		problab.Logics(demo_logic.Reg),
 	)

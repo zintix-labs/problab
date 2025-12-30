@@ -101,7 +101,7 @@ func Logics(regs ...*slot.LogicRegistry) []*slot.LogicRegistry {
 type Problab struct {
 	cat *catalog.Catalog
 	reg *slot.LogicRegistry
-	cf  core.CoreFactory
+	cf  core.PRNGFactory
 	sum []catalog.Summary
 }
 
@@ -118,7 +118,7 @@ type Problab struct {
 //   - logics 至少一個：沒有邏輯 builders，就算解析出設定也無法建出可執行的遊戲邏輯。
 //
 // 回傳的 Problab 會持有：cat（目錄）、reg（合併後 registry）、cf（RNG 工廠）。
-func New(cf core.CoreFactory, cfgs []fs.FS, logics []*slot.LogicRegistry) (*Problab, error) {
+func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry) (*Problab, error) {
 	if cf == nil {
 		return nil, errs.NewFatal("core factory required")
 	}
@@ -147,7 +147,7 @@ func New(cf core.CoreFactory, cfgs []fs.FS, logics []*slot.LogicRegistry) (*Prob
 // NewAuto 建立一個直接進入執行階段的 Problab instance。
 //
 // 回傳的 Problab 會持有：cat（目錄）、reg（合併後 registry）、cf（RNG 工廠）。
-func NewAuto(cf core.CoreFactory, cfgs []fs.FS, logics []*slot.LogicRegistry) (*Problab, error) {
+func NewAuto(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry) (*Problab, error) {
 	lab, err := New(cf, cfgs, logics)
 	if err != nil {
 		return nil, err

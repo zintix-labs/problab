@@ -31,7 +31,7 @@ func New() (*catalog.Catalog, error) {
 
 func NewServerConfig() (*svrcfg.SvrCfg, error) {
 	lab, err := problab.NewAuto(
-		core.NewDefault(),
+		core.Default(),
 		problab.Configs(demo_configs.FS),
 		problab.Logics(demo_logic.Reg),
 	)

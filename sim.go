@@ -41,7 +41,7 @@ type Simulator struct {
 	initBets  int                      // 用戶帶的錢(以轉數設定)
 	gs        *spec.GameSetting        // 方便重用建立Statistician
 	logic     *slot.LogicRegistry      // 邏輯註冊表
-	cf        core.CoreFactory         // 亂數生成器
+	cf        core.PRNGFactory         // 亂數生成器
 	initSeed  int64                    // 初始下的種子
 	seedmaker *seedMaker               // 種子生成器
 	mBuf      []*Machine               // 併發執行機台實例
@@ -49,7 +49,7 @@ type Simulator struct {
 	sBuf      []*stats.StatReport      // 併發統計結果報表(僅Players需要)
 }
 
-func newSimulator(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.CoreFactory) (*Simulator, error) {
+func newSimulator(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory) (*Simulator, error) {
 	seed, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func newSimulator(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.CoreFac
 	return newSimulatorWithSeed(gs, reg, cf, seed.Int64())
 }
 
-func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.CoreFactory, seed int64) (*Simulator, error) {
+func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64) (*Simulator, error) {
 	s := &Simulator{
 		GameName:  gs.GameName,
 		GameId:    gs.GameID,
