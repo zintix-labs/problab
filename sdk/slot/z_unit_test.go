@@ -19,60 +19,14 @@ import (
 
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/slot"
-	"github.com/zintix-labs/problab/spec"
 )
 
 type testLogic struct{}
-
-type testExt struct{ v int }
-
-func (t *testExt) Reset() {
-	t.v = 0
-}
-
-func (t *testExt) Snapshot() any {
-	return t.v
-}
 
 func (t *testLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinResult {
 	res := g.StartNewSpin(r)
 	res.TotalWin = r.Bet
 	return res
-}
-
-func testGameSetting() *spec.GameSetting {
-	gms := spec.GameModeSetting{
-		ScreenSetting: spec.ScreenSetting{
-			Columns: 2,
-			Rows:    1,
-		},
-		GenScreenSetting: spec.GenScreenSetting{
-			GenReelTypeStr: "GenReelByReelIdx",
-			ReelSetGroup: []spec.ReelSet{
-				{Weight: 1, Reels: []spec.Reel{
-					{ReelSymbols: []int16{1}},
-					{ReelSymbols: []int16{1}},
-				}},
-			},
-		},
-		SymbolSetting: spec.SymbolSetting{
-			SymbolUsedStr: []string{"H1"},
-			PayTable:      [][]int{{0, 2}},
-		},
-		HitSetting: spec.HitSetting{
-			BetTypeStr: "line_ltr",
-			LineTable:  [][]int16{{0, 0}},
-		},
-	}
-
-	return &spec.GameSetting{
-		GameName:         "demo",
-		GameID:           1,
-		LogicKey:         "demo_logic",
-		BetUnits:         []int{1},
-		MaxWinLimit:      10,
-		GameModeSettings: []spec.GameModeSetting{gms},
-	}
 }
 
 func TestLogicRegistry(t *testing.T) {

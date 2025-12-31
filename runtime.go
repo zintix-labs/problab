@@ -49,6 +49,8 @@ func (rt *SlotRuntime) Spin(ctx context.Context, req *buf.SpinRequest) (dto.Spin
 		// 如果通知取消
 		return dto.SpinResult{}, errs.NewWarn("spin canceled/timeout: " + ctx.Err().Error())
 	case <-rt.done:
+		// done is the source of truth; keep a fast boolean for cheap reads/telemetry.
+		rt.closed.Store(true)
 		return dto.SpinResult{}, errs.NewFatal("slot runtime closed: " + rt.ClosedReason())
 	default:
 	}
@@ -62,7 +64,33 @@ func (rt *SlotRuntime) Spin(ctx context.Context, req *buf.SpinRequest) (dto.Spin
 	return mp.Spin(ctx, req)
 }
 
+// Close transitions the runtime into a closed state. It is safe to call multiple times.
+func (rt *SlotRuntime) Close() {
+	rt.closeWithReason("closed")
+}
+
+// closeWithReason closes the runtime and records the reason (written once).
+func (rt *SlotRuntime) closeWithReason(reason string) {
+	rt.closeOnce.Do(func() {
+		if reason == "" {
+			reason = "closed"
+		}
+		rt.reason.Store(reason)
+		rt.closed.Store(true)
+		close(rt.done)
+	})
+}
+
+// Closed reports whether the runtime has been closed.
+func (rt *SlotRuntime) Closed() bool {
+	return rt.closed.Load()
+}
+
 func (rt *SlotRuntime) ClosedReason() string {
-	r, _ := rt.reason.Load().(string)
-	return r
+	if v := rt.reason.Load(); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }

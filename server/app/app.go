@@ -17,6 +17,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -85,6 +86,9 @@ func (a *App) gracefulShutdown(td time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), td)
 	defer cancel()
 	for _, c := range a.comps {
-		c.Shutdown(ctx)
+		err := c.Shutdown(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stdout, "shutdown err: %v\n", err)
+		}
 	}
 }

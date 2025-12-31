@@ -117,9 +117,9 @@ func (sc *ScreenCalculator) init() {
 }
 
 func (sc *ScreenCalculator) initSettings() {
-	sc.ScreenSetting.Init()
-	sc.SymbolSetting.Init()
-	sc.HitSetting.Init()
+	_ = sc.ScreenSetting.Init()
+	_ = sc.SymbolSetting.Init()
+	_ = sc.HitSetting.Init()
 }
 
 func (sc *ScreenCalculator) initScreen() {

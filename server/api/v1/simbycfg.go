@@ -79,5 +79,5 @@ func (sh *SimHandler) SetByJson(w http.ResponseWriter, r *http.Request) {
 
 	// 6. 回傳Json
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }

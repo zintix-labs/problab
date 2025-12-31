@@ -155,7 +155,7 @@ func (sh *SimHandler) Sim(w http.ResponseWriter, q *http.Request) {
 		UsedTime: used.Milliseconds(),
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
@@ -317,5 +317,5 @@ func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }

@@ -15,6 +15,8 @@
 package demo_logic
 
 import (
+	"log"
+
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/slot"
 	"github.com/zintix-labs/problab/spec"
@@ -25,11 +27,14 @@ import (
 // ============================================================
 
 func init() {
-	slot.GameRegister[*buf.NoExtend](
-		"demo_normal",
+	logic := "demo_normal"
+	if err := slot.GameRegister[*buf.NoExtend](
+		spec.LogicKey(logic),
 		buildGame0000,
 		Reg,
-	)
+	); err != nil {
+		log.Fatalf("%s register failed: %v", logic, err)
+	}
 }
 
 // ============================================================
