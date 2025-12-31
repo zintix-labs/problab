@@ -119,17 +119,6 @@ sps : 19,010,181 spins/sec
 
 ---
 
-## What Problab Is Not
-
-- Not a visual game framework
-- Not a frontend engine
-- Not a low-code editor
-- Not a math black box
-
-Problab is a **math execution engine**, optimized for correctness, speed, and reproducibility.
-
----
-
 ## Typical Use Cases
 
 - Slot math simulation & validation
@@ -214,7 +203,7 @@ This makes Problab suitable for:
 
 ## Status
 
-- **Current version:** v0.1.0
+- **Current version:** v0.2.0
 - APIs may evolve
 - Focus is on correctness, performance, and core architecture
 
