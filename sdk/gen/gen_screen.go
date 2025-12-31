@@ -55,7 +55,7 @@ func NewScreenGenerator(core *core.Core, screenSetting *spec.ScreenSetting, genS
 		ScreenSetting:    screenSetting,
 		GenScreenSetting: genScreenSetting,
 	}
-	result.init()
+	_ = result.init()
 	return result
 }
 

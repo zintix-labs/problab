@@ -28,19 +28,6 @@ func testScreenSetting(cols, rows int) *spec.ScreenSetting {
 	}
 }
 
-func testGenScreenSetting(cols int) *spec.GenScreenSetting {
-	reels := make([]spec.Reel, cols)
-	for i := 0; i < cols; i++ {
-		reels[i] = spec.Reel{ReelSymbols: []int16{1, 2, 3}}
-	}
-	return &spec.GenScreenSetting{
-		GenReelTypeStr: "GenReelByReelIdx",
-		ReelSetGroup: []spec.ReelSet{
-			{Weight: 1, Reels: reels},
-		},
-	}
-}
-
 func TestGenScreenByReelSetIdx(t *testing.T) {
 	ss := testScreenSetting(2, 2)
 	gs := &spec.GenScreenSetting{
