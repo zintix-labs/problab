@@ -152,7 +152,7 @@ func (cfg *config) valid() {
 	}
 
 	// 模擬玩家的時候，每個玩家最高不超過15000轉(無意義)
-	// 對一個玩家來說 1500轉約1hr 15000轉約10小時 體驗已經轉為長期，直接模擬長局數機台即可
+	// 對一個玩家來說 15000轉 應該超過10HRs 體驗已經轉為長期，直接模擬長局數機台即可
 	if cfg.player > 1 && cfg.spins > 15000 {
 		p.Printf("too much spins for each players : %d resized to 15k spins for each player\n", cfg.spins)
 		cfg.spins = 15000

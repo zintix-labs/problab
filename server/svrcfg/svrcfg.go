@@ -22,10 +22,46 @@ import (
 	"github.com/zintix-labs/problab/server/logger"
 )
 
+// RunMode controls which HTTP endpoints are exposed by the server router.
+//
+// The same Problab engine can be used in multiple contexts (lab/dev vs production).
+// This flag lets you explicitly choose the exposure surface:
+//
+//   - ModeDev: local development / benchmarking / debugging (tooling endpoints enabled)
+//   - ModeProd: production-safe exposure (minimal endpoints only)
+//
+// IMPORTANT:
+// In the problab repository, the built-in cmd/svr is intended as a "lab server"
+// and typically runs with ModeDev.
+// For real deployments, assemble your own service (e.g. via scaffold) and run
+// ModeProd by default.
+type RunMode uint8
+
+const (
+	// ModeDev enables the full "lab" surface.
+	//
+	// This mode is intended for local development, benchmarking, and debugging.
+	// It may expose developer tooling endpoints such as:
+	//   - simulation / long-run endpoints
+	//   - stats/report helpers
+	//   - dev panel and per-spin JSON inspection
+	//
+	// Do NOT use this mode for public-facing production deployments.
+	ModeDev RunMode = iota
+
+	// ModeProd enables production-safe exposure only.
+	//
+	// This mode is intended for embedding Problab into a real backend service.
+	// It should expose only minimal endpoints required by production traffic
+	// (e.g. spin + health(todo)) and keep all tooling/simulation endpoints disabled.
+	ModeProd
+)
+
 type SvrCfg struct {
 	Log         *slog.Logger
 	SlotBufSize int
 	Problab     *problab.Problab
+	Mode        RunMode
 }
 
 func (sc *SvrCfg) Vaild() error {
@@ -34,12 +70,12 @@ func (sc *SvrCfg) Vaild() error {
 			return errs.NewFatal("nil default log handler: async handler is nil")
 		}
 	} else {
-		// 保持安靜、合法
+		// Keep quiet but valid: if caller doesn't provide a logger, use a safe default.
 		sc.Log, _ = logger.NewAsync(1024, logger.ModeDev)
 	}
 
-	// 1 <= sc.SlotBuffer <= 10
-	// for 資源管理
+	// Clamp SlotBufSize into a small range for resource control.
+	// 1 <= SlotBufSize <= 10
 	sc.SlotBufSize = max(1, sc.SlotBufSize)
 	sc.SlotBufSize = min(10, sc.SlotBufSize)
 	if sc.Problab == nil {

@@ -27,6 +27,9 @@ import (
 	"github.com/zintix-labs/problab/server/svrcfg"
 )
 
+// This command is intentionally a "lab server" entrypoint for the problab repo.
+// It enables all developer endpoints by default.
+// For production deployments, use a separate scaffold project and run ModeProd.
 func main() {
 	cfg, err := loadConfigFromFlags()
 	if err != nil {
@@ -61,6 +64,7 @@ func loadConfigFromFlags() (*svrcfg.SvrCfg, error) {
 		Log:         log,
 		SlotBufSize: cfg.SlotBufSize,
 		Problab:     lab,
+		Mode:        svrcfg.ModeDev,
 	}
 	return sCfg, nil
 }
