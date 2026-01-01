@@ -93,8 +93,9 @@ type asyncDispatcher struct {
 }
 
 type asyncItem struct {
-	ctx context.Context
-	rec slog.Record
+	ctx     context.Context
+	rec     slog.Record
+	handler slog.Handler
 }
 
 // NewAsyncHandler wraps next with an async dispatcher.
@@ -113,7 +114,7 @@ func NewAsyncHandler(next slog.Handler, buf int) *AsyncHandler {
 	}
 
 	d.wg.Add(1)
-	go d.worker(next)
+	go d.worker()
 
 	return &AsyncHandler{next: next, d: d}
 }
@@ -140,19 +141,23 @@ func (h *AsyncHandler) Close() {
 	h.d.wg.Wait()
 }
 
-func (d *asyncDispatcher) worker(next slog.Handler) {
+func (d *asyncDispatcher) worker() {
 	defer d.wg.Done()
 
 	// 背景 worker：收到 closed 後會 drain 直到 channel 空。
 	for {
 		select {
 		case it := <-d.ch:
-			_ = next.Handle(it.ctx, it.rec)
+			if it.handler != nil {
+				_ = it.handler.Handle(it.ctx, it.rec)
+			}
 		case <-d.closed:
 			for {
 				select {
 				case it := <-d.ch:
-					_ = next.Handle(it.ctx, it.rec)
+					if it.handler != nil {
+						_ = it.handler.Handle(it.ctx, it.rec)
+					}
 				default:
 					return
 				}
@@ -166,6 +171,11 @@ func (h *AsyncHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *AsyncHandler) Handle(ctx context.Context, r slog.Record) error {
+	if h == nil || h.d == nil {
+		// Not ready; drop silently
+		return nil
+	}
+
 	// Close() 之後：不再接受新 log，直接 drop
 	select {
 	case <-h.d.closed:
@@ -176,7 +186,7 @@ func (h *AsyncHandler) Handle(ctx context.Context, r slog.Record) error {
 
 	// r.Clone() 會複製 attributes，避免 Record 內部的可變引用在跨 goroutine 時出問題。
 	// 這是 slog.Record 的標準用法。
-	it := asyncItem{ctx: ctx, rec: r.Clone()}
+	it := asyncItem{ctx: ctx, rec: r.Clone(), handler: h.next}
 
 	select {
 	case h.d.ch <- it:
