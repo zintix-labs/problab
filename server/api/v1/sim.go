@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/big"
 	"net/http"
@@ -26,16 +27,18 @@ import (
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/server/httperr"
+	"github.com/zintix-labs/problab/server/svrcfg"
 	"github.com/zintix-labs/problab/spec"
 	"github.com/zintix-labs/problab/stats"
 )
 
 type SimHandler struct {
 	Problab *problab.Problab
+	log     *slog.Logger
 }
 
-func NewSimHandler(pb *problab.Problab) (*SimHandler, error) {
-	return &SimHandler{Problab: pb}, nil
+func NewSimHandler(scfg *svrcfg.SvrCfg) (*SimHandler, error) {
+	return &SimHandler{Problab: scfg.Problab, log: scfg.Log}, nil
 }
 
 func (sh *SimHandler) Sim(w http.ResponseWriter, q *http.Request) {
@@ -146,6 +149,7 @@ func (sh *SimHandler) Sim(w http.ResponseWriter, q *http.Request) {
 	}
 	st, used, err := sim.Sim(req.BetMode, req.Round, false)
 	if err != nil {
+		httperr.Log(sh.log, "simulate err", err)
 		// 這裡的錯誤來自simulator 尊重錯誤分級
 		httperr.Errs(w, errs.Wrap(err, "simulate err"))
 		return
@@ -307,6 +311,7 @@ func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
 	}
 	st, est, used, err := sim.SimPlayers(4, req.Player, req.Bets, req.BetMode, req.Round, false)
 	if err != nil {
+		httperr.Log(sh.log, "simulate players err", err)
 		httperr.Errs(w, errs.Wrap(err, fmt.Sprintf("simulator err: %d", req.GID)))
 		return
 	}

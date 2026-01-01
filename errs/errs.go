@@ -55,7 +55,7 @@ type E struct {
 
 // Error 實作 error 介面並回傳格式化後的錯誤訊息。
 func (e *E) Error() string {
-	base := fmt.Sprintf("[problab][errlv=%s] %s", ErrLv(e.ErrLv), e.Message)
+	base := fmt.Sprintf("errlv=%s %s", ErrLv(e.ErrLv), e.Message)
 	if e.Extra != "" {
 		base += " | extra: " + e.Extra
 	}

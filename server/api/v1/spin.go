@@ -17,6 +17,7 @@ package v1
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -27,25 +28,26 @@ import (
 	"github.com/zintix-labs/problab/server/svrcfg"
 )
 
-func (c *SpinHandler) Spin(w http.ResponseWriter, q *http.Request) {
+func (s *SpinHandler) Spin(w http.ResponseWriter, r *http.Request) {
 	// 請求方法、結構體校驗
-	if q.Method != http.MethodGet && q.Method != http.MethodPost {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	req, err := buf.DecodeSpinRequest(q)
+	req, err := buf.DecodeSpinRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// 請求解析完成，設置超時 context
-	ctx := q.Context()
+	ctx := r.Context()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	// 開始 Spin
-	result, err := c.rt.Spin(ctx, req)
+	result, err := s.rt.Spin(ctx, req)
 	if err != nil {
+		httperr.Log(s.log, "spin failed", err)
 		httperr.Errs(w, err)
 		return
 	}
@@ -74,7 +76,8 @@ func (c *SpinHandler) Spin(w http.ResponseWriter, q *http.Request) {
 // ============================================================
 
 type SpinHandler struct {
-	rt *problab.SlotRuntime
+	rt  *problab.SlotRuntime
+	log *slog.Logger
 }
 
 func NewSpinHandler(sCfg *svrcfg.SvrCfg) (*SpinHandler, error) {
@@ -82,5 +85,5 @@ func NewSpinHandler(sCfg *svrcfg.SvrCfg) (*SpinHandler, error) {
 	if err != nil {
 		return nil, errs.Wrap(err, "build spin handler error")
 	}
-	return &SpinHandler{rt: rt}, nil
+	return &SpinHandler{rt: rt, log: sCfg.Log}, nil
 }

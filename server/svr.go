@@ -50,8 +50,12 @@ func Run(sCfg *svrcfg.SvrCfg) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
+
 	// Server
 	svr := netsvr.NewChiServerDefault()
+
+	// register svr = problab
+	sCfg.Log = sCfg.Log.With("svr", "problab")
 
 	// Register routes
 	if err := api.RegisterRoutes(svr, sCfg); err != nil {
@@ -77,6 +81,9 @@ func RunWithSvr(sCfg *svrcfg.SvrCfg, svr netsvr.NetSvr) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
+	// register svr = problab
+	sCfg.Log = sCfg.Log.With("svr", "problab")
+
 	if svr == nil {
 		sCfg.Log.Error(errs.NewFatal("svr is required").Error())
 		return

@@ -17,6 +17,7 @@ package httperr
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/zintix-labs/problab/errs"
@@ -68,4 +69,18 @@ func Errs(w http.ResponseWriter, err error) {
 	}
 	status := StatusCode(err)
 	http.Error(w, err.Error(), status)
+}
+
+func Log(log *slog.Logger, msg string, err error) {
+	// HTTP 邊界層：把常見錯誤做最小且可預期的狀態碼映射。
+	// 這裡只負責：決定 status code + 寫回簡單的 http.Error。
+	if err == nil {
+		return
+	}
+	status := StatusCode(err)
+	if (status == 408) || (status == 409) || (status == 429) {
+		log.Warn(msg, slog.Any("err", err))
+	} else if (status >= 500) && (status < 600) {
+		log.Error(msg, slog.Any("err", err))
+	}
 }

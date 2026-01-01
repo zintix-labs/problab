@@ -73,6 +73,7 @@ func (sh *SimHandler) SetByJson(w http.ResponseWriter, r *http.Request) {
 	}
 	result, _, err := sim.Sim(req.BetMode, req.Rounds, false)
 	if err != nil {
+		httperr.Log(sh.log, "simulate failed", err)
 		httperr.Errs(w, err)
 		return
 	}

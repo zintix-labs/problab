@@ -75,7 +75,7 @@ func registerV1API(svr netsvr.NetSvr, sCfg *svrcfg.SvrCfg) error {
 
 	var s *v1.SimHandler
 	if sCfg.Mode == svrcfg.ModeDev {
-		simHandler, err := v1.NewSimHandler(sCfg.Problab)
+		simHandler, err := v1.NewSimHandler(sCfg)
 		if err != nil {
 			return err
 		}
