@@ -97,9 +97,6 @@ func (r devRequest) betUnit() (int, bool) {
 //   - GET  /dev/meta  ：回傳 Catalog summary（供前端下拉選單：Slot Game / Bet Mode）。
 //   - POST /dev/spin  ：執行 N 次 Spin 並回傳每回合結果（含 snap_before/snap_after）。
 //   - POST /dev/sim   ：執行 N 次 Sim 並回傳統計報表（不回傳逐回合 results）。
-//
-// 依賴（dependency）：
-//   - 需要 cfg.Problab 已被上層組裝完成並注入；否則會回 errs.Fatal。
 func Register(svr netsvr.NetRouter, cfg *svrcfg.SvrCfg) {
 	svr.Get("/dev", devPage)
 	svr.Get("/favicon.svg", favicon)

@@ -59,7 +59,7 @@ func Run(sCfg *svrcfg.SvrCfg) {
 		return
 	}
 
-	// 運行
+	// run
 	app := app.NewWith(svr)
 	sCfg.Log.Info("[problab] listening on http://localhost" + svr.Address())
 	if err := app.Run(); err != nil {

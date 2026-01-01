@@ -16,10 +16,10 @@ package main
 
 import "fmt"
 
-// Helper
-// 這邊定義了一些格式化顏色輸出，方便腳本中需要打印顏色的情況
+// Helper utilities for colored terminal output.
+// These helpers are used by scripts to print formatted messages.
 
-// ANSI 顏色代碼 (Windows 10+ 的 cmd/powershell 皆支援)
+// ANSI color codes (supported by Windows 10+ cmd / PowerShell and most terminals)
 type ANSI_COLOR string
 
 const (
@@ -29,7 +29,7 @@ const (
 	ColorRed     ANSI_COLOR = "\033[31m"
 	ColorWhite   ANSI_COLOR = "\033[97m" // 顯式白
 	ColorDefault ANSI_COLOR = ""         // 使用終端預設色
-	ColorReset              = "\033[0m"  // 不給選
+	ColorReset              = "\033[0m"  // Reset to default terminal color
 )
 
 func fmtColor(color ANSI_COLOR, msg string) {

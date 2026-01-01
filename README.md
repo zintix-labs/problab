@@ -1,3 +1,7 @@
+🌐 Language: En | [中文](README_ch.md)
+
+---
+
 # Problab
 
 <sub>Maintained by <b>Zintix Labs</b> — <a href="https://github.com/nextso">@nextso</a></sub>
@@ -158,32 +162,24 @@ CV:  7.113
 
 ---
 
-## Quick Start (Try the Demos)
+## Quick Start 
 
-Run the bundled demo games:
 
-```bash
-git clone https://github.com/zintix-labs/problab.git
-cd problab
-make run
-```
+**Successful execution in 1 minute; production environment ready in 3 minutes.**
 
-simple demo:
+This repository focuses on the engine itself.
+For building real games, start with the scaffold.
 
-```bash
-make run
-```
+Use **problab-scaffold** — a clean starter template built on top of Problab.
 
----
+👉 https://github.com/zintix-labs/problab-scaffold
 
-## Quick Start (Build Your Own Game)
+The scaffold provides:
+- pre-wired configs / logic / server / simulation
+- one-command run (`make run`, `make dev`, `make svr`)
+- a structure ready for private commercial development
 
-A starter template with clean project structure  
-(configs + logic + server + simulation):
-
-> **Coming soon**
-
-(This is the recommended way to build real games.)
+This is the **recommended way** to build real games with Problab.
 
 ---
 
@@ -213,7 +209,7 @@ Documentation, tests, and starter templates will be expanded iteratively.
 
 ## Contributing
 
-For v0.1.x, we **only accept**:
+For v0.x.y, we **only accept**:
 
 - Bug reports (with minimal repro / logs if possible)
 - Documentation improvements (fixes, examples, translations)
