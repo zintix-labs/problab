@@ -199,8 +199,7 @@ This makes Problab suitable for:
 
 ## Status
 
-- **Current version:** v0.2.0
-- APIs may evolve
+- APIs may evolve befor v1.0.0
 - Focus is on correctness, performance, and core architecture
 
 Documentation, tests, and starter templates will be expanded iteratively.
