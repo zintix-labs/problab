@@ -232,7 +232,7 @@ func (p *Problab) RegisterAll() error {
 				return errs.NewFatal(fmt.Sprintf("unsupported config format: %q", base))
 			}
 			if gerr != nil {
-				return errs.NewFatal(fmt.Sprintf("parse gamesetting failed: %s", base))
+				return errs.NewFatal(fmt.Sprintf("parse gamesetting failed: %s %s", base, gerr.Error()))
 			}
 
 			name := strings.TrimSpace(gs.GameName)
