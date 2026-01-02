@@ -32,7 +32,7 @@ func init() {
 	if err := slot.GameRegister[*buf.NoExtend](
 		spec.LogicKey(logic),
 		buildGame0001,
-		Reg,
+		Logics,
 	); err != nil {
 		log.Fatalf("%s register failed: %v", logic, err)
 	}

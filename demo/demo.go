@@ -33,7 +33,7 @@ func NewServerConfig() (*svrcfg.SvrCfg, error) {
 	lab, err := problab.NewAuto(
 		core.Default(),
 		problab.Configs(demo_configs.FS),
-		problab.Logics(demo_logic.Reg),
+		problab.Logics(demo_logic.Logics),
 	)
 	if err != nil {
 		return nil, errs.NewFatal("new problab failed:" + err.Error())
