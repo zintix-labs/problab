@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/zintix-labs/problab"
@@ -26,6 +27,7 @@ import (
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/server/httperr"
 	"github.com/zintix-labs/problab/server/svrcfg"
+	"github.com/zintix-labs/problab/spec"
 )
 
 func (s *SpinHandler) Spin(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +71,54 @@ func (s *SpinHandler) Spin(w http.ResponseWriter, r *http.Request) {
 	// w.Header().Set("Content-Type", "application/json")
 	// w.WriteHeader(http.StatusOK)
 	// _, _ = w.Write(b.Bytes())
+}
+
+func (s *SpinHandler) Health(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	health := s.rt.Health()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(health); err != nil {
+		httperr.Errs(w, err)
+		return
+	}
+}
+
+func (s *SpinHandler) PoolMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	game := r.URL.Query().Get("gid")
+	if game == "" {
+		httperr.Errs(w, errs.NewWarn("gid is required"))
+		return
+	}
+
+	gidint, err := strconv.Atoi(game)
+	if err != nil {
+		httperr.Errs(w, errs.NewWarn("gid parse error "+err.Error()))
+		return
+	}
+	if gidint < 0 {
+		httperr.Errs(w, errs.NewWarn("gid must be a non-negative integer"))
+		return
+	}
+
+	metrics, ok := s.rt.PoolMetrics(spec.GID(gidint))
+	if !ok {
+		httperr.Errs(w, errs.NewWarn("gid is not exist: "+game))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(metrics); err != nil {
+		httperr.Errs(w, err)
+		return
+	}
 }
 
 // ============================================================

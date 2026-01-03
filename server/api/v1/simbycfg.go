@@ -25,8 +25,8 @@ import (
 	"github.com/zintix-labs/problab/server/httperr"
 )
 
-// SetByJson 傳入 JSON設定格式 以及希望模擬的局數
-func (sh *SimHandler) SetByJson(w http.ResponseWriter, r *http.Request) {
+// SimByJson 傳入 JSON設定格式 以及希望模擬的局數
+func (sh *SimHandler) SimByJson(w http.ResponseWriter, r *http.Request) {
 	type SimRequestByJson struct {
 		BetMode     int             `json:"bet_mode"`
 		Rounds      int             `json:"round"`

@@ -43,13 +43,21 @@ func RegisterRoutes(svr netsvr.NetSvr, sCfg *svrcfg.SvrCfg) error {
 	registerMiddleware(svr, sCfg.Log) // 1. middleware
 	registerIndex(svr)                // 2. landing page
 
-	// 3. dev tools (disabled in production)
-	if sCfg.Mode == svrcfg.ModeDev {
-		dev.Register(svr, sCfg)
+	switch sCfg.Mode {
+	case svrcfg.ModeDev:
+		if err := registerDev(svr, sCfg); err != nil {
+			return err
+		}
+	case svrcfg.ModeProd:
+		if err := registerProd(svr, sCfg); err != nil {
+			return err
+		}
+	default:
+		if err := registerProd(svr, sCfg); err != nil {
+			return err
+		}
 	}
-
-	// 4. v1 API
-	return registerV1API(svr, sCfg)
+	return nil
 }
 
 // registerMiddleware installs common middleware.
@@ -65,40 +73,47 @@ func registerIndex(svr netsvr.NetSvr) {
 	svr.Get("/", index.IndexHandlerFn)
 }
 
-// registerV1API mounts v1 endpoints.
-// When enableSim is true, simulation/tooling endpoints are also exposed.
-func registerV1API(svr netsvr.NetSvr, sCfg *svrcfg.SvrCfg) error {
+// registerDev mounts dev APIs
+func registerDev(svr netsvr.NetSvr, sCfg *svrcfg.SvrCfg) error {
+	// dev panel
+	dev.Register(svr, sCfg)
 	r, err := v1.NewSpinHandler(sCfg)
 	if err != nil {
 		return err
 	}
-
-	var s *v1.SimHandler
-	if sCfg.Mode == svrcfg.ModeDev {
-		simHandler, err := v1.NewSimHandler(sCfg)
-		if err != nil {
-			return err
-		}
-		s = simHandler
+	s, err := v1.NewSimHandler(sCfg)
+	if err != nil {
+		return err
 	}
 
-	svr.Group("/v1", func(vOne netsvr.NetRouter) {
-		// Production-safe endpoints
-		vOne.Get("/spin", r.Spin)
-		vOne.Post("/spin", r.Spin)
+	// others
+	svr.Group("/v1", func(rt netsvr.NetRouter) {
+		rt.Get("/spin", r.Spin)
+		rt.Post("/spin", r.Spin)
+		rt.Get("/health", r.Health)
+		rt.Get("/poolmetrics", r.PoolMetrics)
+		rt.Get("/sim", s.Sim)
+		rt.Get("/simplayer", s.SimPlayers)
+		rt.Post("/simbycfg", s.SimByJson)
+		rt.Post("/sim", s.Sim)
+		rt.Post("/simplayer", s.SimPlayers)
+		rt.Post("/stat", v1.Stat)
+	})
+	return nil
+}
 
-		if sCfg.Mode == svrcfg.ModeProd {
-			return
-		}
-
-		// Simulation / tooling endpoints (dev only)
-		vOne.Get("/sim", s.Sim)
-		vOne.Get("/simplayer", s.SimPlayers)
-
-		vOne.Post("/simbycfg", s.SetByJson)
-		vOne.Post("/sim", s.Sim)
-		vOne.Post("/simplayer", s.SimPlayers)
-		vOne.Post("/stat", v1.Stat)
+// registerProd mounts prod APIs
+func registerProd(svr netsvr.NetSvr, sCfg *svrcfg.SvrCfg) error {
+	r, err := v1.NewSpinHandler(sCfg)
+	if err != nil {
+		return err
+	}
+	// others
+	svr.Group("/v1", func(rt netsvr.NetRouter) {
+		rt.Get("/spin", r.Spin)
+		rt.Post("/spin", r.Spin)
+		rt.Get("/health", r.Health)
+		rt.Get("/poolmetrics", r.PoolMetrics)
 	})
 	return nil
 }
