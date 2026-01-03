@@ -102,11 +102,11 @@ func (rt *SlotRuntime) ClosedReason() string {
 }
 
 type RuntimeHealth struct {
-	AtUnixNano  int64             `json:"at_unix_nano"`
-	RuntimeOK   bool              `json:"runtime_ok"`
-	Reason      string            `json:"reason,omitempty"`
-	Overall     string            `json:"overall"`
-	PoolsClosed map[spec.GID]bool `json:"pools_closed"`
+	AtUnixMS    int64      `json:"at_unix_ms"`
+	RuntimeOK   bool       `json:"runtime_ok"`
+	Reason      string     `json:"reason,omitempty"`
+	Overall     string     `json:"overall"`
+	ClosedPools []spec.GID `json:"closed_pools,omitempty"`
 }
 
 func (rt *SlotRuntime) Health() RuntimeHealth {
@@ -123,7 +123,8 @@ func (rt *SlotRuntime) Health() RuntimeHealth {
 	defer rt.hmu.Unlock()
 
 	// double check
-	now = time.Now().UnixNano()
+	nowTime := time.Now()
+	now = nowTime.UnixNano()
 	if v := rt.healthSnap.Load(); v != nil {
 		next := rt.healthNextRefresh.Load()
 		if now < next {
@@ -131,7 +132,7 @@ func (rt *SlotRuntime) Health() RuntimeHealth {
 		}
 	}
 
-	snap := rt.buildHealthSnapshot(now)
+	snap := rt.buildHealthSnapshot(nowTime.UnixMilli())
 	rt.healthSnap.Store(snap)
 	rt.healthNextRefresh.Store(now + rt.ttl.Nanoseconds())
 	return snap
@@ -143,16 +144,15 @@ func (rt *SlotRuntime) buildHealthSnapshot(now int64) RuntimeHealth {
 	if !runtimeOK {
 		overall = "down"
 	}
-
-	poolsClosed := make(map[spec.GID]bool, len(rt.ids))
+	closedPools := make([]spec.GID, 0, len(rt.ids))
 	degraded := false
 
 	if runtimeOK {
 		for _, id := range rt.ids {
 			mp := rt.pools[id]
 			closed := mp.Closed()
-			poolsClosed[id] = closed
 			if closed {
+				closedPools = append(closedPools, id)
 				degraded = true
 			}
 		}
@@ -162,11 +162,11 @@ func (rt *SlotRuntime) buildHealthSnapshot(now int64) RuntimeHealth {
 	}
 
 	snap := RuntimeHealth{
-		AtUnixNano:  now,
+		AtUnixMS:    now,
 		RuntimeOK:   runtimeOK,
 		Reason:      rt.ClosedReason(),
 		Overall:     overall,
-		PoolsClosed: poolsClosed,
+		ClosedPools: closedPools,
 	}
 	return snap
 }
