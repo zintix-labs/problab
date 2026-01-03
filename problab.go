@@ -40,6 +40,7 @@ import (
 	"math/big"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/zintix-labs/problab/catalog"
 	"github.com/zintix-labs/problab/errs"
@@ -479,6 +480,8 @@ func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
 		ids:      ids,
 		done:     make(chan struct{}),
 		poolSize: max(1, poolSize),
+
+		ttl: 5 * time.Second, // refresh after 5 seconds
 	}
 	rt.reason.Store("")
 
@@ -489,13 +492,17 @@ func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
 			return nil, err
 		}
 
-		seed, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+		seed, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+		if err != nil {
+			return nil, errs.NewFatal("rand seed failed: " + err.Error())
+		}
 		mp, err := newMachinePool(rt.poolSize, gs, p.reg, p.cf, seed.Int64())
 		if err != nil {
 			return nil, err
 		}
 		rt.pools[id] = mp
 	}
+	rt.Health() // set health data
 	return rt, nil
 }
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
@@ -41,6 +42,12 @@ type SlotRuntime struct {
 
 	// runtime 行為設定（一期先簡單，之後可擴展）
 	poolSize int // 每個遊戲的池大小（Run(n) 的 n）
+
+	// health
+	healthSnap        atomic.Value // RuntimeHealth
+	healthNextRefresh atomic.Int64 // 下次允許 refresh 的時間點（UnixNano）
+	hmu               sync.Mutex
+	ttl               time.Duration // health TTL
 }
 
 func (rt *SlotRuntime) Spin(ctx context.Context, req *buf.SpinRequest) (dto.SpinResult, error) {
@@ -50,7 +57,6 @@ func (rt *SlotRuntime) Spin(ctx context.Context, req *buf.SpinRequest) (dto.Spin
 		return dto.SpinResult{}, errs.NewWarn("spin canceled/timeout: " + ctx.Err().Error())
 	case <-rt.done:
 		// done is the source of truth; keep a fast boolean for cheap reads/telemetry.
-		rt.closed.Store(true)
 		return dto.SpinResult{}, errs.NewFatal("slot runtime closed: " + rt.ClosedReason())
 	default:
 	}
@@ -93,4 +99,81 @@ func (rt *SlotRuntime) ClosedReason() string {
 		}
 	}
 	return ""
+}
+
+type RuntimeHealth struct {
+	AtUnixNano  int64             `json:"at_unix_nano"`
+	RuntimeOK   bool              `json:"runtime_ok"`
+	Reason      string            `json:"reason,omitempty"`
+	Overall     string            `json:"overall"`
+	PoolsClosed map[spec.GID]bool `json:"pools_closed"`
+}
+
+func (rt *SlotRuntime) Health() RuntimeHealth {
+	now := time.Now().UnixNano()
+	if v := rt.healthSnap.Load(); v != nil {
+		next := rt.healthNextRefresh.Load()
+		if now < next {
+			return v.(RuntimeHealth)
+		}
+	}
+
+	// slow path: TTL 到了，嘗試 refresh（只有一個 goroutine 做）
+	rt.hmu.Lock()
+	defer rt.hmu.Unlock()
+
+	// double check
+	now = time.Now().UnixNano()
+	if v := rt.healthSnap.Load(); v != nil {
+		next := rt.healthNextRefresh.Load()
+		if now < next {
+			return v.(RuntimeHealth)
+		}
+	}
+
+	snap := rt.buildHealthSnapshot(now)
+	rt.healthSnap.Store(snap)
+	rt.healthNextRefresh.Store(now + rt.ttl.Nanoseconds())
+	return snap
+}
+
+func (rt *SlotRuntime) buildHealthSnapshot(now int64) RuntimeHealth {
+	runtimeOK := !rt.Closed()
+	overall := "ok"
+	if !runtimeOK {
+		overall = "down"
+	}
+
+	poolsClosed := make(map[spec.GID]bool, len(rt.ids))
+	degraded := false
+
+	if runtimeOK {
+		for _, id := range rt.ids {
+			mp := rt.pools[id]
+			closed := mp.Closed()
+			poolsClosed[id] = closed
+			if closed {
+				degraded = true
+			}
+		}
+		if degraded {
+			overall = "degraded"
+		}
+	}
+
+	snap := RuntimeHealth{
+		AtUnixNano:  now,
+		RuntimeOK:   runtimeOK,
+		Reason:      rt.ClosedReason(),
+		Overall:     overall,
+		PoolsClosed: poolsClosed,
+	}
+	return snap
+}
+
+func (rt *SlotRuntime) PoolMetrics(gid spec.GID) (MachinePoolMetrics, bool) {
+	if p, ok := rt.pools[gid]; ok {
+		return p.Metrics(), ok
+	}
+	return MachinePoolMetrics{}, false
 }

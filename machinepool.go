@@ -307,8 +307,7 @@ type MachinePoolMetrics struct {
 
 // Metrics 回傳一期的觀測快照；上層可用於 log、/metrics、或餵給 Prometheus/OTEL exporter。
 func (mp *MachinePool) Metrics() MachinePoolMetrics {
-	closed := mp.Closed()
-	m := MachinePoolMetrics{
+	return MachinePoolMetrics{
 		GameName:      mp.gameName,
 		GameID:        mp.gameId,
 		PoolSize:      mp.poolsize,
@@ -318,13 +317,12 @@ func (mp *MachinePool) Metrics() MachinePoolMetrics {
 		Rebuild:       int(mp.rebuild.Load()),
 		Panics:        int(mp.panics.Load()),
 		Fatals:        int(mp.fatals.Load()),
-		Closed:        closed,
+		Closed:        mp.Closed(),
 		CloseReason:   mp.ClosedReason(),
 		CloseInflight: int(mp.closeInflight.Load()),
 		CloseAvail:    int(mp.closeAvail.Load()),
 		Closebroken:   int(mp.closeBroken.Load()),
 	}
-	return m
 }
 
 // Available 回傳當下 pool 可用機台數（len(pool)）。在高併發下為近似值。
