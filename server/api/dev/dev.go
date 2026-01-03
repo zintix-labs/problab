@@ -26,7 +26,6 @@ package dev
 
 import (
 	"crypto/rand"
-	"embed"
 	"encoding/json"
 	"math"
 	"math/big"
@@ -99,7 +98,6 @@ func (r devRequest) betUnit() (int, bool) {
 //   - POST /dev/sim   ：執行 N 次 Sim 並回傳統計報表（不回傳逐回合 results）。
 func Register(svr netsvr.NetRouter, cfg *svrcfg.SvrCfg) {
 	svr.Get("/dev", devPage)
-	svr.Get("/favicon.svg", favicon)
 	svr.Get("/dev/meta", devMeta(cfg))
 	svr.Post("/dev/spin", devSpin(cfg))
 	svr.Post("/dev/sim", devSim(cfg))
@@ -124,7 +122,7 @@ const devPageHTML = `<!doctype html>
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8" />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMwOTA5MGIiIC8+CiAgPHRleHQgeD0iNTAlIiB5PSI1NSUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIAogICAgICAgIGZvbnQtZmFtaWx5PSJtb25vc3BhY2UsIHNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LXNpemU9IjQ0IiBmaWxsPSIjZjk3MzE2Ij5aPC90ZXh0Pgo8L3N2Zz4=" />
   <title>ProbLab Dev</title>
   <style>
     body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#0f172a; color:#e2e8f0; margin:0; }
@@ -520,12 +518,6 @@ func devPage(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(devPageHTML))
 }
 
-// favicon 提供 Dev Panel 的 favicon.svg。
-func favicon(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "image/svg+xml")
-	_, _ = w.Write([]byte(faviconSVG))
-}
-
 // devMeta 回傳 Catalog summary（JSON）。
 //
 // 前端依賴欄位：
@@ -778,9 +770,3 @@ func randomSeed() (int64, error) {
 	}
 	return rnd.Int64(), nil
 }
-
-//go:embed favicon.svg
-var faviconSVG string
-
-// keep embed imported even if only used for directives
-var _ embed.FS
