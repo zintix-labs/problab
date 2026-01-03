@@ -203,6 +203,15 @@ RTP 95%置信区间: [95.42%, 95.69%]
 
 ---
 
+## 路线图
+
+- Jackpot 支持（配置 + 快照/增量 delta）
+- 多阶段流程的 Resume/Replay API
+- 更多可复用的 ops 操作
+- （RFC）用于状态转换的 Trigger methods
+
+---
+
 ## 贡献
 
 对于 v0.x.y，我们**仅接受**：
