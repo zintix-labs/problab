@@ -15,10 +15,6 @@
 package buf
 
 import (
-	"bytes"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/zintix-labs/problab/spec"
@@ -124,51 +120,5 @@ func TestGameModeResultRecordAndHitMap(t *testing.T) {
 	}
 	if gmr.GetTmpWin() != 0 {
 		t.Fatalf("expected tmp win reset after AddAct")
-	}
-}
-
-func TestDecodeSpinRequestGET(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/spin?uid=u1&game=demo&gid=7&bet=10&bet_mode=1&bet_mult=2&session=3&choice=4", nil)
-	req, err := DecodeSpinRequest(r)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if req.UID != "u1" || req.GameName != "demo" || req.GameId != 7 {
-		t.Fatalf("unexpected request: %+v", req)
-	}
-	if req.Bet != 10 || req.BetMode != 1 || req.BetMult != 2 || req.Session != 3 {
-		t.Fatalf("unexpected request: %+v", req)
-	}
-	if req.Choice == nil || *req.Choice != 4 {
-		t.Fatalf("unexpected choice: %+v", req.Choice)
-	}
-}
-
-func TestDecodeSpinRequestPOST(t *testing.T) {
-	payload := map[string]any{
-		"uid":      "u2",
-		"game":     "demo",
-		"gid":      9,
-		"bet":      5,
-		"bet_mode": 0,
-		"bet_mult": 1,
-		"session":  2,
-	}
-	data, _ := json.Marshal(payload)
-	r := httptest.NewRequest(http.MethodPost, "/spin", bytes.NewReader(data))
-	req, err := DecodeSpinRequest(r)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if req.GameId != 9 || req.Bet != 5 || req.BetMode != 0 {
-		t.Fatalf("unexpected request: %+v", req)
-	}
-}
-
-func TestDecodeSpinRequestRejectsUnknownFields(t *testing.T) {
-	data := []byte(`{"gid":1,"game":"demo","bet":1,"bet_mode":0,"bet_mult":1,"unknown":true}`)
-	r := httptest.NewRequest(http.MethodPost, "/spin", bytes.NewReader(data))
-	if _, err := DecodeSpinRequest(r); err == nil {
-		t.Fatalf("expected error for unknown field")
 	}
 }

@@ -17,6 +17,7 @@ package demo_logic
 import (
 	"log"
 
+	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/slot"
 	"github.com/zintix-labs/problab/spec"
@@ -116,7 +117,7 @@ func (e *ext0000) Snapshot() any {
 // ============================================================
 
 // GetResult 主要介面函數 回傳遊戲結果 *res.SpinResult
-func (g *game0000) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
+func (g *game0000) GetResult(r *dto.SpinRequest, gh *slot.Game) *buf.SpinResult {
 	sr := gh.StartNewSpin(r)
 
 	base := g.getBaseResult(r.BetMult, gh)

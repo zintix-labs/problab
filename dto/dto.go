@@ -24,7 +24,6 @@ type SpinResult struct {
 	GameID    spec.GID            `json:"gameid"`              // 遊戲編號
 	TotalWin  int                 `json:"win"`                 // 總贏分
 	Bet       int                 `json:"bet"`                 // 本次押注
-	BetUnits  []int               `json:"betunits"`            // 押注單位
 	BetMode   int                 `json:"betmode"`             // 押注類型
 	BetMult   int                 `json:"betmult"`             // 押注倍數
 	GameModes []GameModeResultDTO `json:"gamemodes,omitempty"` // 每個遊戲模式的完整結構
@@ -82,7 +81,6 @@ func NewSpinResultDTO(sr *buf.SpinResult) SpinResult {
 		GameID:    sr.GameID,
 		TotalWin:  sr.TotalWin,
 		Bet:       sr.Bet,
-		BetUnits:  append([]int(nil), sr.BetUnits...),
 		BetMode:   sr.BetMode,
 		BetMult:   sr.BetMult,
 		IsGameEnd: sr.IsGameEnd,

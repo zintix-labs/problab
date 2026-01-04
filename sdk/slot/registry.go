@@ -32,7 +32,7 @@ import (
 // NOTE: GameSetting is treated as read-only after Init. If you intentionally mutate settings,
 // you are responsible for correctness and concurrency safety.
 type GameLogic interface {
-	GetResult(r *buf.SpinRequest, g *Game) *buf.SpinResult
+	GetResult(r *dto.SpinRequest, g *Game) *buf.SpinResult
 }
 
 // LogicBuilder builds a GameLogic instance bound to a specific *Game (per-machine/per-game instance).

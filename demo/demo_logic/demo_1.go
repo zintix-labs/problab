@@ -17,6 +17,7 @@ package demo_logic
 import (
 	"log"
 
+	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/ops"
 	"github.com/zintix-labs/problab/sdk/slot"
@@ -119,7 +120,7 @@ func (e *ext0001) Snapshot() any {
 // ============================================================
 
 // getResult 主要介面函數 回傳遊戲結果 *res.SpinResult
-func (g *game0001) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
+func (g *game0001) GetResult(r *dto.SpinRequest, gh *slot.Game) *buf.SpinResult {
 	sr := gh.StartNewSpin(r)
 	base := g.getBaseResult(r, gh)
 	sr.AppendModeResult(base)
@@ -136,7 +137,7 @@ func (g *game0001) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult 
 // ** 遊戲中各模式內部邏輯實作 **
 // ============================================================
 
-func (g *game0001) getBaseResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameModeResult {
+func (g *game0001) getBaseResult(r *dto.SpinRequest, gh *slot.Game) *buf.GameModeResult {
 	mode := gh.GameModeHandlerList[0]
 	sg := mode.ScreenGenerator
 	sc := mode.ScreenCalculator
@@ -193,7 +194,7 @@ func (g *game0001) getBaseResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameMod
 	return mode.YieldResult()
 }
 
-func (g *game0001) getFreeResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameModeResult {
+func (g *game0001) getFreeResult(r *dto.SpinRequest, gh *slot.Game) *buf.GameModeResult {
 	mode := gh.GameModeHandlerList[1]
 	sg := mode.ScreenGenerator
 	sc := mode.ScreenCalculator

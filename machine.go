@@ -49,7 +49,7 @@ type Machine struct {
 	core        *core.Core       // RNG 核心（PRNG + Snapshot/Restore 合約；熱路徑會頻繁取樣）
 	gh          *slot.Game       // 遊戲執行核心（Slot 邏輯入口；由 LogicRegistry + GameSetting 組裝）
 	BetUnits    []int            // 押注單位（由遊戲設定衍生；通常給外部列舉 UI/測試）
-	SpinRequest *buf.SpinRequest // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
+	SpinRequest *dto.SpinRequest // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
 	SpinResult  *buf.SpinResult  // 可重用的結果 buffer（熱路徑；每次 Spin 會覆寫）
 	mu          sync.Mutex       // 防併發鎖：保護可重用 buffers 與核心狀態一致性
 	initseed    int64            // 出生 seed（便於追溯；完整重現請用 Snapshot/Restore）
@@ -95,13 +95,13 @@ func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.P
 		return nil, err
 	}
 	m.BetUnits = m.gh.BetUnits
-	m.SpinRequest = &buf.SpinRequest{}
+	m.SpinRequest = &dto.SpinRequest{}
 	m.SpinResult = m.gh.SpinResult
 	return m, nil
 }
 
 // Spin 為主要公開入口，會驗證投注請求，執行遊戲並回傳Spin結果。
-func (m *Machine) Spin(r *buf.SpinRequest) (dto.SpinResult, error) {
+func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -129,7 +129,7 @@ func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
 	return m.gh.GetResult(m.SpinRequest)
 }
 
-func (m *Machine) valid(req *buf.SpinRequest) error {
+func (m *Machine) valid(req *dto.SpinRequest) error {
 	if m.gameId != req.GameId {
 		return errs.NewWarn("game id is not matched")
 	}

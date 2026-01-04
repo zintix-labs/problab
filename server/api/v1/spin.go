@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/zintix-labs/problab"
+	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
-	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/server/httperr"
 	"github.com/zintix-labs/problab/server/svrcfg"
 	"github.com/zintix-labs/problab/spec"
@@ -36,7 +36,7 @@ func (s *SpinHandler) Spin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	req, err := buf.DecodeSpinRequest(r)
+	req, err := dto.DecodeSpinRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
