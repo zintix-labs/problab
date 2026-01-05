@@ -104,7 +104,7 @@ func (s *Simulator) Sim(betMode int, round int, showpb bool) (*stats.StatReport,
 		bar.SetWriter(io.Discard)
 	}
 	for i := 0; i < round; i++ {
-		sr := m.SpinInternal(betMode)
+		sr := m.spinInternal(betMode)
 		r.Record(sr)
 		bar.Increment()
 	}
@@ -157,7 +157,7 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 			g := s.mBuf[i]
 			st := s.rBuf[i]
 			for r := 0; r < rounds; r++ {
-				sr := g.SpinInternal(betMode)
+				sr := g.spinInternal(betMode)
 				st.Record(sr)
 				bar.Increment()
 			}
@@ -247,7 +247,7 @@ func sim(wg *sync.WaitGroup, m *Machine, jobs chan *recorder.SpinRecorder, betMo
 	defer wg.Done()
 	for j := range jobs { // j := <- jobs
 		for range rounds {
-			sr := m.SpinInternal(betMode)
+			sr := m.spinInternal(betMode)
 			if j.RecordWithPlayer(sr) {
 				break
 			}

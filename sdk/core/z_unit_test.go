@@ -68,3 +68,127 @@ func TestExpFloat64Deterministic(t *testing.T) {
 		t.Fatalf("unexpected ExpFloat64 value: %v", v1)
 	}
 }
+
+func TestCoreUintN_EdgeCases(t *testing.T) {
+	c := New(Default().New(42))
+	// UintN(0) should return 0
+	if got := c.UintN(0); got != 0 {
+		t.Fatalf("UintN(0) expected 0, got %d", got)
+	}
+	// UintN(1) should return 0
+	if got := c.UintN(1); got != 0 {
+		t.Fatalf("UintN(1) expected 0, got %d", got)
+	}
+}
+
+func TestCoreIntN_EdgeCases(t *testing.T) {
+	c := New(Default().New(42))
+	// IntN(0) should return -1
+	if got := c.IntN(0); got != -1 {
+		t.Fatalf("IntN(0) expected -1, got %d", got)
+	}
+	// IntN(-1) should return -1
+	if got := c.IntN(-1); got != -1 {
+		t.Fatalf("IntN(-1) expected -1, got %d", got)
+	}
+	// IntN(1) should return 0
+	if got := c.IntN(1); got != 0 {
+		t.Fatalf("IntN(1) expected 0, got %d", got)
+	}
+}
+
+func TestCorePick_EdgeCases(t *testing.T) {
+	c := New(Default().New(42))
+	// Pick from empty slice
+	if got := c.Pick(nil); got != -1 {
+		t.Fatalf("Pick(nil) expected -1, got %d", got)
+	}
+	if got := c.Pick([]int{}); got != -1 {
+		t.Fatalf("Pick([]int{}) expected -1, got %d", got)
+	}
+	// Pick from single element
+	single := []int{42}
+	got := c.Pick(single)
+	if got != 42 {
+		t.Fatalf("Pick([42]) expected 42 (element value), got %d", got)
+	}
+	// Pick from multiple elements (should be in range)
+	multi := []int{0, 1, 2, 3, 4}
+	for i := 0; i < 100; i++ {
+		idx := c.Pick(multi)
+		if idx < 0 || idx >= len(multi) {
+			t.Fatalf("Pick out of range: %d (len=%d)", idx, len(multi))
+		}
+	}
+}
+
+func TestCoreShuffleInts_EdgeCases(t *testing.T) {
+	c := New(Default().New(42))
+	// Shuffle empty slice
+	empty := []int{}
+	c.ShuffleInts(empty)
+	if len(empty) != 0 {
+		t.Fatalf("shuffle empty slice should remain empty")
+	}
+	// Shuffle nil slice
+	var nilSlice []int
+	c.ShuffleInts(nilSlice)
+	// Shuffle single element
+	single := []int{42}
+	original := []int{42}
+	c.ShuffleInts(single)
+	if len(single) != 1 || single[0] != 42 {
+		t.Fatalf("shuffle single element should not change: %v", single)
+	}
+	if !slices.Equal(single, original) {
+		t.Fatalf("single element shuffle changed value")
+	}
+}
+
+func TestCoreShuffleInts_PreservesElements(t *testing.T) {
+	c := New(Default().New(42))
+	src := []int{1, 2, 3, 4, 5}
+	original := slices.Clone(src)
+	c.ShuffleInts(src)
+	// Check length
+	if len(src) != len(original) {
+		t.Fatalf("shuffle changed length: %d -> %d", len(original), len(src))
+	}
+	// Check elements are preserved (sorted should be equal)
+	sortedSrc := slices.Clone(src)
+	sortedOrig := slices.Clone(original)
+	slices.Sort(sortedSrc)
+	slices.Sort(sortedOrig)
+	if !slices.Equal(sortedSrc, sortedOrig) {
+		t.Fatalf("shuffle changed elements: original=%v, shuffled=%v", original, src)
+	}
+}
+
+func TestCoreFloat64_Range(t *testing.T) {
+	c := New(Default().New(42))
+	for i := 0; i < 1000; i++ {
+		v := c.Float64()
+		if v < 0 || v >= 1.0 {
+			t.Fatalf("Float64 out of range [0,1): %v", v)
+		}
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			t.Fatalf("Float64 invalid: %v", v)
+		}
+	}
+}
+
+func TestCoreDifferentSeeds_DifferentValues(t *testing.T) {
+	c1 := New(Default().New(1))
+	c2 := New(Default().New(2))
+	// Different seeds should produce different sequences (with high probability)
+	different := false
+	for i := 0; i < 10; i++ {
+		if c1.Uint64() != c2.Uint64() {
+			different = true
+			break
+		}
+	}
+	if !different {
+		t.Fatalf("different seeds produced identical sequences (unlikely but possible)")
+	}
+}

@@ -209,7 +209,6 @@ Documentation, tests, and starter templates will be expanded iteratively.
 ## Roadmap
 
 - Jackpot support (settings + snapshot/delta)
-- Resume/Replay API for multi-stage flows
 - More shared ops
 - (RFC) Trigger methods for state transitions
 

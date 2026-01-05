@@ -101,7 +101,7 @@ func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.P
 }
 
 // Spin 為主要公開入口，會驗證投注請求，執行遊戲並回傳Spin結果。
-func (m *Machine) Spin(r *buf.SpinRequest) (dto.SpinResult, error) {
+func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -110,26 +110,61 @@ func (m *Machine) Spin(r *buf.SpinRequest) (dto.SpinResult, error) {
 		// 實作err代碼
 		return dto.SpinResult{}, err
 	}
+	// 2. parse dto to inner spin request
+	req, err := r.Parse(m.gh.GameSetting.LogicKey)
+	if err != nil {
+		return dto.SpinResult{}, err
+	}
+	// 3. get start snapshot
+	startsnap, err := m.SnapshotCore()
+	if err != nil {
+		return dto.SpinResult{}, errs.NewFatal("before snapshot error " + err.Error())
+	}
+	rem := startsnap
+	if req.StartState != nil && len(req.StartState.StartCoreSnap) != 0 {
+		startsnap = req.StartState.StartCoreSnap
+		if err := m.RestoreCore(req.StartState.StartCoreSnap); err != nil {
+			return dto.SpinResult{}, errs.NewWarn("restore core err " + err.Error())
+		}
+	}
 
-	// 2. 取得spinResult
-	sr := m.gh.GetResult(r)
+	// 4. get inner spinResult
+	sr := m.gh.GetResult(req)
 
-	// 3. dto
-	d := dto.NewSpinResultDTO(sr)
-	return d, nil
+	// 5. get after snapshot
+	aftersnap, err := m.SnapshotCore()
+	if err != nil {
+		if e := m.RestoreCore(rem); e != nil {
+			return dto.SpinResult{}, errs.NewFatal("fall back err " + e.Error())
+		}
+		return dto.SpinResult{}, errs.NewWarn("after snapshot error " + err.Error())
+	}
+	state := sr.State
+	state.StartCoreSnap = startsnap
+	state.AfterCoreSnap = aftersnap
+
+	// 6. restore if needed
+	if req.StartState != nil && len(req.StartState.StartCoreSnap) != 0 {
+		if err := m.RestoreCore(rem); err != nil {
+			return dto.SpinResult{}, errs.NewFatal("restore core back err " + err.Error())
+		}
+	}
+
+	// 7. dto
+	return dto.NewSpinResultDTO(sr)
 }
 
-// SpinInternal 直接取得內部 SpinResult；常用於模擬器或測試
+// spinInternal 直接取得內部 SpinResult；常用於模擬器或測試
 //
 // 此行為跳過所有檢查，並只使用預設1單位下注
-func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
+func (m *Machine) spinInternal(betMode int) *buf.SpinResult {
 	m.SpinRequest.BetMode = betMode
 	m.SpinRequest.BetMult = 1
 	m.SpinRequest.Bet = m.BetUnits[betMode]
 	return m.gh.GetResult(m.SpinRequest)
 }
 
-func (m *Machine) valid(req *buf.SpinRequest) error {
+func (m *Machine) valid(req *dto.SpinRequest) error {
 	if m.gameId != req.GameId {
 		return errs.NewWarn("game id is not matched")
 	}

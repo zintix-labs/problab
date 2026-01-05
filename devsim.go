@@ -34,63 +34,30 @@ type DevSimulator struct {
 }
 
 type DevSpinReport struct {
-	Before   string          `json:"snap_before"`
-	After    string          `json:"snap_after"`
-	Round    int             `json:"round"`
-	Rtp      float64         `json:"rtp"`
-	TotalBet int             `json:"total_bet"`
-	TotalWin int             `json:"total_win"`
-	BaseWin  int             `json:"base_win"`
-	FreeWin  int             `json:"free_win"`
-	Results  []DevSpinResult `json:"results"`
+	Before   string           `json:"start_b64u"`
+	After    string           `json:"after_b64u"`
+	Round    int              `json:"round"`
+	Rtp      float64          `json:"rtp"`
+	TotalBet int              `json:"total_bet"`
+	TotalWin int              `json:"total_win"`
+	BaseWin  int              `json:"base_win"`
+	FreeWin  int              `json:"free_win"`
+	Results  []dto.SpinResult `json:"results"`
 }
 
-type DevSpinResult struct {
-	Before     string         `json:"snap_before"`
-	After      string         `json:"snap_after"`
-	SpinResult dto.SpinResult `json:"spin_result"`
-}
-
-func (d *DevSimulator) spinOne(betmode int) (DevSpinResult, error) {
-	// 先存 before 快照
-	be, err := d.m.SnapshotCore()
-	if err != nil {
-		return DevSpinResult{}, err
-	}
-	be64 := corefmt.EncodeBase64URL(be)
-	d.before = be
-	d.before64 = be64
-
-	// Spin
+func (d *DevSimulator) spinOne(betmode int) (dto.SpinResult, error) {
 	bu := d.m.gh.GameSetting.BetUnits
 	if betmode < 0 || betmode >= len(bu) {
-		return DevSpinResult{}, errs.NewWarn("bet_mode out of range")
+		return dto.SpinResult{}, errs.NewWarn("bet_mode out of range")
 	}
-	d.m.SpinRequest.GameId = d.m.gameId
-	d.m.SpinRequest.GameName = d.m.gameName
-	d.m.SpinRequest.BetMode = betmode
-	d.m.SpinRequest.BetMult = 1
-	d.m.SpinRequest.Bet = bu[betmode]
-	result, err := d.m.Spin(d.m.SpinRequest)
-	if err != nil {
-		return DevSpinResult{}, errs.Wrap(err, "spin failed")
+	req := &dto.SpinRequest{
+		GameName: d.m.gameName,
+		GameId:   d.m.gameId,
+		BetMode:  betmode,
+		BetMult:  1,
+		Bet:      bu[betmode],
 	}
-
-	// 再存 after 快照
-	af, err := d.m.SnapshotCore()
-	if err != nil {
-		return DevSpinResult{}, err
-	}
-	af64 := corefmt.EncodeBase64URL(af)
-
-	d.after = af
-	d.after64 = af64
-
-	return DevSpinResult{
-		Before:     be64,
-		After:      af64,
-		SpinResult: result,
-	}, nil
+	return d.m.Spin(req)
 }
 
 func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
@@ -100,7 +67,7 @@ func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 	}
 
 	// spin
-	ds := make([]DevSpinResult, 0, round)
+	ds := make([]dto.SpinResult, 0, round)
 	for range round {
 		result, err := d.spinOne(betmode)
 		if err != nil {
@@ -111,15 +78,15 @@ func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 	// 統計
 	bet, win, base, free := 0, 0, 0, 0
 	for _, r := range ds {
-		bet += r.SpinResult.Bet
-		win += r.SpinResult.TotalWin
-		base += r.SpinResult.GameModes[0].TotalWin
+		bet += r.Bet
+		win += r.TotalWin
+		base += r.GameModes[0].TotalWin
 		free += (win - base)
 	}
 
 	de := DevSpinReport{
-		Before:   ds[0].Before,
-		After:    ds[len(ds)-1].After,
+		Before:   ds[0].State.StartCoreSnapB64U,
+		After:    ds[len(ds)-1].State.AfterCoreSnapB64U,
 		Round:    len(ds),
 		Rtp:      100.0 * float64(win) / float64(bet),
 		TotalBet: bet,

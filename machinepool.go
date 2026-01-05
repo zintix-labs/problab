@@ -22,7 +22,6 @@ import (
 
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
-	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
 	"github.com/zintix-labs/problab/spec"
@@ -150,7 +149,7 @@ func isFatalErr(err error) bool {
 	return false
 }
 
-func (p *MachinePool) Spin(ctx context.Context, req *buf.SpinRequest) (dto dto.SpinResult, err error) {
+func (p *MachinePool) Spin(ctx context.Context, req *dto.SpinRequest) (dto dto.SpinResult, err error) {
 	var m *Machine
 	borrowed := false
 	select {

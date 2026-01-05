@@ -22,7 +22,6 @@ import (
 
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
-	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/spec"
 )
 
@@ -50,7 +49,7 @@ type SlotRuntime struct {
 	ttl               time.Duration // health TTL
 }
 
-func (rt *SlotRuntime) Spin(ctx context.Context, req *buf.SpinRequest) (dto.SpinResult, error) {
+func (rt *SlotRuntime) Spin(ctx context.Context, req *dto.SpinRequest) (dto.SpinResult, error) {
 	select {
 	case <-ctx.Done():
 		// 如果通知取消
