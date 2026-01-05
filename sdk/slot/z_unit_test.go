@@ -17,14 +17,13 @@ package slot_test
 import (
 	"testing"
 
-	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/slot"
 )
 
 type testLogic struct{}
 
-func (t *testLogic) GetResult(r *dto.SpinRequest, g *slot.Game) *buf.SpinResult {
+func (t *testLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinResult {
 	res := g.StartNewSpin(r)
 	res.TotalWin = r.Bet
 	return res

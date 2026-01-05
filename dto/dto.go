@@ -15,6 +15,10 @@
 package dto
 
 import (
+	"encoding/json"
+
+	"github.com/zintix-labs/problab/corefmt"
+	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/spec"
 )
@@ -27,7 +31,8 @@ type SpinResult struct {
 	BetMode   int                 `json:"betmode"`             // 押注類型
 	BetMult   int                 `json:"betmult"`             // 押注倍數
 	GameModes []GameModeResultDTO `json:"gamemodes,omitempty"` // 每個遊戲模式的完整結構
-	IsGameEnd bool                `json:"isend"`               // 遊戲結束旗標`
+	IsGameEnd bool                `json:"isend"`               // 遊戲結束旗標
+	State     SpinState           `json:"spin_state"`          // 遊戲狀態
 }
 
 // GameModeResultDTO 為對外輸出的 GameModeResult 序列化結構。
@@ -72,10 +77,22 @@ type CalcScreenDetailDTO struct {
 	HitMap       []int16 `json:"hits"`
 }
 
-func NewSpinResultDTO(sr *buf.SpinResult) SpinResult {
+func NewSpinResultDTO(sr *buf.SpinResult) (SpinResult, error) {
 	if sr == nil {
-		return SpinResult{}
+		return SpinResult{}, errs.NewWarn("spin result is nil")
 	}
+	state := SpinState{
+		StartCoreSnapB64U: corefmt.EncodeBase64URL(sr.State.StartCoreSnap),
+		AfterCoreSnapB64U: corefmt.EncodeBase64URL(sr.State.AfterCoreSnap),
+	}
+	if sr.State.Checkpoint != nil {
+		cp, err := EncodeCheckpoint(sr.Logic, sr.State.Checkpoint)
+		if err != nil {
+			return SpinResult{}, err
+		}
+		state.Checkpoint = cp
+	}
+
 	dto := SpinResult{
 		GameName:  sr.GameName,
 		GameID:    sr.GameID,
@@ -84,6 +101,7 @@ func NewSpinResultDTO(sr *buf.SpinResult) SpinResult {
 		BetMode:   sr.BetMode,
 		BetMult:   sr.BetMult,
 		IsGameEnd: sr.IsGameEnd,
+		State:     state,
 	}
 
 	if len(sr.GameModeList) > 0 {
@@ -93,7 +111,7 @@ func NewSpinResultDTO(sr *buf.SpinResult) SpinResult {
 		}
 	}
 
-	return dto
+	return dto, nil
 }
 
 func newGameModeResultDTO(lkey spec.LogicKey, gmr *buf.GameModeResult) GameModeResultDTO {
@@ -204,4 +222,11 @@ func hitMapFromSnap(d buf.CalcScreenDetail, snap *gameModeSnapshot) []int16 {
 		return nil
 	}
 	return snap.HitsFlat[hs:he] // 不拷貝
+}
+
+type SpinState struct {
+	StartCoreSnapB64U string          `json:"start_b64u"`   // 必回
+	AfterCoreSnapB64U string          `json:"after_b64u"`   // 必回
+	Checkpoint        json.RawMessage `json:"cp,omitempty"` // 視你是否要每局都回；若審計要強制，也可以去掉 omitempty
+	// JP delta/hit (optional)
 }

@@ -17,7 +17,6 @@ package slot
 import (
 	"fmt"
 
-	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/spec"
@@ -32,26 +31,19 @@ import (
 // NOTE: GameSetting is treated as read-only after Init. If you intentionally mutate settings,
 // you are responsible for correctness and concurrency safety.
 type GameLogic interface {
-	GetResult(r *dto.SpinRequest, g *Game) *buf.SpinResult
+	GetResult(r *buf.SpinRequest, g *Game) *buf.SpinResult
 }
 
 // LogicBuilder builds a GameLogic instance bound to a specific *Game (per-machine/per-game instance).
 // It is invoked during game initialization.
 type LogicBuilder func(g *Game) (GameLogic, error)
 
-// GameRegister registers:
-//  1. the logic builder for lkey
-//  2. the DTO renderer for the extend-result type T (must match the game logic output)
-//
-// This is intentionally a free function (not a method) because methods cannot be generic.
-func GameRegister[T buf.ExtendResult](lkey spec.LogicKey, builder LogicBuilder, reg *LogicRegistry) error {
-	// 1) register builder
+// GameRegister registers the logic builder for lkey
+func GameRegister(lkey spec.LogicKey, builder LogicBuilder, reg *LogicRegistry) error {
+	// register builder
 	if err := reg.Register(lkey, builder); err != nil {
 		return err
 	}
-
-	// 2) register extend result renderer
-	dto.RegisterExtendRender[T](lkey)
 	return nil
 }
 

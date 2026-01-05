@@ -17,7 +17,6 @@ package slot
 import (
 	"fmt"
 
-	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
@@ -62,7 +61,7 @@ func NewGame(gs *spec.GameSetting, reg *LogicRegistry, core *core.Core, isSim bo
 // ============================================================
 
 // GetResult 依照 betMode / betMult 進行一次遊戲流程並回傳結果緩衝。
-func (gh *Game) GetResult(req *dto.SpinRequest) *buf.SpinResult {
+func (gh *Game) GetResult(req *buf.SpinRequest) *buf.SpinResult {
 	return gh.logic.GetResult(req, gh)
 }
 
@@ -80,7 +79,7 @@ func (gh *Game) ResetResult() {
 }
 
 // StartNewSpin 重置狀態、設定本次投注資訊，並取得可累積結果的 SpinResult 指標。
-func (gh *Game) StartNewSpin(r *dto.SpinRequest) *buf.SpinResult {
+func (gh *Game) StartNewSpin(r *buf.SpinRequest) *buf.SpinResult {
 	gh.ResetResult()
 	gh.SpinResult.BetMode = r.BetMode
 	gh.SpinResult.BetMult = r.BetMult

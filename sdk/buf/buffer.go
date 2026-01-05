@@ -33,6 +33,7 @@ type SpinResult struct {
 	GameModeCount int               // 經過幾個GameMode
 	GameModeList  []*GameModeResult // 每個遊戲模式的完整結構
 	IsGameEnd     bool              // 遊戲結束旗標
+	State         *SpinState        // 遊戲狀態
 }
 
 // NewSpinResult 建立指定機台的 SpinResult 實體，並預先配置基本容量。
@@ -49,6 +50,11 @@ func NewSpinResult(gs *spec.GameSetting) *SpinResult {
 		GameModeCount: 0,
 		GameModeList:  make([]*GameModeResult, 0, capSpinGrow),
 		IsGameEnd:     false,
+		State: &SpinState{
+			StartCoreSnap: nil,
+			AfterCoreSnap: nil,
+			Checkpoint:    nil,
+		},
 	}
 	return sr
 }
@@ -548,4 +554,10 @@ func (e *NoExtend) Snapshot() any {
 	// }
 	// return new(NoExtend)
 	return nil
+}
+
+type SpinState struct {
+	StartCoreSnap []byte // raw bytes snapshot (engine internal)
+	AfterCoreSnap []byte // raw bytes snapshot (engine internal)
+	Checkpoint    any    // union: nil | json.RawMessage | *YourTypedCheckpoint
 }

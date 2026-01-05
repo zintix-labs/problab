@@ -49,7 +49,7 @@ type Machine struct {
 	core        *core.Core       // RNG 核心（PRNG + Snapshot/Restore 合約；熱路徑會頻繁取樣）
 	gh          *slot.Game       // 遊戲執行核心（Slot 邏輯入口；由 LogicRegistry + GameSetting 組裝）
 	BetUnits    []int            // 押注單位（由遊戲設定衍生；通常給外部列舉 UI/測試）
-	SpinRequest *dto.SpinRequest // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
+	SpinRequest *buf.SpinRequest // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
 	SpinResult  *buf.SpinResult  // 可重用的結果 buffer（熱路徑；每次 Spin 會覆寫）
 	mu          sync.Mutex       // 防併發鎖：保護可重用 buffers 與核心狀態一致性
 	initseed    int64            // 出生 seed（便於追溯；完整重現請用 Snapshot/Restore）
@@ -95,7 +95,7 @@ func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.P
 		return nil, err
 	}
 	m.BetUnits = m.gh.BetUnits
-	m.SpinRequest = &dto.SpinRequest{}
+	m.SpinRequest = &buf.SpinRequest{}
 	m.SpinResult = m.gh.SpinResult
 	return m, nil
 }
@@ -110,19 +110,54 @@ func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 		// 實作err代碼
 		return dto.SpinResult{}, err
 	}
+	// 2. parse dto to inner spin request
+	req, err := r.Parse(m.gh.GameSetting.LogicKey)
+	if err != nil {
+		return dto.SpinResult{}, err
+	}
+	// 3. get start snapshot
+	startsnap, err := m.SnapshotCore()
+	if err != nil {
+		return dto.SpinResult{}, errs.NewFatal("before snapshot error " + err.Error())
+	}
+	rem := startsnap
+	if req.StartState != nil && len(req.StartState.StartCoreSnap) != 0 {
+		startsnap = req.StartState.StartCoreSnap
+		if err := m.RestoreCore(req.StartState.StartCoreSnap); err != nil {
+			return dto.SpinResult{}, errs.NewWarn("restore core err " + err.Error())
+		}
+	}
 
-	// 2. 取得spinResult
-	sr := m.gh.GetResult(r)
+	// 4. get inner spinResult
+	sr := m.gh.GetResult(req)
 
-	// 3. dto
-	d := dto.NewSpinResultDTO(sr)
-	return d, nil
+	// 5. get after snapshot
+	aftersnap, err := m.SnapshotCore()
+	if err != nil {
+		if e := m.RestoreCore(rem); e != nil {
+			return dto.SpinResult{}, errs.NewFatal("fall back err " + e.Error())
+		}
+		return dto.SpinResult{}, errs.NewWarn("after snapshot error " + err.Error())
+	}
+	state := sr.State
+	state.StartCoreSnap = startsnap
+	state.AfterCoreSnap = aftersnap
+
+	// 6. restore if needed
+	if req.StartState != nil && len(req.StartState.StartCoreSnap) != 0 {
+		if err := m.RestoreCore(rem); err != nil {
+			return dto.SpinResult{}, errs.NewFatal("restore core back err " + err.Error())
+		}
+	}
+
+	// 7. dto
+	return dto.NewSpinResultDTO(sr)
 }
 
-// SpinInternal 直接取得內部 SpinResult；常用於模擬器或測試
+// spinInternal 直接取得內部 SpinResult；常用於模擬器或測試
 //
 // 此行為跳過所有檢查，並只使用預設1單位下注
-func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
+func (m *Machine) spinInternal(betMode int) *buf.SpinResult {
 	m.SpinRequest.BetMode = betMode
 	m.SpinRequest.BetMult = 1
 	m.SpinRequest.Bet = m.BetUnits[betMode]

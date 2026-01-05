@@ -23,7 +23,7 @@ import (
 )
 
 func TestDecodeSpinRequestGET(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "/spin?uid=u1&game=demo&gid=7&bet=10&bet_mode=1&bet_mult=2&session=3&choice=4", nil)
+	r := httptest.NewRequest(http.MethodGet, "/spin?uid=u1&game=demo&gid=7&bet=10&bet_mode=1&bet_mult=2&cycle=3&choice=4", nil)
 	req, err := DecodeSpinRequest(r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -31,10 +31,10 @@ func TestDecodeSpinRequestGET(t *testing.T) {
 	if req.UID != "u1" || req.GameName != "demo" || req.GameId != 7 {
 		t.Fatalf("unexpected request: %+v", req)
 	}
-	if req.Bet != 10 || req.BetMode != 1 || req.BetMult != 2 || req.Session != 3 {
+	if req.Bet != 10 || req.BetMode != 1 || req.BetMult != 2 || req.Cycle != 3 {
 		t.Fatalf("unexpected request: %+v", req)
 	}
-	if req.Choice == nil || *req.Choice != 4 {
+	if req.Choice != 4 {
 		t.Fatalf("unexpected choice: %+v", req.Choice)
 	}
 }
@@ -47,7 +47,7 @@ func TestDecodeSpinRequestPOST(t *testing.T) {
 		"bet":      5,
 		"bet_mode": 0,
 		"bet_mult": 1,
-		"session":  2,
+		"cycle":    2,
 	}
 	data, _ := json.Marshal(payload)
 	r := httptest.NewRequest(http.MethodPost, "/spin", bytes.NewReader(data))

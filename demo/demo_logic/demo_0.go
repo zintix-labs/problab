@@ -29,13 +29,19 @@ import (
 
 func init() {
 	logic := "demo_normal"
-	if err := slot.GameRegister[*buf.NoExtend](
-		spec.LogicKey(logic),
-		buildGame0000,
-		Logics,
-	); err != nil {
+	builder := buildGame0000
+	logics := Logics
+	if err := slot.GameRegister(spec.LogicKey(logic), builder, logics); err != nil {
 		log.Fatalf("%s register failed: %v", logic, err)
 	}
+	// register Extend
+	if err := dto.RegisterExtendRender[ext0000](spec.LogicKey(logic)); err != nil {
+		log.Fatalf("%s register failed: %v", logic, err)
+	}
+	// register Checkpoint
+	// if err := dto.RegisterCheckpoint[check0000](spec.LogicKey(logic)); err != nil {
+	// 	log.Fatalf("%s register failed: %v", logic, err)
+	// }
 }
 
 // ============================================================
@@ -117,7 +123,7 @@ func (e *ext0000) Snapshot() any {
 // ============================================================
 
 // GetResult 主要介面函數 回傳遊戲結果 *res.SpinResult
-func (g *game0000) GetResult(r *dto.SpinRequest, gh *slot.Game) *buf.SpinResult {
+func (g *game0000) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
 	sr := gh.StartNewSpin(r)
 
 	base := g.getBaseResult(r.BetMult, gh)

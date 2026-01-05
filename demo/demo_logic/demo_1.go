@@ -30,13 +30,19 @@ import (
 
 func init() {
 	logic := "demo_cascade"
-	if err := slot.GameRegister[*buf.NoExtend](
-		spec.LogicKey(logic),
-		buildGame0001,
-		Logics,
-	); err != nil {
+	builder := buildGame0001
+	logics := Logics
+	if err := slot.GameRegister(spec.LogicKey(logic), builder, logics); err != nil {
 		log.Fatalf("%s register failed: %v", logic, err)
 	}
+	// register Extend
+	if err := dto.RegisterExtendRender[ext0001](spec.LogicKey(logic)); err != nil {
+		log.Fatalf("%s register failed: %v", logic, err)
+	}
+	// register Checkpoint
+	// if err := dto.RegisterCheckpoint[check0001](spec.LogicKey(logic)); err != nil {
+	// 	log.Fatalf("%s register failed: %v", logic, err)
+	// }
 }
 
 // ============================================================
@@ -120,7 +126,7 @@ func (e *ext0001) Snapshot() any {
 // ============================================================
 
 // getResult 主要介面函數 回傳遊戲結果 *res.SpinResult
-func (g *game0001) GetResult(r *dto.SpinRequest, gh *slot.Game) *buf.SpinResult {
+func (g *game0001) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
 	sr := gh.StartNewSpin(r)
 	base := g.getBaseResult(r, gh)
 	sr.AppendModeResult(base)
@@ -137,7 +143,7 @@ func (g *game0001) GetResult(r *dto.SpinRequest, gh *slot.Game) *buf.SpinResult 
 // ** 遊戲中各模式內部邏輯實作 **
 // ============================================================
 
-func (g *game0001) getBaseResult(r *dto.SpinRequest, gh *slot.Game) *buf.GameModeResult {
+func (g *game0001) getBaseResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameModeResult {
 	mode := gh.GameModeHandlerList[0]
 	sg := mode.ScreenGenerator
 	sc := mode.ScreenCalculator
@@ -194,7 +200,7 @@ func (g *game0001) getBaseResult(r *dto.SpinRequest, gh *slot.Game) *buf.GameMod
 	return mode.YieldResult()
 }
 
-func (g *game0001) getFreeResult(r *dto.SpinRequest, gh *slot.Game) *buf.GameModeResult {
+func (g *game0001) getFreeResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameModeResult {
 	mode := gh.GameModeHandlerList[1]
 	sg := mode.ScreenGenerator
 	sc := mode.ScreenCalculator
