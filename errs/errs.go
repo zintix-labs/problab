@@ -85,6 +85,18 @@ func NewLog(msg string) *E {
 	return &E{Message: msg, ErrLv: Log}
 }
 
+func Fatalf(format string, a ...any) *E {
+	return NewFatal(fmt.Sprintf(format, a...))
+}
+
+func Warnf(format string, a ...any) *E {
+	return NewWarn(fmt.Sprintf(format, a...))
+}
+
+func Logf(format string, a ...any) *E {
+	return NewLog(fmt.Sprintf(format, a...))
+}
+
 // NewWithExtra 與 New 相同，但可附加額外上下文字串（不影響主訊息）。
 func NewWithExtra(errLv ErrLevel, msg string, extra string) *E {
 	e := New(errLv, msg)
