@@ -154,10 +154,12 @@ func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 	return dto.NewSpinResultDTO(sr)
 }
 
-// spinInternal 直接取得內部 SpinResult；常用於模擬器或測試
+// SpinInternal 直接取得內部 SpinResult；常用於模擬器或測試
+//
+// 請勿在正式環境使用
 //
 // 此行為跳過所有檢查，並只使用預設1單位下注
-func (m *Machine) spinInternal(betMode int) *buf.SpinResult {
+func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
 	m.SpinRequest.BetMode = betMode
 	m.SpinRequest.BetMult = 1
 	m.SpinRequest.Bet = m.BetUnits[betMode]

@@ -43,7 +43,7 @@ type Simulator struct {
 	logic     *slot.LogicRegistry      // 邏輯註冊表
 	cf        core.PRNGFactory         // 亂數生成器
 	initSeed  int64                    // 初始下的種子
-	seedmaker *seedMaker               // 種子生成器
+	seedmaker *SeedMaker               // 種子生成器
 	mBuf      []*Machine               // 併發執行機台實例
 	rBuf      []*recorder.SpinRecorder // 併發遊戲紀錄員
 	sBuf      []*stats.StatReport      // 併發統計結果報表(僅Players需要)
@@ -66,7 +66,7 @@ func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core
 		logic:     reg,
 		cf:        cf,
 		initSeed:  seed,
-		seedmaker: newSeedMaker(seed),
+		seedmaker: NewSeedMaker(seed),
 		mBuf:      make([]*Machine, 1, capPrepare),
 		rBuf:      make([]*recorder.SpinRecorder, 0, capPrepare),
 		sBuf:      make([]*stats.StatReport, 0, capPrepare),
@@ -104,7 +104,7 @@ func (s *Simulator) Sim(betMode int, round int, showpb bool) (*stats.StatReport,
 		bar.SetWriter(io.Discard)
 	}
 	for i := 0; i < round; i++ {
-		sr := m.spinInternal(betMode)
+		sr := m.SpinInternal(betMode)
 		r.Record(sr)
 		bar.Increment()
 	}
@@ -129,7 +129,7 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 		return nil, 0, errs.NewWarn("round must > 0")
 	}
 	for len(s.mBuf) < mp {
-		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.next(), true)
+		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.Next(), true)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -157,7 +157,7 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 			g := s.mBuf[i]
 			st := s.rBuf[i]
 			for r := 0; r < rounds; r++ {
-				sr := g.spinInternal(betMode)
+				sr := g.SpinInternal(betMode)
 				st.Record(sr)
 				bar.Increment()
 			}
@@ -184,7 +184,7 @@ func (s *Simulator) SimPlayers(mp int, players int, initBets int, betMode int, r
 
 	// 	準備並行機台
 	for len(s.mBuf) < mp {
-		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.next(), true)
+		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.Next(), true)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -247,7 +247,7 @@ func sim(wg *sync.WaitGroup, m *Machine, jobs chan *recorder.SpinRecorder, betMo
 	defer wg.Done()
 	for j := range jobs { // j := <- jobs
 		for range rounds {
-			sr := m.spinInternal(betMode)
+			sr := m.SpinInternal(betMode)
 			if j.RecordWithPlayer(sr) {
 				break
 			}
@@ -265,12 +265,12 @@ func (s *Simulator) reset() {
 
 const mask63 = uint64(1<<63) - 1
 
-type seedMaker struct {
+type SeedMaker struct {
 	state atomic.Uint64 // always in [0, 2^63)
 }
 
-func newSeedMaker(seed int64) *seedMaker {
-	s := &seedMaker{}
+func NewSeedMaker(seed int64) *SeedMaker {
+	s := &SeedMaker{}
 	s.state.Store(uint64(seed) & mask63)
 	return s
 }
@@ -281,7 +281,7 @@ func newSeedMaker(seed int64) *seedMaker {
 // 因此 state 的推進必須是原子的：
 //   - 使用 CAS（Compare-And-Swap）迴圈確保每次呼叫都會取得唯一的下一個 state。
 //   - 回傳值使用推進後的 state 經 mix63 打散後的結果。
-func (s *seedMaker) next() int64 {
+func (s *SeedMaker) Next() int64 {
 	for {
 		old := s.state.Load()                                            // always masked
 		next := (old*6364136223846793005 + 1442695040888963407) & mask63 // full-period LCG mod 2^63

@@ -41,7 +41,7 @@ type MachinePool struct {
 	logic         *slot.LogicRegistry
 	cf            core.PRNGFactory
 	initSeed      int64
-	seedMaker     *seedMaker
+	seedMaker     *SeedMaker
 	pool          chan *Machine // 可用機台的通道，用於取得和歸還機台
 	broken        chan *Machine // 壞掉機台的通道，用於送修或丟棄壞掉機台
 	done          chan struct{} // 關閉訊號：關閉後不再允許借機/歸還/補機
@@ -73,7 +73,7 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 		logic:     reg,
 		cf:        cf,
 		initSeed:  seed,
-		seedMaker: newSeedMaker(seed),
+		seedMaker: NewSeedMaker(seed),
 		pool:      make(chan *Machine, n),   // 建立有緩衝的機台通道，容量為 n
 		broken:    make(chan *Machine, 100), // 建立有緩衝的壞掉機台通道，容量固定為100
 		done:      make(chan struct{}),
@@ -89,7 +89,7 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 
 	// 上架機台，將 n 台新機台放入池中
 	for i := 0; i < n; i++ {
-		m, err := newMachineWithSeed(gs, reg, cf, p.seedMaker.next(), false)
+		m, err := newMachineWithSeed(gs, reg, cf, p.seedMaker.Next(), false)
 		if err != nil {
 			return nil, err
 		}
@@ -210,7 +210,7 @@ func (p *MachinePool) Spin(ctx context.Context, req *dto.SpinRequest) (dto dto.S
 			}
 
 			// 2) 補一台新機台（維持容量）
-			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, p.seedMaker.next(), false)
+			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, p.seedMaker.Next(), false)
 			p.rebuild.Add(1)
 			if buildErr != nil {
 				err = errs.NewFatal(fmt.Sprintf("machine %s can not build", p.gameName))
