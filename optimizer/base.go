@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/core"
 )
 
@@ -27,9 +28,9 @@ type Basis struct {
 	Neg []*Shape
 }
 
-func (c *Class) MakeBasis(core *core.Core) *Basis {
+func (c *Class) MakeBasis(core *core.Core) (*Basis, error) {
 	if len(c.samps) == 0 {
-		return nil
+		return nil, errs.Warnf("class %s gen basis failed: samps required", c.name)
 	}
 	sort.Slice(c.samps, func(i int, j int) bool {
 		return c.samps[i].Win < c.samps[j].Win
@@ -47,10 +48,15 @@ func (c *Class) MakeBasis(core *core.Core) *Basis {
 		Pos: make([]*Shape, 0, posMax),
 		Neg: make([]*Shape, 0, negMax),
 	}
-
+	if ok := c.gener.Set(wins); !ok {
+		return nil, errs.Warnf("class %s gen basis failed: can not set wins", c.name)
+	}
 	count := uint64(0)
 	for {
-		shape := c.gener.Gen(wins, core)
+		shape, err := c.gener.Gen(core)
+		if err != nil {
+			return nil, err
+		}
 		count++
 		if (len(result.Pos) < posMax) && (shape.Mean >= exp) {
 			result.Pos = append(result.Pos, shape)
@@ -62,9 +68,9 @@ func (c *Class) MakeBasis(core *core.Core) *Basis {
 			fmt.Printf("\r")
 			break
 		}
-		if count%10000 == 0 {
-			fmt.Printf("\rpos: %d neg: %d", len(result.Pos), len(result.Neg))
+		if count%10 == 0 {
+			fmt.Printf("\rclass %s pos: %d neg: %d", c.name, len(result.Pos), len(result.Neg))
 		}
 	}
-	return result
+	return result, nil
 }

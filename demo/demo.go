@@ -45,3 +45,11 @@ func NewServerConfig() (*svrcfg.SvrCfg, error) {
 	}
 	return scfg, nil
 }
+
+func NewProbLab() (*problab.Problab, error) {
+	return problab.NewAuto(
+		core.Default(),
+		problab.Configs(demo_configs.FS),
+		problab.Logics(demo_logic.Logics),
+	)
+}

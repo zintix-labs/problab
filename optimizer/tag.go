@@ -44,6 +44,7 @@ func RegisterTager(tag string, isTag IsTag) bool {
 
 type Tagers struct {
 	tags []tagFn
+	mask uint
 }
 
 func GetTager(tags ...string) *Tagers {
@@ -65,22 +66,6 @@ func GetTager(tags ...string) *Tagers {
 	return result
 }
 
-func (t *Tagers) Tag(sr *buf.SpinResult) []string {
-	if t == nil || len(t.tags) == 0 {
-		return nil
-	}
-	r := make([]string, 0, len(t.tags))
-	for _, fn := range t.tags {
-		if s, ok := fn(sr); ok {
-			r = append(r, s)
-		}
-	}
-	if len(r) == 0 {
-		return nil
-	}
-	return r
-}
-
 // TagInto 將符合的 tags 寫入 dst（會先清空長度），用於在熱路徑避免分配。
 // 回傳值為同一個底層陣列的 slice（可能與 dst 相同）。
 func (t *Tagers) TagInto(sr *buf.SpinResult, dst []string) []string {
@@ -94,4 +79,23 @@ func (t *Tagers) TagInto(sr *buf.SpinResult, dst []string) []string {
 		}
 	}
 	return r
+}
+
+func sub(check, tester []string) bool {
+	if len(check) > len(tester) {
+		return false
+	}
+	for _, s := range check {
+		ok := false
+		for _, t := range tester {
+			if s == t {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

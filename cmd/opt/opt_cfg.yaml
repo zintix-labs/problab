@@ -1,0 +1,92 @@
+# optimize config
+
+trget_rtp: 0.96
+trget_std: 5.0
+class_settings:
+  - 
+    class_name: base
+    match_tags:
+    min_win: 0.0
+    max_win: 500
+    collect: 1000000
+    hit_prob: 0
+    exp_win: 0.6
+    basis: 10
+    shape_cfg:
+      # 支援 gaussian, gamma, uniform
+      method: gaussian
+      gaussian:
+        k_range: [3,5]
+        mu_center: 0.6
+        mu_std: 12
+        std_range: [5,20]
+        amp_range: [0.01,0.7]
+        zero_range: [0.66,0.72]
+        spike:
+          mass_range: [0.00001,0.00005]
+          win_range: [300,500]
+        biases:
+      gamma:
+        k_range: [3,5]
+        mu_center: 0.6
+        mu_std: 5
+        std_range: [2,7]
+        amp_range: [0.01,0.7]
+        zero_range: [0.66,0.72]
+        spike:
+          #
+        biases:
+          #
+
+    # 暫時無作用
+    match_exp:
+      method: 
+
+    quality_evaluate:
+      mean_median_ratio: [1,800000000000]
+    
+    shapes_collect: 1000
+
+  -
+    class_name: free
+    match_tags: [fg]
+    min_win: 8
+    max_win: 10000
+    collect: 100000
+    hit_prob: 7143
+    exp_win: 51
+    basis: 30
+    shape_cfg:
+      # 支援 gaussian, gamma, uniform
+      method: gaussian
+      gaussian:
+        k_range: [3,10]
+        mu_center: 51
+        mu_std: 12
+        std_range: [7,50]
+        amp_range: [0.01,0.7]
+        zero_range:
+        spike:
+          mass_range: [0.00001,0.00005]
+          win_range: [300,500]
+        biases:
+      gamma:
+        k_range: [3,5]
+        mu_center: 0.6
+        mu_std: 5
+        std_range: [2,7]
+        amp_range: [0.01,0.7]
+        zero_range: [0.66,0.72]
+        spike:
+          #
+        biases:
+          #
+
+    # 暫時無作用
+    match_exp:
+      method: 
+
+    quality_evaluate:
+      mean_median_ratio: [1,10]
+    
+    shapes_collect: 1000

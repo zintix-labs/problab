@@ -15,7 +15,14 @@
 package optimizer
 
 func (c *Class) qualityEval(shape *Shape) bool {
-	ratio := shape.Mean / shape.Median
+	median := shape.Median
+	if shape.Median <= 0 {
+		if shape.Mean <= 0 {
+			return (1 <= c.skew[1]) && (1 >= c.skew[0])
+		}
+		median = 1e-6
+	}
+	ratio := shape.Mean / median
 	if ratio > c.skew[0] && ratio < c.skew[1] {
 		c.fail = 0
 		return true

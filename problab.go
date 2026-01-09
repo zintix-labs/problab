@@ -100,10 +100,11 @@ func Logics(regs ...*slot.LogicRegistry) []*slot.LogicRegistry {
 //	//	m, _ := lab.NewMachine(1001, false)
 //	//	// m.Spin(...) -> 取得結果（通常再轉成 DTO 回傳）
 type Problab struct {
-	cat *catalog.Catalog
-	reg *slot.LogicRegistry
-	cf  core.PRNGFactory
-	sum []catalog.Summary
+	cat       *catalog.Catalog
+	reg       *slot.LogicRegistry
+	cf        core.PRNGFactory
+	sum       []catalog.Summary
+	optimalFS fs.FS
 }
 
 // New 建立一個 Problab instance。
@@ -539,4 +540,9 @@ func (p *Problab) NewDevSimulator(gid spec.GID, seed int64) (*DevSimulator, erro
 		before64: mBe64,
 	}
 	return dev, nil
+}
+
+func (p *Problab) NewCore(seed int64) (*core.Core, error) {
+	c := core.New(p.cf.New(seed))
+	return c, nil
 }

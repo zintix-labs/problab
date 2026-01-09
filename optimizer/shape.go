@@ -37,7 +37,8 @@ func GetShapeGenerator(method string, cs *ClassSetting) (ShapeGenerator, error) 
 }
 
 type ShapeGenerator interface {
-	Gen([]float64, *core.Core) *Shape // returns w
+	Set([]float64) bool
+	Gen(*core.Core) (*Shape, error) // returns w
 }
 
 type Shape struct {
@@ -72,11 +73,23 @@ type GaussianMixtureShapeGenerator struct {
 	AmpMin float64
 	AmpMax float64
 
-	SpikeOn    bool
-	SpikeRange [2]float64
+	// zero range
+	ZeroMin float64
+	ZeroMax float64
+
+	SpikeOn        bool
+	SpikeMassRange [2]float64
+	SpikeWinRange  [2]float64
 
 	Biases    []Bias
 	BiasAlias *sampler.AliasTable
+
+	// Set
+	isSet    bool
+	zeros    int       // 有幾個0
+	wins     []float64 // 贏分
+	failed   int
+	spikeidx []int
 }
 
 func NewGaussianMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) {
@@ -102,6 +115,15 @@ func NewGaussianMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) 
 	if cfg.AmpRange[1] < cfg.AmpRange[0] {
 		return nil, errs.Warnf("class %s shape cfg err: amp_range[0] must be less than amp_range[1]", cs.CName)
 	}
+	if cfg.ZeroRange[1] < cfg.ZeroRange[0] {
+		return nil, errs.Warnf("class %s shape cfg err: zero_range[0] must be less than zero_range[1]", cs.CName)
+	}
+	if cfg.ZeroRange[0] < 0.0 {
+		return nil, errs.Warnf("class %s shape cfg err: zero_range[0] must be non-negative", cs.CName)
+	}
+	if cfg.ZeroRange[1] > 1.0 {
+		return nil, errs.Warnf("class %s shape cfg err: zero_range[1] must less than 1.0", cs.CName)
+	}
 	gm := &GaussianMixtureShapeGenerator{
 		cs:       cs,
 		KMin:     cfg.KRange[0],
@@ -112,21 +134,37 @@ func NewGaussianMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) 
 		StdMax:   cfg.StdRange[1],
 		AmpMin:   cfg.AmpRange[0],
 		AmpMax:   cfg.AmpRange[1],
+		ZeroMin:  cfg.ZeroRange[0],
+		ZeroMax:  cfg.ZeroRange[1],
+		isSet:    false,
 	}
 	if cfg.Spike != nil {
 		if cfg.Spike.MassRange[0] > cfg.Spike.MassRange[1] {
-			return nil, errs.Warnf("class %s shape cfg err: spike[0] must be less than spike[1]", cs.CName)
+			return nil, errs.Warnf("class %s shape cfg spike err: mass[0] must be less than mass[1]", cs.CName)
+		}
+		if cfg.Spike.MassRange[0] < 0 {
+			return nil, errs.Warnf("class %s shape cfg spike err: mass[0] must be non-negative", cs.CName)
+		}
+		if cfg.Spike.MassRange[1] > 1.0 {
+			return nil, errs.Warnf("class %s shape cfg spike err: mass[0] must be less than 1.0", cs.CName)
+		}
+		if cfg.Spike.MassRange[1]+gm.ZeroMax > 1.0 {
+			return nil, errs.Warnf("class %s shape cfg spike err: mass[1] + zero_max must be less than 1.0", cs.CName)
+		}
+		if cfg.Spike.WinRange[0] > cfg.Spike.WinRange[1] {
+			return nil, errs.Warnf("class %s shape cfg spike err: win[0] must be less than win[1]", cs.CName)
 		}
 		gm.SpikeOn = true
-		gm.SpikeRange = cfg.Spike.MassRange
+		gm.SpikeMassRange = cfg.Spike.MassRange
+		gm.SpikeWinRange = cfg.Spike.WinRange
 	}
-	mainWeight := biasWeight
+	mainWeight := baseWeight
 	weights := make([]int, 0, len(cfg.Biases)+1)
 	biasess := make([]Bias, 0, len(cfg.Biases))
 	if len(cfg.Biases) != 0 {
 		for _, b := range cfg.Biases {
 			if b.Prob > mainWeight {
-				return nil, errs.Warnf("class %s shape cfg err: biases prob over %d", cs.CName, biasWeight)
+				return nil, errs.Warnf("class %s shape cfg err: biases prob over %d", cs.CName, baseWeight)
 			}
 			if b.Range[0] > b.Range[1] {
 				return nil, errs.Warnf("class %s shape cfg err: biases range[1] must be grater than range[0]", cs.CName)
@@ -151,85 +189,179 @@ func NewGaussianMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) 
 	return gm, nil
 }
 
-func (g *GaussianMixtureShapeGenerator) Gen(wins []float64, c *core.Core) *Shape {
+func (g *GaussianMixtureShapeGenerator) Set(wins []float64) bool {
 	// NOTE: wins 必須事先由呼叫端排序（ascending）。為了性能，這裡不做任何 runtime assert。
+	if g.isSet {
+		return false
+	}
 	if len(wins) == 0 {
-		return nil
+		return false
 	}
-	// 從範圍取得本次要混合的GaussianShape數量
-	k := g.KMin
-	if g.KMax > g.KMin {
-		k = g.KMin + c.IntN(g.KMax-g.KMin+1)
-	}
-
-	gauss := make([]GaussianShape, 0, k)
-	for i := 0; i < k; i++ {
-		// --- Mu: centered around MuCenter (natural) ---
-		pick := g.BiasAlias.Pick(c)
-		center := g.MuCenter
-		if pick < len(g.Biases) {
-			start := g.Biases[pick].Range[0]
-			maxrange := g.Biases[pick].Range[1] - start
-			center = start + c.Float64()*maxrange
+	zeros := 0
+	for _, w := range wins {
+		if w > 0.0 {
+			break
 		}
-		// mu = center + N(0,1)*MuStd
-		mu := center + c.NormFloat64()*g.MuStd
-
-		// optional: clamp mu into [minWin, maxWin] to avoid useless gauss
-		mu = max(mu, float64(g.cs.MinWin))
-		mu = min(mu, float64(g.cs.MaxWin))
-
-		// --- Std: uniform in [StdMin, StdMax] ---
-		std := g.StdMin + c.Float64()*(g.StdMax-g.StdMin)
-		if std <= 1e-9 {
-			std = 1e-9
-		}
-
-		// --- Amp: uniform in [AmpMin, AmpMax] ---
-		amp := g.AmpMin + c.Float64()*(g.AmpMax-g.AmpMin)
-		if amp <= 0 {
-			amp = 1e-9
-		}
-
-		gauss = append(gauss, GaussianShape{Amp: amp, Mu: mu, Std: std})
+		zeros++
 	}
-
-	weights := make([]float64, len(wins))
-	var sumW float64
-	for i, x := range wins {
-		var w float64
-		for _, b := range gauss {
-			w += b.Amp * normalPDF(x, b.Mu, b.Std)
-		}
-		weights[i] = w
-		sumW += w
-	}
-
-	// fallback: if all weights ~0, revert to uniform
-	if !(sumW > 0) || math.IsNaN(sumW) || math.IsInf(sumW, 0) {
-		u := 1.0 / float64(len(weights))
-		for i := range weights {
-			weights[i] = u
-		}
-		return &Shape{Weights: weights, Mean: meanOf(wins, weights), Median: medianOf(wins, weights)}
-	}
-
-	// normalize to probability distribution
-	inv := 1.0 / sumW
-	for i := range weights {
-		weights[i] *= inv
-	}
-
-	// Optional: add a small, human-made peak near the tail (spike)
 	if g.SpikeOn {
-		applySpike(g.SpikeRange, wins, weights, c)
+		index := make([]int, 0, 10)
+		smin := g.SpikeWinRange[0]
+		smax := g.SpikeWinRange[1]
+		for i := len(wins) - 1; i >= zeros; i-- {
+			w := wins[i]
+			if (w <= smax) && (w >= smin) {
+				index = append(index, i)
+			}
+		}
+		if len(index) == 0 {
+			g.SpikeOn = false
+		}
+		g.spikeidx = index
+	}
+	if zeros == 0 {
+		g.ZeroMin = 0.0
+		g.ZeroMax = 0.0
+	}
+	g.zeros = zeros
+	g.wins = wins
+	g.isSet = true
+	return true
+}
+
+func (g *GaussianMixtureShapeGenerator) Gen(c *core.Core) (*Shape, error) {
+	if !g.isSet {
+		return nil, errs.Warnf("set wins required")
 	}
 
+	// 1. 0分率(選用):從範圍取得本次0分率
+	zeroRate := 0.0
+	zeroRatePerZeroWin := 0.0
+	weights := make([]float64, len(g.wins))
+	if g.ZeroMax > 0.0 && (g.zeros > 0) {
+		diffrange := g.ZeroMax - g.ZeroMin
+		zeroRate = g.ZeroMin + c.Float64()*diffrange
+		// 均攤
+		zeroRatePerZeroWin = zeroRate / float64(g.zeros)
+		for i := range weights[:g.zeros] {
+			weights[i] = zeroRatePerZeroWin
+		}
+	}
+
+	// 2. Spike(選用): add a small, human-made peak near the tail (spike)
+	spikeProb := 0.0
+	spikeIdx := 0
+	if g.SpikeOn && (len(g.spikeidx) > 0) {
+		diff := g.SpikeMassRange[1] - g.SpikeMassRange[0]
+		spikeProb = g.SpikeMassRange[0] + c.Float64()*diff
+		spikeIdx = c.Pick(g.spikeidx) // 從列表中隨機挑一個
+	}
+	remain := 1.0 - zeroRate - spikeProb
+	if remain > epsilon {
+		if g.zeros >= len(g.wins) {
+			return nil, errs.Warnf(
+				"class=%s method=%s invalid_support: remain=%.12g (>eps=%.12g) but wins have no non-zero bins (zeros=%d wins_len=%d, win_range=[%.6g,%.6g]). "+
+					"Meaning: config requires mixture mass, but there is nowhere to place it. "+
+					"Fix: reduce zero_range/spike_mass so remain<=eps, or provide non-zero wins (wins must include >0 values).",
+				g.cs.CName, "gaussian", remain, epsilon,
+				g.zeros, len(g.wins),
+				g.wins[0], g.wins[len(g.wins)-1],
+			)
+		}
+		// 3. 從範圍取得本次要混合的GaussianShape數量
+		k := g.KMin
+		if g.KMax > g.KMin {
+			k = g.KMin + c.IntN(g.KMax-g.KMin+1)
+		}
+
+		gauss := make([]GaussianShape, 0, k)
+		for i := 0; i < k; i++ {
+			// --- Mu: centered around MuCenter (natural) ---
+			pick := g.BiasAlias.Pick(c)
+			center := g.MuCenter
+			if pick < len(g.Biases) {
+				start := g.Biases[pick].Range[0]
+				maxrange := g.Biases[pick].Range[1] - start
+				center = start + c.Float64()*maxrange
+			}
+			// mu = center + N(0,1)*MuStd
+			mu := center + c.NormFloat64()*g.MuStd
+
+			// optional: clamp mu into [minWin, maxWin] to avoid useless gauss
+			mu = max(mu, float64(g.cs.MinWin))
+			mu = min(mu, float64(g.cs.MaxWin))
+
+			// --- Std: uniform in [StdMin, StdMax] ---
+			std := g.StdMin + c.Float64()*(g.StdMax-g.StdMin)
+			if std <= 1e-9 {
+				std = 1e-9
+			}
+
+			// --- Amp: uniform in [AmpMin, AmpMax] ---
+			amp := g.AmpMin + c.Float64()*(g.AmpMax-g.AmpMin)
+			if amp <= 0 {
+				amp = 1e-9
+			}
+
+			gauss = append(gauss, GaussianShape{Amp: amp, Mu: mu, Std: std})
+		}
+
+		var sumW float64
+		for i := g.zeros; i < len(g.wins); i++ {
+			x := g.wins[i]
+			var w float64
+			for _, b := range gauss {
+				w += b.Amp * normalPDF(x, b.Mu, b.Std)
+			}
+			weights[i] = w
+			sumW += w
+		}
+
+		// fallback: if all weights ~0, try again
+		if !(sumW > 0) || math.IsNaN(sumW) || math.IsInf(sumW, 0) {
+			g.failed++
+			if g.failed > 500 {
+				return nil, errs.Warnf(
+					"class=%s method=gaussian gen_failed(retry_limit) failed=%d/%d wins_len=%d zeros=%d win_range=[%.6g,%.6g] first_nonzero=%.6g zero_range=[%.6g,%.6g] zero_rate=%.6g spike_on=%t spike_range=[%.6g,%.6g] spike_prob=%.6g k_range=[%d,%d] mu_center=%.6g mu_std=%.6g std_range=[%.6g,%.6g] amp_range=[%.6g,%.6g] biases=%d",
+					g.cs.CName, g.failed, 500,
+					len(g.wins), g.zeros,
+					g.wins[0], g.wins[len(g.wins)-1],
+					func() float64 {
+						if g.zeros < len(g.wins) {
+							return g.wins[g.zeros]
+						}
+						return g.wins[len(g.wins)-1]
+					}(),
+					g.ZeroMin, g.ZeroMax, zeroRate,
+					g.SpikeOn, g.SpikeMassRange[0], g.SpikeMassRange[1], spikeProb,
+					g.KMin, g.KMax,
+					g.MuCenter, g.MuStd,
+					g.StdMin, g.StdMax,
+					g.AmpMin, g.AmpMax,
+					len(g.Biases),
+				)
+			}
+			return g.Gen(c)
+		}
+
+		// normalize to probability distribution
+		inv := remain / sumW
+		for i := g.zeros; i < len(weights); i++ {
+			weights[i] *= inv
+		}
+	}
+
+	// 這時後spike 把 spikeProb 加上去
+	if g.SpikeOn && (spikeProb > 0.0) {
+		weights[spikeIdx] += spikeProb
+	}
+
+	g.failed = 0
 	return &Shape{
 		Weights: weights,
-		Mean:    meanOf(wins, weights),
-		Median:  medianOf(wins, weights),
-	}
+		Mean:    meanOf(g.wins, weights),
+		Median:  medianOf(g.wins, weights),
+	}, nil
 }
 
 func normalPDF(x, mu, std float64) float64 {
@@ -264,11 +396,23 @@ type GammaMixtureShapeGenerator struct {
 	AmpMin float64
 	AmpMax float64
 
-	SpikeOn    bool
-	SpikeRange [2]float64
+	// zero range
+	ZeroMin float64
+	ZeroMax float64
+
+	SpikeOn        bool
+	SpikeMassRange [2]float64
+	SpikeWinRange  [2]float64
 
 	Biases    []Bias
 	BiasAlias *sampler.AliasTable
+
+	// Set
+	isSet    bool
+	zeros    int       // 有幾個0
+	wins     []float64 // 贏分
+	failed   int
+	spikeidx []int
 }
 
 func NewGammaMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) {
@@ -294,6 +438,15 @@ func NewGammaMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) {
 	if cfg.AmpRange[1] < cfg.AmpRange[0] {
 		return nil, errs.Warnf("class %s shape cfg err: amp_range[0] must be less than amp_range[1]", cs.CName)
 	}
+	if cfg.ZeroRange[1] < cfg.ZeroRange[0] {
+		return nil, errs.Warnf("class %s shape cfg err: zero_range[0] must be less than zero_range[1]", cs.CName)
+	}
+	if cfg.ZeroRange[0] < 0.0 {
+		return nil, errs.Warnf("class %s shape cfg err: zero_range[0] must be non-negative", cs.CName)
+	}
+	if cfg.ZeroRange[1] > 1.0 {
+		return nil, errs.Warnf("class %s shape cfg err: zero_range[1] must less than 1.0", cs.CName)
+	}
 	gm := &GammaMixtureShapeGenerator{
 		cs:       cs,
 		KMin:     cfg.KRange[0],
@@ -304,21 +457,37 @@ func NewGammaMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) {
 		StdMax:   cfg.StdRange[1],
 		AmpMin:   cfg.AmpRange[0],
 		AmpMax:   cfg.AmpRange[1],
+		ZeroMin:  cfg.ZeroRange[0],
+		ZeroMax:  cfg.ZeroRange[1],
+		isSet:    false,
 	}
 	if cfg.Spike != nil {
 		if cfg.Spike.MassRange[0] > cfg.Spike.MassRange[1] {
-			return nil, errs.Warnf("class %s shape cfg err: spike[0] must be less than spike[1]", cs.CName)
+			return nil, errs.Warnf("class %s shape cfg spike err: mass[0] must be less than mass[1]", cs.CName)
+		}
+		if cfg.Spike.MassRange[0] < 0 {
+			return nil, errs.Warnf("class %s shape cfg spike err: mass[0] must be non-negative", cs.CName)
+		}
+		if cfg.Spike.MassRange[1] > 1.0 {
+			return nil, errs.Warnf("class %s shape cfg spike err: mass[0] must be less than 1.0", cs.CName)
+		}
+		if cfg.Spike.MassRange[1]+gm.ZeroMax > 1.0 {
+			return nil, errs.Warnf("class %s shape cfg spike err: mass[1] + zero_max must be less than 1.0", cs.CName)
+		}
+		if cfg.Spike.WinRange[0] > cfg.Spike.WinRange[1] {
+			return nil, errs.Warnf("class %s shape cfg spike err: win[0] must be less than win[1]", cs.CName)
 		}
 		gm.SpikeOn = true
-		gm.SpikeRange = cfg.Spike.MassRange
+		gm.SpikeMassRange = cfg.Spike.MassRange
+		gm.SpikeWinRange = cfg.Spike.WinRange
 	}
-	mainWeight := biasWeight
+	mainWeight := baseWeight
 	weights := make([]int, 0, len(cfg.Biases)+1)
 	biasess := make([]Bias, 0, len(cfg.Biases))
 	if len(cfg.Biases) != 0 {
 		for _, b := range cfg.Biases {
 			if b.Prob > mainWeight {
-				return nil, errs.Warnf("class %s shape cfg err: biases prob over %d", cs.CName, biasWeight)
+				return nil, errs.Warnf("class %s shape cfg err: biases prob over %d", cs.CName, baseWeight)
 			}
 			if b.Range[0] > b.Range[1] {
 				return nil, errs.Warnf("class %s shape cfg err: biases range[1] must be grater than range[0]", cs.CName)
@@ -343,95 +512,188 @@ func NewGammaMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) {
 	return gm, nil
 }
 
-func (g *GammaMixtureShapeGenerator) Gen(wins []float64, c *core.Core) *Shape {
+func (g *GammaMixtureShapeGenerator) Set(wins []float64) bool {
 	// NOTE: wins 必須事先由呼叫端排序（ascending）。為了性能，這裡不做任何 runtime assert。
+	if g.isSet {
+		return false
+	}
 	if len(wins) == 0 {
-		return nil
+		return false
 	}
-	// 從範圍取得本次要混合的GammaShape數量
-	k := g.KMin
-	if g.KMax > g.KMin {
-		k = g.KMin + c.IntN(g.KMax-g.KMin+1)
+	zeros := 0
+	for _, w := range wins {
+		if w > 0.0 {
+			break
+		}
+		zeros++
 	}
-
-	shape := make([]GammaShape, 0, k)
-	for i := 0; i < k; i++ {
-		// --- Mu: centered around MuCenter (natural) ---
-		pick := g.BiasAlias.Pick(c)
-		center := g.MuCenter
-		if pick < len(g.Biases) {
-			start := g.Biases[pick].Range[0]
-			maxrange := g.Biases[pick].Range[1] - start
-			center = start + c.Float64()*maxrange
-		}
-		// mu = center + N(0,1)*MuStd
-		mu := center + c.NormFloat64()*g.MuStd
-
-		// optional: clamp mu into [minWin, maxWin] to avoid useless shape
-		mu = max(mu, float64(g.cs.MinWin))
-		mu = min(mu, float64(g.cs.MaxWin))
-		if mu <= 0 {
-			mu = 1e-6 // guard
-		}
-
-		// --- Std: uniform in [StdMin, StdMax] ---
-		std := g.StdMin + c.Float64()*(g.StdMax-g.StdMin)
-		if std <= 1e-9 {
-			std = 1e-9
-		}
-
-		// --- Amp: uniform in [AmpMin, AmpMax] ---
-		amp := g.AmpMin + c.Float64()*(g.AmpMax-g.AmpMin)
-		if amp <= 0 {
-			amp = 1e-9
-		}
-
-		shape = append(shape, GammaShape{Amp: amp, Mu: mu, Std: std})
-	}
-
-	weights := make([]float64, len(wins))
-	gma := distuv.Gamma{Src: c} // use core
-	var sumW float64
-	for i, x := range wins {
-		var w float64
-		for _, b := range shape {
-			alpha := (b.Mu / b.Std) * (b.Mu / b.Std) // alpha = (mu/std)^2
-			// guard alpha must be over 1.2
-			alpha = max(1.2, alpha)
-			beta := alpha / b.Mu // keep mean
-			gma.Alpha = alpha
-			gma.Beta = beta
-			w += b.Amp * gma.Prob(x) // PDF
-		}
-		weights[i] = w
-		sumW += w
-	}
-
-	// fallback: if all weights ~0, revert to uniform
-	if !(sumW > 0) || math.IsNaN(sumW) || math.IsInf(sumW, 0) {
-		u := 1.0 / float64(len(weights))
-		for i := range weights {
-			weights[i] = u
-		}
-		return &Shape{Weights: weights, Mean: meanOf(wins, weights), Median: medianOf(wins, weights)}
-	}
-
-	// normalize to probability distribution
-	inv := 1.0 / sumW
-	for i := range weights {
-		weights[i] *= inv
-	}
-
-	// Optional: add a small, human-made peak near the tail (spike)
 	if g.SpikeOn {
-		applySpike(g.SpikeRange, wins, weights, c)
+		index := make([]int, 0, 10)
+		smin := g.SpikeWinRange[0]
+		smax := g.SpikeWinRange[1]
+		for i := len(wins) - 1; i >= zeros; i-- {
+			w := wins[i]
+			if (w <= smax) && (w >= smin) {
+				index = append(index, i)
+			}
+		}
+		if len(index) == 0 {
+			g.SpikeOn = false
+		}
+		g.spikeidx = index
+	}
+	if zeros == 0 {
+		g.ZeroMin = 0.0
+		g.ZeroMax = 0.0
+	}
+	g.zeros = zeros
+	g.wins = wins
+	g.isSet = true
+	return true
+}
+
+func (g *GammaMixtureShapeGenerator) Gen(c *core.Core) (*Shape, error) {
+	if !g.isSet {
+		return nil, errs.Warnf("set wins required")
 	}
 
+	// 1. 0分率(選用):從範圍取得本次0分率
+	zeroRate := 0.0
+	zeroRatePerZeroWin := 0.0
+	weights := make([]float64, len(g.wins))
+	if g.ZeroMax > 0.0 && (g.zeros > 0) {
+		diffrange := g.ZeroMax - g.ZeroMin
+		zeroRate = g.ZeroMin + c.Float64()*diffrange
+		// 均攤
+		zeroRatePerZeroWin = zeroRate / float64(g.zeros)
+		for i := range weights[:g.zeros] {
+			weights[i] = zeroRatePerZeroWin
+		}
+	}
+
+	// 2. Spike(選用): add a small, human-made peak near the tail (spike)
+	spikeProb := 0.0
+	spikeIdx := 0
+	if g.SpikeOn && (len(g.spikeidx) > 0) {
+		diff := g.SpikeMassRange[1] - g.SpikeMassRange[0]
+		spikeProb = g.SpikeMassRange[0] + c.Float64()*diff
+		spikeIdx = c.Pick(g.spikeidx) // 從列表中隨機挑一個
+	}
+	remain := 1.0 - zeroRate - spikeProb
+	if remain > epsilon {
+		if g.zeros >= len(g.wins) {
+			return nil, errs.Warnf(
+				"class=%s method=%s invalid_support: remain=%.12g (>eps=%.12g) but wins have no non-zero bins (zeros=%d wins_len=%d, win_range=[%.6g,%.6g]). "+
+					"Meaning: config requires mixture mass, but there is nowhere to place it. "+
+					"Fix: reduce zero_range/spike_mass so remain<=eps, or provide non-zero wins (wins must include >0 values).",
+				g.cs.CName, "gamma", remain, epsilon,
+				g.zeros, len(g.wins),
+				g.wins[0], g.wins[len(g.wins)-1],
+			)
+		}
+		// 3. 從範圍取得本次要混合的GammaShape數量
+		k := g.KMin
+		if g.KMax > g.KMin {
+			k = g.KMin + c.IntN(g.KMax-g.KMin+1)
+		}
+
+		shape := make([]GammaShape, 0, k)
+		for i := 0; i < k; i++ {
+			// --- Mu: centered around MuCenter (natural) ---
+			pick := g.BiasAlias.Pick(c)
+			center := g.MuCenter
+			if pick < len(g.Biases) {
+				start := g.Biases[pick].Range[0]
+				maxrange := g.Biases[pick].Range[1] - start
+				center = start + c.Float64()*maxrange
+			}
+			// mu = center + N(0,1)*MuStd
+			mu := center + c.NormFloat64()*g.MuStd
+
+			// optional: clamp mu into [minWin, maxWin] to avoid useless shape
+			mu = max(mu, float64(g.cs.MinWin))
+			mu = min(mu, float64(g.cs.MaxWin))
+			if mu <= 0 {
+				mu = 1e-6 // guard
+			}
+
+			// --- Std: uniform in [StdMin, StdMax] ---
+			std := g.StdMin + c.Float64()*(g.StdMax-g.StdMin)
+			if std <= 1e-9 {
+				std = 1e-9
+			}
+
+			// --- Amp: uniform in [AmpMin, AmpMax] ---
+			amp := g.AmpMin + c.Float64()*(g.AmpMax-g.AmpMin)
+			if amp <= 0 {
+				amp = 1e-9
+			}
+
+			shape = append(shape, GammaShape{Amp: amp, Mu: mu, Std: std})
+		}
+
+		gma := distuv.Gamma{Src: c} // use core
+		var sumW float64
+		for i, x := range g.wins[g.zeros:] {
+			var w float64
+			for _, b := range shape {
+				alpha := (b.Mu / b.Std) * (b.Mu / b.Std) // alpha = (mu/std)^2
+				// guard alpha must be over 1.2
+				alpha = max(1.2, alpha)
+				beta := alpha / b.Mu // keep mean
+				gma.Alpha = alpha
+				gma.Beta = beta
+				w += b.Amp * gma.Prob(x) // PDF
+			}
+			weights[g.zeros+i] = w
+			sumW += w
+		}
+
+		// fallback: if all weights ~0, try again
+		if !(sumW > 0) || math.IsNaN(sumW) || math.IsInf(sumW, 0) {
+			g.failed++
+			if g.failed > 500 {
+				return nil, errs.Warnf(
+					"class=%s method=gamma gen_failed(retry_limit) failed=%d/%d wins_len=%d zeros=%d win_range=[%.6g,%.6g] first_nonzero=%.6g zero_range=[%.6g,%.6g] zero_rate=%.6g spike_on=%t spike_range=[%.6g,%.6g] spike_prob=%.6g k_range=[%d,%d] mu_center=%.6g mu_std=%.6g std_range=[%.6g,%.6g] amp_range=[%.6g,%.6g] biases=%d",
+					g.cs.CName, g.failed, 500,
+					len(g.wins), g.zeros,
+					g.wins[0], g.wins[len(g.wins)-1],
+					func() float64 {
+						if g.zeros < len(g.wins) {
+							return g.wins[g.zeros]
+						}
+						return g.wins[len(g.wins)-1]
+					}(),
+					g.ZeroMin, g.ZeroMax, zeroRate,
+					g.SpikeOn, g.SpikeMassRange[0], g.SpikeMassRange[1], spikeProb,
+					g.KMin, g.KMax,
+					g.MuCenter, g.MuStd,
+					g.StdMin, g.StdMax,
+					g.AmpMin, g.AmpMax,
+					len(g.Biases),
+				)
+			}
+			return g.Gen(c)
+		}
+
+		// normalize to probability distribution
+		inv := remain / sumW
+		for i := g.zeros; i < len(weights); i++ {
+			weights[i] *= inv
+		}
+	}
+
+	// 這時後spike 把 spikeProb 加上去
+	if g.SpikeOn && (spikeProb > 0.0) {
+		weights[spikeIdx] += spikeProb
+	}
+
+	g.failed = 0 // 失敗次數歸零
 	return &Shape{
 		Weights: weights,
-		Mean:    meanOf(wins, weights),
-		Median:  medianOf(wins, weights),
-	}
+		Mean:    meanOf(g.wins, weights),
+		Median:  medianOf(g.wins, weights),
+	}, nil
 }
 
 // -----------------------------------
@@ -440,121 +702,119 @@ func NewUniformShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) {
 	return &UniformShapeGenerator{}, nil
 }
 
-type UniformShapeGenerator struct{}
+type UniformShapeGenerator struct {
+	isSet bool
+	wins  []float64
+}
 
-func (u *UniformShapeGenerator) Gen(wins []float64, c *core.Core) *Shape {
+func (u *UniformShapeGenerator) Set(wins []float64) bool {
 	// NOTE: wins 必須事先由呼叫端排序（ascending）。為了性能，這裡不做任何 runtime assert。
+	if u.isSet {
+		return false
+	}
 	if len(wins) == 0 {
-		return nil
+		return false
+	}
+	u.wins = wins
+	u.isSet = true
+	return true
+}
+
+func (u *UniformShapeGenerator) Gen(c *core.Core) (*Shape, error) {
+	if !u.isSet {
+		return nil, errs.Warnf("set wins required")
 	}
 
-	weights := make([]float64, len(wins))
-	w := 1.0 / float64(len(wins))
-	for i := range wins {
+	weights := make([]float64, len(u.wins))
+	w := 1.0 / float64(len(u.wins))
+	for i := range u.wins {
 		weights[i] = w
 	}
 	return &Shape{
 		Weights: weights,
-		Mean:    meanOf(wins, weights),
-		Median:  medianOf(wins, weights),
-	}
+		Mean:    meanOf(u.wins, weights),
+		Median:  medianOf(u.wins, weights),
+	}, nil
 }
 
 // -------------
 
 func quantizeWeights(probs []float64) []int {
-	// Convert probs (sum≈1) into integer weights that quantize with base accuracy, sum may be < accuracy
-	// NOTE: assumes `accuracy` fits into int on 64-bit platforms.
+	// Convert probs into integer weights that quantize with base accuracy
+	// First normalize probs to sum=1, then quantize with dynamic accuracy to avoid overflow
 	if len(probs) == 0 {
 		return nil
 	}
-	base := int(accuracy)
+
+	// 1. Normalize weights to sum=1
+	sum := 0.0
+	for _, p := range probs {
+		if p > 0 {
+			sum += p
+		}
+	}
+
+	if sum <= 0 {
+		// fallback uniform
+		ws := make([]int, len(probs))
+		for i := range ws {
+			ws[i] = 1
+		}
+		return ws
+	}
+
+	// 2. Calculate dynamic accuracy to avoid overflow in BuildAliasTable
+	// BuildAliasTable checks: total * n <= math.MaxInt64
+	// where total = sum of quantized weights, n = len(probs)
+	// We want: accuracy * n <= math.MaxInt64
+	// So: accuracy <= math.MaxInt64 / n
+	n := len(probs)
+	maxSafeAccuracy := int64(math.MaxInt64) / int64(n)
+
+	// Use the smaller of the configured accuracy and the safe accuracy
+	base := int(accuracy) / n
+	if base < 1 {
+		base = 1
+	}
+	if int64(base) > maxSafeAccuracy {
+		base = int(maxSafeAccuracy)
+		// Ensure base is at least 1
+		if base < 1 {
+			base = 1
+		}
+	}
+
+	// 3. Quantize normalized weights
 	ws := make([]int, len(probs))
-	sum := 0
 	for i, p := range probs {
 		if p < 0 {
 			p = 0
 		}
-		w := int(math.Floor(p * float64(base)))
+		// Normalize first, then quantize
+		normalized := p / sum
+		w := int(math.Floor(normalized * float64(base)))
 		if w < 0 {
 			w = 0
 		}
 		ws[i] = w
-		sum += w
 	}
 
-	if sum == 0 {
+	// 4. Ensure at least one non-zero weight
+	hasNonZero := false
+	for _, w := range ws {
+		if w > 0 {
+			hasNonZero = true
+			break
+		}
+	}
+	if !hasNonZero {
 		// fallback uniform
 		for i := range ws {
 			ws[i] = 1
 		}
 	}
-	// no fix diff
+
 	return ws
-}
-
-func applySpike(spike [2]float64, wins, weights []float64, c *core.Core) {
-	// mass range sanity
-	m0, m1 := spike[0], spike[1]
-	if m0 < 0 {
-		m0 = 0
-	}
-	if m1 < 0 {
-		m1 = 0
-	}
-	if m1 < m0 {
-		m0, m1 = m1, m0
-	}
-	if m1 == 0 {
-		return
-	}
-
-	// pick mass
-	mass := m0
-	if m1 > m0 {
-		mass = m0 + c.Float64()*(m1-m0)
-	}
-	if mass <= 0 {
-		return
-	}
-	if mass >= 1 {
-		mass = 0.999999
-	}
-
-	// Auto upper-tail window (wins are sorted ascending by contract)
-	// We intentionally keep this logic config-free to avoid extra knobs.
-	// TailFrac = top 5% of points (at least 1 point).
-	const tailFrac = 0.05
-	if len(wins) == 0 {
-		return
-	}
-
-	l := int(float64(len(wins)) * (1.0 - tailFrac))
-	if l < 0 {
-		l = 0
-	}
-	if l >= len(wins) {
-		l = len(wins) - 1
-	}
-	r := len(wins) - 1
-	if l > r {
-		return
-	}
-
-	// First shrink the base distribution by (1-mass)
-	baseScale := 1.0 - mass
-	for i := range weights {
-		weights[i] *= baseScale
-	}
-
-	// choose a random point in [l,r]
-	idx := l
-	if r > l {
-		idx = l + c.IntN(r-l+1)
-	}
-	weights[idx] += mass
-
-	// Note: weights remain normalized (sum remains 1) by construction.
 }
 
 func meanOf(wins, probs []float64) float64 {
