@@ -19,6 +19,7 @@ import (
 	"github.com/zintix-labs/problab/catalog"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
+	"github.com/zintix-labs/problab/demo/opt"
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/server/logger"
@@ -51,5 +52,6 @@ func NewProbLab() (*problab.Problab, error) {
 		core.Default(),
 		problab.Configs(demo_configs.FS),
 		problab.Logics(demo_logic.Logics),
+		problab.WithOptimalFS(opt.OptCfg),
 	)
 }

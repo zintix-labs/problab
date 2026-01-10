@@ -17,6 +17,7 @@ package problab
 import (
 	"crypto/rand"
 	"io"
+	"io/fs"
 	"math"
 	"math/big"
 	"sync"
@@ -44,20 +45,21 @@ type Simulator struct {
 	cf        core.PRNGFactory         // 亂數生成器
 	initSeed  int64                    // 初始下的種子
 	seedmaker *SeedMaker               // 種子生成器
+	optimalFS fs.FS                    // 優化文件系統（可選）
 	mBuf      []*Machine               // 併發執行機台實例
 	rBuf      []*recorder.SpinRecorder // 併發遊戲紀錄員
 	sBuf      []*stats.StatReport      // 併發統計結果報表(僅Players需要)
 }
 
-func newSimulator(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory) (*Simulator, error) {
+func newSimulator(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, optimalFS fs.FS) (*Simulator, error) {
 	seed, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		return nil, err
 	}
-	return newSimulatorWithSeed(gs, reg, cf, seed.Int64())
+	return newSimulatorWithSeed(gs, reg, cf, seed.Int64(), optimalFS)
 }
 
-func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64) (*Simulator, error) {
+func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, optimalFS fs.FS) (*Simulator, error) {
 	s := &Simulator{
 		GameName:  gs.GameName,
 		GameId:    gs.GameID,
@@ -67,11 +69,12 @@ func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core
 		cf:        cf,
 		initSeed:  seed,
 		seedmaker: NewSeedMaker(seed),
+		optimalFS: optimalFS,
 		mBuf:      make([]*Machine, 1, capPrepare),
 		rBuf:      make([]*recorder.SpinRecorder, 0, capPrepare),
 		sBuf:      make([]*stats.StatReport, 0, capPrepare),
 	}
-	m, err := newMachineWithSeed(gs, reg, cf, s.initSeed, true)
+	m, err := newMachineWithSeed(gs, reg, cf, s.initSeed, true, optimalFS)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +132,7 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 		return nil, 0, errs.NewWarn("round must > 0")
 	}
 	for len(s.mBuf) < mp {
-		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.Next(), true)
+		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.Next(), true, s.optimalFS)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -184,7 +187,7 @@ func (s *Simulator) SimPlayers(mp int, players int, initBets int, betMode int, r
 
 	// 	準備並行機台
 	for len(s.mBuf) < mp {
-		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.Next(), true)
+		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.Next(), true, s.optimalFS)
 		if err != nil {
 			return nil, nil, 0, err
 		}

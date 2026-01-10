@@ -26,6 +26,7 @@ import (
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
+	"github.com/zintix-labs/problab/demo/opt"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/spec"
 	"golang.org/x/text/language"
@@ -89,6 +90,7 @@ func executeSimulator() { // 取得spin數
 		core.Default(),
 		problab.Configs(demo_configs.FS),
 		problab.Logics(demo_logic.Logics),
+		problab.WithOptimalFS(opt.OptCfg),
 	)
 	if err != nil {
 		log.Fatal(err)

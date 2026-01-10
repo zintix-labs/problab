@@ -30,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := tuner.Run(0, 0, lab, 4127483647); err != nil {
+	if err := tuner.Run(1, 0, lab, 4127483647); err != nil {
 		log.Fatal(err)
 	}
 }

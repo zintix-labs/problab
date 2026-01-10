@@ -20,7 +20,17 @@ type IsTag func(sr *buf.SpinResult) bool
 
 type tagFn func(sr *buf.SpinResult) (string, bool)
 
-var tagers = map[string]tagFn{"fg": IsEntryFree}
+var tagers = map[string]tagFn{
+	"bg": IsOnlyBg,
+	"fg": IsEntryFree,
+}
+
+func IsOnlyBg(sr *buf.SpinResult) (string, bool) {
+	if sr.GameModeCount == 1 {
+		return "bg", true
+	}
+	return "", false
+}
 
 func IsEntryFree(sr *buf.SpinResult) (string, bool) {
 	if sr.GameModeCount > 1 {

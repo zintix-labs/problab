@@ -394,8 +394,6 @@ func mustReadFile(path string) []byte {
 	return b
 }
 
-// func Load(fs)
-
 type Class struct {
 	name          string
 	cfg           *ClassSetting
@@ -472,8 +470,8 @@ type ClassSetting struct {
 
 	// 篩選規則
 	MatchTags []string `yaml:"match_tags"` // 1. 特徵批配 ex: Trigger
-	MinWin    float64  `yaml:"min_win"`    // 2. 最低贏分
-	MaxWin    float64  `yaml:"max_win"`    // 3. 最高贏分
+	MinWin    float64  `yaml:"min_win"`    // 2. 最低贏倍
+	MaxWin    float64  `yaml:"max_win"`    // 3. 最高贏倍
 	Collect   int      `yaml:"collect"`    // 4. 目標收集數量
 
 	// 底數為100萬的機率
