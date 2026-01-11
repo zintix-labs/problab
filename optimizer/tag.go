@@ -14,7 +14,9 @@
 
 package optimizer
 
-import "github.com/zintix-labs/problab/sdk/buf"
+import (
+	"github.com/zintix-labs/problab/sdk/buf"
+)
 
 type IsTag func(sr *buf.SpinResult) bool
 
@@ -33,7 +35,7 @@ func IsOnlyBg(sr *buf.SpinResult) (string, bool) {
 }
 
 func IsEntryFree(sr *buf.SpinResult) (string, bool) {
-	if sr.GameModeCount > 1 {
+	if sr.GameModeCount > 1 && (sr.GameModeList[0].TotalWin/sr.Bet) < 4 && ((sr.TotalWin-sr.GameModeList[0].TotalWin)/sr.Bet) > 6 {
 		return "fg", true
 	}
 	return "", false

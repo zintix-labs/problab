@@ -169,11 +169,11 @@ func NewGaussianMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) 
 			if b.Range[0] > b.Range[1] {
 				return nil, errs.Warnf("class %s shape cfg err: biases range[1] must be grater than range[0]", cs.CName)
 			}
-			if b.Range[0] < float64(cs.MinWin) {
-				return nil, errs.Warnf("class %s shape cfg err: biases range[0] must be at least min win", cs.CName)
+			if b.Range[0] < cs.MinWin {
+				return nil, errs.Warnf("class %s shape cfg err: biases range[0] %f must be at least min win %f", cs.CName, b.Range[0], cs.MinWin)
 			}
-			if b.Range[1] > float64(cs.MaxWin) {
-				return nil, errs.Warnf("class %s shape cfg err: biases range[1] must be less than max win", cs.CName)
+			if b.Range[1] > cs.MaxWin {
+				return nil, errs.Warnf("class %s shape cfg err: biases range[1] %f must be less than max win %f", cs.CName, b.Range[1], cs.MaxWin)
 			}
 			mainWeight -= b.Prob
 			if b.Prob > 0 {
@@ -492,11 +492,11 @@ func NewGammaMixtureShapeGenerator(cs *ClassSetting) (ShapeGenerator, error) {
 			if b.Range[0] > b.Range[1] {
 				return nil, errs.Warnf("class %s shape cfg err: biases range[1] must be grater than range[0]", cs.CName)
 			}
-			if b.Range[0] < float64(cs.MinWin) {
-				return nil, errs.Warnf("class %s shape cfg err: biases range[0] must be at least min win", cs.CName)
+			if b.Range[0] < cs.MinWin {
+				return nil, errs.Warnf("class %s shape cfg err: biases range[0] %f must be at least min win %f", cs.CName, b.Range[0], cs.MinWin)
 			}
-			if b.Range[1] > float64(cs.MaxWin) {
-				return nil, errs.Warnf("class %s shape cfg err: biases range[1] must be less than max win", cs.CName)
+			if b.Range[1] > cs.MaxWin {
+				return nil, errs.Warnf("class %s shape cfg err: biases range[1] %f must be less than max win %f", cs.CName, b.Range[1], cs.MaxWin)
 			}
 			mainWeight -= b.Prob
 			if b.Prob > 0 {

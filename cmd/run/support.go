@@ -23,11 +23,7 @@ import (
 	"math/big"
 	"strconv"
 
-	"github.com/zintix-labs/problab"
-	"github.com/zintix-labs/problab/demo/demo_configs"
-	"github.com/zintix-labs/problab/demo/demo_logic"
-	"github.com/zintix-labs/problab/demo/opt"
-	"github.com/zintix-labs/problab/sdk/core"
+	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/spec"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -86,12 +82,7 @@ func bindVar() {
 func executeSimulator() { // 取得spin數
 	cfg.valid() // 基本檢查
 
-	lab, err := problab.NewAuto(
-		core.Default(),
-		problab.Configs(demo_configs.FS),
-		problab.Logics(demo_logic.Logics),
-		problab.WithOptimalFS(opt.OptCfg),
-	)
+	lab, err := demo.NewProbLab()
 	if err != nil {
 		log.Fatal(err)
 	}

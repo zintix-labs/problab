@@ -124,6 +124,10 @@ bin:
 dev: 
 	@go run ./cmd/dev
 
+## Optimizer
+opt:
+	@go run ./cmd/opt -game $(GAME_E) -mode $(BETMODE_E)
+
 ## clean go cache & build
 clean: 
 	@printf "$(GREEN)Cleaning cache and build artifacts...$(RESET)\n"

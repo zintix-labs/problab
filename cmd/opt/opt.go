@@ -15,13 +15,23 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log"
+	"strconv"
 
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/optimizer"
+	"github.com/zintix-labs/problab/spec"
 )
 
+var optgid spec.GID
+var mode int
+
 func main() {
+	flag.Var(gidFlag{&optgid}, "game", "target game id")
+	flag.IntVar(&mode, "mode", 0, "bet mode index")
+	flag.Parse()
 	lab, err := demo.NewProbLab()
 	if err != nil {
 		log.Fatal(err)
@@ -30,7 +40,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := tuner.Run(1, 0, lab, 4127483647); err != nil {
+	if err := tuner.Run(optgid, mode, lab, 4127483647); err != nil {
 		log.Fatal(err)
 	}
+}
+
+type gidFlag struct{ p *spec.GID }
+
+func (f gidFlag) String() string { return fmt.Sprint(uint(*f.p)) }
+func (f gidFlag) Set(s string) error {
+	u, err := strconv.ParseUint(s, 10, 0)
+	if err != nil {
+		return err
+	}
+	*f.p = spec.GID(uint(u))
+	return nil
 }

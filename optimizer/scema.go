@@ -22,8 +22,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"sync/atomic"
+	"time"
 
-	"github.com/cheggaaa/pb/v3"
 	"github.com/klauspost/compress/zstd"
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/errs"
@@ -36,7 +38,7 @@ import (
 
 const baseWeight int = 1_000_000
 const accuracy uint = uint(1) << 52
-const maxTry int = 10_000
+const maxTry int = 100_000
 const mercy int = 100
 const maxMine int = 1_000_000_000
 const epsilon float64 = 1e-12
@@ -60,8 +62,8 @@ type Tuner struct {
 	tager   *Tagers
 	tagBuf  []string
 	seeds   *problab.SeedMaker
-	rtp     float64
 	std     float64
+	eval    func(round int, wins []float64, weights []float64, c *core.Core) (score float64, isbest bool)
 }
 
 func New(cfg fs.FS, name string) (*Tuner, error) {
@@ -73,18 +75,15 @@ func New(cfg fs.FS, name string) (*Tuner, error) {
 	if err != nil {
 		return nil, err
 	}
-	if opt.TargetRTP < 0 {
-		return nil, errs.Warnf("target_rtp must be non-negative float number")
-	}
 	if opt.TargetStd <= 0 {
 		return nil, errs.Warnf("std must be postive float number")
 	}
 	tuner := &Tuner{
 		cfg:     opt,
 		Classes: make([]*Class, len(opt.Classes)),
-		rtp:     opt.TargetRTP,
 		std:     opt.TargetStd,
 	}
+	tuner.eval = tuner.stdfitness
 	// p 是「剩餘機率池」（以 baseWeight=1_000_000 為分母的整數域）。
 	// 目標：所有 class 的 prob 最終加總必須剛好等於 baseWeight，確保後續 class 抽樣沒有「落空區間」。
 	// 規則：
@@ -144,9 +143,20 @@ func New(cfg fs.FS, name string) (*Tuner, error) {
 	if !foundzero && p != 0 {
 		return nil, errs.Warnf("sum of hit_prob must be %d", baseWeight)
 	}
+	rtp := 0.0
+	for _, c := range tuner.Classes {
+		r := c.cfg.ExpWin * float64(c.prob) / float64(baseWeight)
+		fmt.Printf("%s: exp: %5f prob: %6f rtp: %5f\n", c.name, c.cfg.ExpWin, float64(c.prob)/float64(baseWeight), r)
+		rtp += r
+	}
+	fmt.Printf("final rtp: %5f\n", rtp)
 	tuner.tagBuf = make([]string, 0, len(tag))
 	tuner.tager = GetTager(tag...)
 	return tuner, nil
+}
+
+func (t *Tuner) RegisterEval(fn func(round int, wins []float64, weights []float64, c *core.Core) (score float64, isbest bool)) {
+	t.eval = fn
 }
 
 func (t *Tuner) collect(gid spec.GID, betmode int, lab *problab.Problab, seed int64) error {
@@ -174,45 +184,127 @@ func (t *Tuner) collect(gid spec.GID, betmode int, lab *problab.Problab, seed in
 			break
 		}
 	}
-	fullCount := 0
+
+	// Progress printer (dev-friendly): prints "Class: got/target" every second on the same line.
+	// This is intentionally self-contained inside collect(), so callers don't need extra goroutines/wg.
+	var remaining atomic.Int64
 	for _, c := range t.Classes {
-		fullCount += c.collect
+		remaining.Add(int64(c.collect))
 	}
 
-	bar := pb.StartNew(maxMine)
-	bar.Set(pb.CleanOnFinish, true)
+	// 預設每秒印一次；收滿時再印一次（Stop 會印 final）
+	pp := startProgressPrinter(t.Classes, &remaining)
+	defer pp.Stop()
+
 	for range maxMine {
 		snap, _ := m.SnapshotCore()
 		sr := m.SpinInternal(betmode)
 		// TagInto 會回傳新的 slice header（長度可能改變），必須接回來才能確保 tagBuf 內容正確。
 		t.tagBuf = t.tager.TagInto(sr, t.tagBuf)
+		win := float64(sr.TotalWin) / float64(sr.Bet)
 		for _, c := range t.Classes {
-			if (len(c.samps) < c.collect) && (sr.TotalWin >= c.minWin) && (sr.TotalWin <= c.maxWin) && sub(c.tags, t.tagBuf) {
+			if (len(c.samps) < int(c.collect)) && (win >= c.minWin) && (win <= c.maxWin) && sub(c.tags, t.tagBuf) {
+				// NOTE: if collect() becomes multi-machine concurrent in the future,
+				// appending to c.samps MUST be protected (mutex or per-class channel),
+				// because slices are not goroutine-safe.
 				c.samps = append(c.samps, Sample{
 					CName:    c.name,
 					Win:      float64(sr.TotalWin) / bet,
 					CoreSnap: snap,
 				})
-				if len(c.samps) >= c.collect {
+				c.collectedOne()
+				remaining.Add(-1)
+
+				if len(c.samps) >= int(c.collect) {
 					c.collected()
 				}
-				fullCount--
 				// 下一輪 Spin
 				break
 			}
 		}
-		if fullCount <= 0 {
+		if remaining.Load() <= 0 {
 			break
 		}
-		bar.Increment()
 	}
-	bar.Finish()
+
 	for _, c := range t.Classes {
-		if len(c.samps) < c.collect {
+		if len(c.samps) < int(c.collect) {
 			return errs.Warnf("class %s is not full: want %d got %d", c.name, c.collect, len(c.samps))
 		}
 	}
 	return nil
+}
+
+type progressPrinter struct {
+	stop   chan struct{}
+	done   chan struct{}
+	ticker *time.Ticker
+
+	classes []*Class
+	// remaining = Σ collect - Σ got （用 atomic 讓未來併發也能直接用）
+	remaining *atomic.Int64
+
+	lastLen int
+}
+
+func startProgressPrinter(classes []*Class, remaining *atomic.Int64) *progressPrinter {
+	p := &progressPrinter{
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
+		ticker:    time.NewTicker(1 * time.Second),
+		classes:   classes,
+		remaining: remaining,
+	}
+
+	printLine := func(final bool) {
+		var b strings.Builder
+		for i, c := range p.classes {
+			if i > 0 {
+				b.WriteString("  ")
+			}
+			got := c.got.Load()
+			target := c.collect
+			fmt.Fprintf(&b, "%s: %d/%d", c.name, got, target)
+		}
+		fmt.Fprintf(&b, "  | remaining: %d", p.remaining.Load())
+
+		s := b.String()
+		pad := ""
+		if p.lastLen > len(s) {
+			pad = strings.Repeat(" ", p.lastLen-len(s))
+		}
+		fmt.Printf("\r%s%s", s, pad)
+		p.lastLen = len(s)
+
+		if final {
+			fmt.Print("\n")
+		}
+	}
+
+	// 先印一次
+	printLine(false)
+
+	go func() {
+		defer close(p.done)
+		defer p.ticker.Stop()
+
+		for {
+			select {
+			case <-p.stop:
+				printLine(true) // 收尾再印一次 + 換行
+				return
+			case <-p.ticker.C:
+				printLine(false)
+			}
+		}
+	}()
+
+	return p
+}
+
+func (p *progressPrinter) Stop() {
+	close(p.stop)
+	<-p.done
 }
 
 func (t *Tuner) Run(gid spec.GID, betmode int, lab *problab.Problab, seed int64) error {
@@ -242,12 +334,12 @@ func (t *Tuner) Run(gid spec.GID, betmode int, lab *problab.Problab, seed int64)
 		count := 0
 		for {
 			//  2) fitExp
-			shape := class.fitOneOnOne(base, core)
+			shape := class.fitRTP(base, core)
 			if shape == nil {
 				fmt.Printf("\r.")
 			}
 			//  3) quality eval
-			if (shape != nil) && class.qualityEval(shape) {
+			if (shape != nil) && class.filter(class, shape) {
 				count = 0
 				class.shapes = append(class.shapes, shape)
 				//  循環直到收滿
@@ -266,19 +358,21 @@ func (t *Tuner) Run(gid spec.GID, betmode int, lab *problab.Problab, seed int64)
 		}
 	}
 	// 3. 組合評分
-	fmt.Printf("step3: final eval")
-	ga, snap := t.Eval(core)
+	fmt.Println("step3: final eval")
+	ga, snap := t.FinalScreening(core)
 	if ga == nil {
 		return errs.Warnf("can not find matched")
 	}
 	// 4. 結果存儲
+	fmt.Println("step4: save optimal file")
 	if err := t.Save(ga, snap); err != nil {
 		return err
 	}
+	fmt.Println("finish optimal")
 	return nil
 }
 
-func (t *Tuner) Eval(c *core.Core) (*Gacha, []byte) {
+func (t *Tuner) FinalScreening(c *core.Core) (*Gacha, []byte) {
 	classProbs := make([]int, len(t.Classes))
 	startIdx := make([]int, len(t.Classes))
 	count := 0
@@ -294,10 +388,9 @@ func (t *Tuner) Eval(c *core.Core) (*Gacha, []byte) {
 		wins = append(wins, class.wins...)
 		seeds = append(seeds, class.seeds...)
 	}
-	try := 0
-	rtpdiff := 0.005
-	stdscale := 0.1
-	for {
+	best := 0.0
+	bestWeight := []float64(nil)
+	for i := 1; i <= maxTry; i++ {
 		weights := make([]float64, 0, count)
 		for _, class := range t.Classes {
 			id := c.IntN(len(class.shapes))
@@ -306,26 +399,31 @@ func (t *Tuner) Eval(c *core.Core) (*Gacha, []byte) {
 				weights = append(weights, w*float64(class.prob)/float64(baseWeight))
 			}
 		}
-		mean, std := stat.PopMeanStdDev(wins, weights)
-		if mean > (t.rtp-rtpdiff) && mean < (t.rtp+rtpdiff) && (std > (1-stdscale)*t.std) && (std < (1+stdscale)*t.std) {
-			// normalize
-			normalAT := sampler.BuildAliasTable(quantizeWeights(weights))
-			return &Gacha{
-				Picker:  normalAT,
-				SeedLen: seedLen,
-			}, seeds
-		}
-		try++
-		if try%100 == 0 {
-			stdscale += 0.1
-			rtpdiff += 0.05
-			fmt.Printf("\rstep 3: final eval try %d -> mean:%f %f %f, std:%f %f %f", try, (t.rtp - rtpdiff), mean, (t.rtp + rtpdiff), (1-stdscale)*t.std, std, (1+stdscale)*t.std)
-		}
-		if try >= 10*maxTry {
+
+		score, isbest := t.eval(i, wins, weights, c)
+		if isbest {
 			break
 		}
+		if score > best {
+			best = score
+			bestWeight = weights
+		}
 	}
-	return nil, nil
+	// normalize
+	normalAT := sampler.BuildAliasTable(quantizeWeights(bestWeight))
+	return &Gacha{
+		Picker:  normalAT,
+		SeedLen: seedLen,
+	}, seeds
+}
+
+func (t *Tuner) stdfitness(round int, wins []float64, weights []float64, c *core.Core) (float64, bool) {
+	stdscale := 0.1 * float64(1+round/100)
+	_, std := stat.PopMeanStdDev(wins, weights)
+	if (std > (1-stdscale)*t.std) && (std < (1+stdscale)*t.std) {
+		return 100, true
+	}
+	return 0, false
 }
 
 func (t *Tuner) Save(gc *Gacha, snap []byte) error {
@@ -406,15 +504,21 @@ type Class struct {
 	seeds         []byte
 	tags          []string
 	shapes        []*Shape // 最終結果
-	minWin        int
-	maxWin        int
-	collect       int
+	minWin        float64
+	maxWin        float64
+	collect       uint64
+	got           atomic.Uint64
 	shapesCollect int
 	isOK          bool
+	filter        func(*Class, *Shape) bool
+}
+
+func (c *Class) collectedOne() {
+	c.got.Add(1)
 }
 
 func (c *Class) collected() {
-	if len(c.samps) >= c.collect {
+	if len(c.samps) >= int(c.collect) {
 		sort.Slice(c.samps, func(i, j int) bool {
 			return c.samps[i].Win < c.samps[j].Win
 		})
@@ -446,19 +550,74 @@ func newClass(cs *ClassSetting) (*Class, error) {
 		gener:         g,
 		skew:          cs.QualityEval.MeanMedianRatio[:],
 		tags:          cs.MatchTags,
-		minWin:        int(cs.MinWin),
-		maxWin:        int(cs.MaxWin),
+		minWin:        cs.MinWin,
+		maxWin:        cs.MaxWin,
 		collect:       cs.Collect,
 		isOK:          false,
 		shapesCollect: cs.ShapesCollect,
+		filter:        medianFilter,
 	}
 	return c, nil
+}
+
+func (c *Class) fitRTP(bs *Basis, core *core.Core) *Shape {
+	for range maxTry {
+		pos := bs.Pos[core.IntN(len(bs.Pos))]
+		neg := bs.Neg[core.IntN(len(bs.Neg))]
+		diff := pos.Mean - neg.Mean
+		if diff == 0 {
+			return pos
+		}
+		if diff < 0 {
+			pos, neg = neg, pos
+			diff = -diff
+		}
+		p := (bs.Exp - neg.Mean) / (pos.Mean - neg.Mean)
+		if p < 0 || p > 1 {
+			continue
+		}
+		q := 1.0 - p
+		weights := make([]float64, len(pos.Weights))
+		for i := range pos.Weights {
+			weights[i] = p*pos.Weights[i] + q*neg.Weights[i]
+		}
+		return &Shape{
+			Weights: weights,
+			Mean:    meanOf(c.wins, weights),
+			Median:  medianOf(c.wins, weights),
+		}
+	}
+	return nil
+}
+
+func medianFilter(c *Class, shape *Shape) bool {
+	median := shape.Median
+	if shape.Median <= 0 {
+		if shape.Mean <= 0 {
+			return (1 <= c.skew[1]) && (1 >= c.skew[0])
+		}
+		median = 1e-6
+	}
+	ratio := shape.Mean / median
+	if ratio > c.skew[0] && ratio < c.skew[1] {
+		c.fail = 0
+		return true
+	}
+	c.fail++
+	if c.fail >= mercy {
+		c.skew[0] -= 0.2
+		c.skew[1] += 0.2
+	}
+	return false
+}
+
+func (c *Class) RegisterFilter(fn func(*Class, *Shape) bool) {
+	c.filter = fn
 }
 
 // ----------------------------
 
 type OptimizerSetting struct {
-	TargetRTP float64         `yaml:"trget_rtp"`
 	TargetStd float64         `yaml:"trget_std"`
 	Classes   []*ClassSetting `yaml:"class_settings"`
 }
@@ -472,7 +631,7 @@ type ClassSetting struct {
 	MatchTags []string `yaml:"match_tags"` // 1. 特徵批配 ex: Trigger
 	MinWin    float64  `yaml:"min_win"`    // 2. 最低贏倍
 	MaxWin    float64  `yaml:"max_win"`    // 3. 最高贏倍
-	Collect   int      `yaml:"collect"`    // 4. 目標收集數量
+	Collect   uint64   `yaml:"collect"`    // 4. 目標收集數量
 
 	// 底數為100萬的機率
 	// 只有允許一個0（代表剩餘機率都給他）

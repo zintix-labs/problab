@@ -19,7 +19,6 @@ import (
 	"github.com/zintix-labs/problab/catalog"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
-	"github.com/zintix-labs/problab/demo/opt"
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/server/logger"
@@ -31,11 +30,7 @@ func New() (*catalog.Catalog, error) {
 }
 
 func NewServerConfig() (*svrcfg.SvrCfg, error) {
-	lab, err := problab.NewAuto(
-		core.Default(),
-		problab.Configs(demo_configs.FS),
-		problab.Logics(demo_logic.Logics),
-	)
+	lab, err := NewProbLab()
 	if err != nil {
 		return nil, errs.NewFatal("new problab failed:" + err.Error())
 	}
@@ -52,6 +47,6 @@ func NewProbLab() (*problab.Problab, error) {
 		core.Default(),
 		problab.Configs(demo_configs.FS),
 		problab.Logics(demo_logic.Logics),
-		problab.WithOptimalFS(opt.OptCfg),
+		// problab.WithOptimalFS(opt.OptCfg),
 	)
 }
