@@ -118,8 +118,17 @@ sps : 19,010,181 spins/sec
 
 ```
 
-> These numbers are achieved with real game logic  
-> (line wins, free games, cascades, gravity, multipliers, etc.)
+### Built-in Parameter Tuning (Optimizer)
+
+Problab also includes an early-stage **optimizer toolchain** for math workflows:
+
+- Collects discrete win samples from the same execution path
+- Generates candidate shapes with configurable generators and filters
+- Outputs reusable **optimal artifacts** for runtime sampling / deterministic replay
+
+The goal is to close the loop of **simulate → verify → tune → reproduce** on a single engine.
+
+> Note: this module is still evolving and APIs/configs may change before v1.0.0.
 
 ---
 
