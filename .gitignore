@@ -6,6 +6,7 @@
 # project ignore
 # ------------------------------
 
+
 # cache
 .gocache
 
@@ -60,6 +61,8 @@ build/profiling/*
 dist/
 out/
 bin/
+
+*.bin
 
 # ------------------------------
 # Logs / temp / runtime dumps
@@ -165,3 +168,10 @@ scripts/bin/*
 *.gz
 *.rar
 *.zst
+
+# ------------------------------
+# project 
+# ------------------------------
+
+!demo/opt/gacha_0.json.zst
+!demo/opt/seed_bank_0.bin

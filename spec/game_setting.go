@@ -24,9 +24,10 @@ import (
 type GameSetting struct {
 	GameName         string            `yaml:"game_name"           json:"game_name"`
 	GameID           GID               `yaml:"game_id"             json:"game_id"`
-	LogicKey         LogicKey          `yaml:"logic_key"             json:"logic_key"`
+	LogicKey         LogicKey          `yaml:"logic_key"           json:"logic_key"`
 	BetUnits         []int             `yaml:"bet_units"           json:"bet_units"`
 	MaxWinLimit      int               `yaml:"max_win_limit"       json:"max_win_limit"`
+	OptimalSetting   OptimalSetting    `yaml:"optimal_setting"     json:"optimal_setting"`
 	GameModeSettings []GameModeSetting `yaml:"game_mode_settings"  json:"game_mode_settings"`
 	Fixed            map[string]any    `yaml:"fixed"               json:"fixed"`
 }
@@ -56,6 +57,17 @@ func (gs *GameSetting) valid() error {
 		}
 		if gs.MaxWinLimit < b {
 			return errs.NewFatal(fmt.Sprintf("game_name: %s err:empty game mode settings", gs.GameName))
+		}
+	}
+	if err := gs.OptimalSetting.valid(); err != nil {
+		return err
+	}
+	if gs.OptimalSetting.UseOptimal {
+		if len(gs.OptimalSetting.Gachas) > len(gs.BetUnits) {
+			return errs.NewFatal("optimal_setting: gachas must be less than or equal to bet_units")
+		}
+		if len(gs.OptimalSetting.SeedBank) > len(gs.BetUnits) {
+			return errs.NewFatal("optimal_setting: seed_bank must be less than or equal to bet_units")
 		}
 	}
 

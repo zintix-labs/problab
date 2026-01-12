@@ -72,10 +72,10 @@ import (
 //   - 採用全整數運算 (Integer Scaling)，避免浮點數精度誤差 (0.999... != 1.0)。
 //   - 內建溢位檢查 (Safe Multiply)，確保在大數權重下安全運作。
 type AliasTable struct {
-	Prob    []int
-	Aliases []int
-	Size    int
-	Total   int
+	Prob    []int `json:"prob"`
+	Aliases []int `json:"aliases"`
+	Size    int   `json:"size"`
+	Total   int   `json:"total"`
 }
 
 // BuildAliasTable 根據輸入的權重(weights)建立 AliasTable。

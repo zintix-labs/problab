@@ -100,10 +100,22 @@ func Logics(regs ...*slot.LogicRegistry) []*slot.LogicRegistry {
 //	//	m, _ := lab.NewMachine(1001, false)
 //	//	// m.Spin(...) -> 取得結果（通常再轉成 DTO 回傳）
 type Problab struct {
-	cat *catalog.Catalog
-	reg *slot.LogicRegistry
-	cf  core.PRNGFactory
-	sum []catalog.Summary
+	cat       *catalog.Catalog
+	reg       *slot.LogicRegistry
+	cf        core.PRNGFactory
+	sum       []catalog.Summary
+	optimalFS fs.FS
+}
+
+// ProblabOption 是 Problab 的選項函數類型。
+type ProblabOption func(*Problab)
+
+// WithOptimalFS 設置優化文件系統（用於加載 Gacha 和 SeedBank）。
+// 如果 GameSetting 中 UseOptimal = true，會從此文件系統加載對應的優化文件。
+func WithOptimalFS(optimalFS fs.FS) ProblabOption {
+	return func(p *Problab) {
+		p.optimalFS = optimalFS
+	}
 }
 
 // New 建立一個 Problab instance。
@@ -118,8 +130,8 @@ type Problab struct {
 //   - cfgs 至少一個：沒有設定檔來源，Catalog 無法解析 GameSetting。
 //   - logics 至少一個：沒有邏輯 builders，就算解析出設定也無法建出可執行的遊戲邏輯。
 //
-// 回傳的 Problab 會持有：cat（目錄）、reg（合併後 registry）、cf（RNG 工廠）。
-func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry) (*Problab, error) {
+// 回傳的 Problab 會持有：cat（目錄）、reg（合併後 registry）、cf（RNG 工廠）、optimalFS（可選的優化文件系統）。
+func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts ...ProblabOption) (*Problab, error) {
 	if cf == nil {
 		return nil, errs.NewFatal("core factory required")
 	}
@@ -138,18 +150,25 @@ func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry) (*Prob
 		return nil, err
 	}
 	lab := &Problab{
-		cat: cata,
-		reg: reg,
-		cf:  cf,
+		cat:       cata,
+		reg:       reg,
+		cf:        cf,
+		optimalFS: nil,
 	}
+
+	// 應用選項
+	for _, opt := range opts {
+		opt(lab)
+	}
+
 	return lab, nil
 }
 
 // NewAuto 建立一個直接進入執行階段的 Problab instance。
 //
-// 回傳的 Problab 會持有：cat（目錄）、reg（合併後 registry）、cf（RNG 工廠）。
-func NewAuto(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry) (*Problab, error) {
-	lab, err := New(cf, cfgs, logics)
+// 回傳的 Problab 會持有：cat（目錄）、reg（合併後 registry）、cf（RNG 工廠）、optimalFS（可選的優化文件系統）。
+func NewAuto(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts ...ProblabOption) (*Problab, error) {
+	lab, err := New(cf, cfgs, logics, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +368,7 @@ func (p *Problab) NewMachine(id spec.GID, isSim bool) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMachine(gs, p.reg, p.cf, isSim)
+	return newMachine(gs, p.reg, p.cf, isSim, p.optimalFS)
 }
 
 // NewMachineWithSeed 與 NewMachine 相同，但由呼叫端指定初始 seed。
@@ -366,7 +385,7 @@ func (p *Problab) NewMachineWithSeed(id spec.GID, seed int64, isSim bool) (*Mach
 	if err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(gs, p.reg, p.cf, seed, isSim)
+	return newMachineWithSeed(gs, p.reg, p.cf, seed, isSim, p.optimalFS)
 }
 
 func (p *Problab) NewMachineByJSON(raw []byte, seed int64) (*Machine, error) {
@@ -380,7 +399,7 @@ func (p *Problab) NewMachineByJSON(raw []byte, seed int64) (*Machine, error) {
 	if err := p.validCfg(cfg); err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true)
+	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, p.optimalFS)
 }
 
 func (p *Problab) NewMachineByYAML(raw []byte, seed int64) (*Machine, error) {
@@ -394,7 +413,7 @@ func (p *Problab) NewMachineByYAML(raw []byte, seed int64) (*Machine, error) {
 	if err := p.validCfg(cfg); err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true)
+	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, p.optimalFS)
 }
 
 func (p *Problab) validCfg(cfg *spec.GameSetting) error {
@@ -423,7 +442,7 @@ func (p *Problab) NewSimulator(id spec.GID) (*Simulator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newSimulator(gs, p.reg, p.cf)
+	return newSimulator(gs, p.reg, p.cf, p.optimalFS)
 }
 
 func (p *Problab) NewSimulatorWithSeed(id spec.GID, seed int64) (*Simulator, error) {
@@ -434,7 +453,7 @@ func (p *Problab) NewSimulatorWithSeed(id spec.GID, seed int64) (*Simulator, err
 	if err != nil {
 		return nil, err
 	}
-	return newSimulatorWithSeed(gs, p.reg, p.cf, seed)
+	return newSimulatorWithSeed(gs, p.reg, p.cf, seed, p.optimalFS)
 }
 
 func (p *Problab) NewSimulatorByJSON(raw []byte, seed int64) (*Simulator, error) {
@@ -448,7 +467,7 @@ func (p *Problab) NewSimulatorByJSON(raw []byte, seed int64) (*Simulator, error)
 	if err := p.validCfg(cfg); err != nil {
 		return nil, err
 	}
-	return newSimulatorWithSeed(cfg, p.reg, p.cf, seed)
+	return newSimulatorWithSeed(cfg, p.reg, p.cf, seed, p.optimalFS)
 }
 
 func (p *Problab) NewSimulatorByYAML(raw []byte, seed int64) (*Simulator, error) {
@@ -462,7 +481,7 @@ func (p *Problab) NewSimulatorByYAML(raw []byte, seed int64) (*Simulator, error)
 	if err := p.validCfg(cfg); err != nil {
 		return nil, err
 	}
-	return newSimulatorWithSeed(cfg, p.reg, p.cf, seed)
+	return newSimulatorWithSeed(cfg, p.reg, p.cf, seed, p.optimalFS)
 }
 
 func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
@@ -496,7 +515,7 @@ func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
 		if err != nil {
 			return nil, errs.NewFatal("rand seed failed: " + err.Error())
 		}
-		mp, err := newMachinePool(rt.poolSize, gs, p.reg, p.cf, seed.Int64())
+		mp, err := newMachinePool(rt.poolSize, gs, p.reg, p.cf, seed.Int64(), p.optimalFS)
 		if err != nil {
 			return nil, err
 		}
@@ -539,4 +558,9 @@ func (p *Problab) NewDevSimulator(gid spec.GID, seed int64) (*DevSimulator, erro
 		before64: mBe64,
 	}
 	return dev, nil
+}
+
+func (p *Problab) NewCore(seed int64) (*core.Core, error) {
+	c := core.New(p.cf.New(seed))
+	return c, nil
 }

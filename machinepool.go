@@ -17,6 +17,7 @@ package problab
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"sync"
 	"sync/atomic"
 
@@ -41,20 +42,21 @@ type MachinePool struct {
 	logic         *slot.LogicRegistry
 	cf            core.PRNGFactory
 	initSeed      int64
-	seedMaker     *seedMaker
-	pool          chan *Machine // 可用機台的通道，用於取得和歸還機台
-	broken        chan *Machine // 壞掉機台的通道，用於送修或丟棄壞掉機台
-	done          chan struct{} // 關閉訊號：關閉後不再允許借機/歸還/補機
-	closeOnce     sync.Once     // 確保 Close() 只執行一次
-	poolsize      int           // 好機台
-	rebuild       atomic.Int32  // 重起機台次數
-	inflight      atomic.Int32  // 使用中
-	panics        atomic.Int32  // panic 次數
-	fatals        atomic.Int32  // fatal 次數（機台狀態不可信）
-	closeReason   atomic.Value  // string: 關閉原因
-	closeInflight atomic.Int32  // 關閉當下 inflight（快照）
-	closeAvail    atomic.Int32  // 關閉當下 pool 可用數量（len(pool) 快照）
-	closeBroken   atomic.Int32  // 關閉當下 broken backlog（len(broken) 快照）
+	seedMaker     *SeedMaker
+	optimalFS     fs.FS            // 優化文件系統（可選）
+	pool          chan *Machine    // 可用機台的通道，用於取得和歸還機台
+	broken        chan *Machine    // 壞掉機台的通道，用於送修或丟棄壞掉機台
+	done          chan struct{}    // 關閉訊號：關閉後不再允許借機/歸還/補機
+	closeOnce     sync.Once        // 確保 Close() 只執行一次
+	poolsize      int              // 好機台
+	rebuild       atomic.Int32     // 重起機台次數
+	inflight      atomic.Int32     // 使用中
+	panics        atomic.Int32     // panic 次數
+	fatals        atomic.Int32     // fatal 次數（機台狀態不可信）
+	closeReason   atomic.Value     // string: 關閉原因
+	closeInflight atomic.Int32     // 關閉當下 inflight（快照）
+	closeAvail    atomic.Int32     // 關閉當下 pool 可用數量（len(pool) 快照）
+	closeBroken   atomic.Int32     // 關閉當下 broken backlog（len(broken) 快照）
 }
 
 // newMachinePool 建立指定遊戲的機台池。
@@ -64,7 +66,7 @@ type MachinePool struct {
 // 初始化內容包含：
 //   - 建立 pool（可用機台）與 broken（壞機台）兩個 channel
 //   - 預先建立 n 台機台並放入 pool，以便立即提供服務
-func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64) (*MachinePool, error) {
+func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, optimalFS fs.FS) (*MachinePool, error) {
 	n = max(1, n) // 確保機台數量至少為1
 	p := &MachinePool{
 		gameName:  gs.GameName,
@@ -73,7 +75,8 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 		logic:     reg,
 		cf:        cf,
 		initSeed:  seed,
-		seedMaker: newSeedMaker(seed),
+		seedMaker: NewSeedMaker(seed),
+		optimalFS: optimalFS,
 		pool:      make(chan *Machine, n),   // 建立有緩衝的機台通道，容量為 n
 		broken:    make(chan *Machine, 100), // 建立有緩衝的壞掉機台通道，容量固定為100
 		done:      make(chan struct{}),
@@ -89,7 +92,7 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 
 	// 上架機台，將 n 台新機台放入池中
 	for i := 0; i < n; i++ {
-		m, err := newMachineWithSeed(gs, reg, cf, p.seedMaker.next(), false)
+		m, err := newMachineWithSeed(gs, reg, cf, p.seedMaker.Next(), false, optimalFS)
 		if err != nil {
 			return nil, err
 		}
@@ -210,7 +213,7 @@ func (p *MachinePool) Spin(ctx context.Context, req *dto.SpinRequest) (dto dto.S
 			}
 
 			// 2) 補一台新機台（維持容量）
-			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, p.seedMaker.next(), false)
+			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, p.seedMaker.Next(), false, p.optimalFS)
 			p.rebuild.Add(1)
 			if buildErr != nil {
 				err = errs.NewFatal(fmt.Sprintf("machine %s can not build", p.gameName))
