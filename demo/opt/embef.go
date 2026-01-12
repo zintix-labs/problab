@@ -14,11 +14,11 @@
 
 package opt
 
-// import (
-// 	"embed"
-// )
+import (
+	"embed"
+)
 
-// // OptCfg provides embedded default config YAMLs for external usage.
-// //
-// //go:embed *.json.zst *.bin
-// var OptCfg embed.FS
+// OptCfg provides embedded default config YAMLs for external usage.
+//
+//go:embed *.json.zst *.bin
+var OptCfg embed.FS

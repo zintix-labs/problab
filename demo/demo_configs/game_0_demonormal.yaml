@@ -33,8 +33,8 @@ max_win_limit : 400000
 # 優化配置(開啟並由problab注入優化設定FS)
 optimal_setting:
   use_optimal: true
-  gachas: [demo_normal/gacha.json.zst]
-  seed_bank: [demo_normal/snaps.bin]
+  gachas: [gacha_0.json.zst]
+  seed_bank: [seed_bank_0.bin]
 
 # 遊戲模式設定列表，一個遊戲模式相當於一個狀態，遊戲將在各狀態間轉換
 game_mode_settings:

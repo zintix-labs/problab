@@ -45,8 +45,7 @@ const epsilon float64 = 1e-12
 
 // Sample 一個樣本點的資訊
 //
-// 注意：本優化器以「贏分 (Win)」作為第一性資料（整數、可精準比較/分類）。
-// Multiplier 若需要，可由 Win/Bet 在執行期生成（避免浮點誤差污染分類與統計）。
+// 注意：本優化器以「贏倍 (Win)」作為資料
 type Sample struct {
 	// 所屬的群組名稱 每個 sample 只會屬於一個群組
 	CName string `parquet:"name=name, type=BYTE_ARRAY, convertedtype=UTF8"`
@@ -56,6 +55,7 @@ type Sample struct {
 	CoreSnap []byte `parquet:"name=snap, type=BYTE_ARRAY"`
 }
 
+// Tuner 調優器主體
 type Tuner struct {
 	cfg     *OptimizerSetting
 	Classes []*Class
@@ -365,7 +365,7 @@ func (t *Tuner) Run(gid spec.GID, betmode int, lab *problab.Problab, seed int64)
 	}
 	// 4. 結果存儲
 	fmt.Println("step4: save optimal file")
-	if err := t.Save(ga, snap); err != nil {
+	if err := t.Save(gid, ga, snap); err != nil {
 		return err
 	}
 	fmt.Println("finish optimal")
@@ -426,7 +426,7 @@ func (t *Tuner) stdfitness(round int, wins []float64, weights []float64, c *core
 	return 0, false
 }
 
-func (t *Tuner) Save(gc *Gacha, snap []byte) error {
+func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 	if gc == nil {
 		return errs.Warnf("save: gacha is nil")
 	}
@@ -448,7 +448,7 @@ func (t *Tuner) Save(gc *Gacha, snap []byte) error {
 	if err != nil {
 		return errs.Wrap(err, "save: marshal gacha json")
 	}
-	gachaPath := filepath.Join(outDir, "gacha.json.zst")
+	gachaPath := filepath.Join(outDir, fmt.Sprintf("gacha_%d.json.zst", gid))
 	f, err := os.Create(gachaPath)
 	if err != nil {
 		return errs.Wrap(err, "save: create gacha.json.zst")
@@ -470,10 +470,10 @@ func (t *Tuner) Save(gc *Gacha, snap []byte) error {
 		return errs.Wrap(err, "save: close gacha.json.zst")
 	}
 
-	// 2) Save snaps as raw bin
-	snapPath := filepath.Join(outDir, "snaps.bin")
+	// 2) Save seed_bank as raw bin
+	snapPath := filepath.Join(outDir, fmt.Sprintf("seed_bank_%d.bin", gid))
 	if err := os.WriteFile(snapPath, snap, 0o644); err != nil {
-		return errs.Wrap(err, "save: write snaps.bin")
+		return errs.Wrap(err, "save: write seed_bank.bin")
 	}
 
 	// 3) Optional: quick sanity check that gacha can be read back (in-memory)

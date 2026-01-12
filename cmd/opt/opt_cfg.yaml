@@ -7,31 +7,31 @@ class_settings:
     match_tags: [bg]
     min_win: 0
     max_win: 10000
-    collect: 3000000
+    collect: 100
     hit_prob: 0
-    exp_win: 1.965
+    exp_win: 0.75
     basis: 150
     shape_cfg:
       # 支援 gaussian, gamma, uniform
       method: gamma
       gaussian:
         k_range: [3,5]
-        mu_center: 1.9375
+        mu_center: 0.75
         mu_std: 15
         std_range: [5,30]
         amp_range: [0.1,0.7]
-        zero_range: [0,0.9]
+        zero_range: [0.67,0.72]
         spike:
           mass_range: [0.00001,0.00005]
           win_range: [300,500]
         biases:
       gamma:
         k_range: [3,5]
-        mu_center: 1.9375
+        mu_center: 2
         mu_std: 15
         std_range: [5,30]
         amp_range: [0.1,0.7]
-        zero_range: [0,0]
+        zero_range: [0.67,0.72]
         spike:
           mass_range: [0.00001,0.00005]
           win_range: [300,500]
@@ -54,8 +54,8 @@ class_settings:
     match_tags: [fg]
     min_win: 8
     max_win: 10001
-    collect: 300000
-    hit_prob: 7412
+    collect: 100
+    hit_prob: 6800
     exp_win: 30
     basis: 100
     shape_cfg:

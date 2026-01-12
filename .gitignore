@@ -6,6 +6,7 @@
 # project ignore
 # ------------------------------
 
+
 # cache
 .gocache
 
@@ -167,3 +168,10 @@ scripts/bin/*
 *.gz
 *.rar
 *.zst
+
+# ------------------------------
+# project 
+# ------------------------------
+
+!demo/opt/gacha_0.json.zst
+!demo/opt/seed_bank_0.bin
