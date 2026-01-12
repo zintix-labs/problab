@@ -400,12 +400,12 @@ func (t *Tuner) FinalScreening(c *core.Core) (*Gacha, []byte) {
 		}
 
 		score, isbest := t.eval(i, wins, weights, c)
-		if isbest {
-			break
-		}
-		if score > best {
+		if (score > best) || isbest {
 			best = score
 			bestWeight = weights
+		}
+		if isbest {
+			break
 		}
 	}
 	// normalize

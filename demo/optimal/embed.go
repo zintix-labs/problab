@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package opt
+package optimal
 
 import (
 	"embed"
 )
 
-// OptCfg provides embedded default config YAMLs for external usage.
+// FS provides embedded default config YAMLs for external usage.
 //
 //go:embed *.json.zst *.bin
-var OptCfg embed.FS
+var FS embed.FS
