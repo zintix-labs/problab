@@ -61,7 +61,6 @@ type Tuner struct {
 	Classes []*Class
 	tager   *Tagers
 	tagBuf  []string
-	seeds   *problab.SeedMaker
 	std     float64
 	eval    func(round int, wins []float64, weights []float64, c *core.Core) (score float64, isbest bool)
 }
@@ -572,7 +571,7 @@ func (c *Class) fitRTP(bs *Basis, core *core.Core) *Shape {
 			pos, neg = neg, pos
 			diff = -diff
 		}
-		p := (bs.Exp - neg.Mean) / (pos.Mean - neg.Mean)
+		p := (bs.Exp - neg.Mean) / diff
 		if p < 0 || p > 1 {
 			continue
 		}

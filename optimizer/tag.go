@@ -56,7 +56,6 @@ func RegisterTager(tag string, isTag IsTag) bool {
 
 type Tagers struct {
 	tags []tagFn
-	mask uint
 }
 
 func GetTager(tags ...string) *Tagers {

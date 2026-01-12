@@ -242,7 +242,7 @@ func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
 			// Pick 出 start 和 end
 			start, end := gacha.Pick(m.core)
 			snap, _ := m.SnapshotCore()
-			defer m.RestoreCore(snap)
+			defer func() { _ = m.RestoreCore(snap) }()
 
 			// 邊界檢查
 			if start >= 0 && end <= len(bank) && start < end {
