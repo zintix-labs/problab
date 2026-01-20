@@ -59,8 +59,7 @@ type Sample struct {
 type Tuner struct {
 	cfg     *OptimizerSetting
 	Classes []*Class
-	tager   *Tagers
-	tagBuf  []string
+	tager   *Tagger
 	std     float64
 	eval    func(round int, wins []float64, weights []float64, c *core.Core) (score float64, isbest bool)
 }
@@ -149,8 +148,14 @@ func New(cfg fs.FS, name string) (*Tuner, error) {
 		rtp += r
 	}
 	fmt.Printf("final rtp: %5f\n", rtp)
-	tuner.tagBuf = make([]string, 0, len(tag))
-	tuner.tager = GetTager(tag...)
+	t, err := GetTagger(tag...)
+	if err != nil {
+		return nil, err
+	}
+	tuner.tager = t
+	for _, c := range tuner.Classes {
+		c.tagMask = tuner.tager.Mask(c.tags...)
+	}
 	return tuner, nil
 }
 
@@ -198,11 +203,10 @@ func (t *Tuner) collect(gid spec.GID, betmode int, lab *problab.Problab, seed in
 	for range maxMine {
 		snap, _ := m.SnapshotCore()
 		sr := m.SpinInternal(betmode)
-		// TagInto 會回傳新的 slice header（長度可能改變），必須接回來才能確保 tagBuf 內容正確。
-		t.tagBuf = t.tager.TagInto(sr, t.tagBuf)
+		label := t.tager.Tagging(sr)
 		win := float64(sr.TotalWin) / float64(sr.Bet)
 		for _, c := range t.Classes {
-			if (len(c.samps) < int(c.collect)) && (win >= c.minWin) && (win <= c.maxWin) && sub(c.tags, t.tagBuf) {
+			if (len(c.samps) < int(c.collect)) && (win >= c.minWin) && (win <= c.maxWin) && t.tager.IsCover(label, c.tagMask) {
 				// NOTE: if collect() becomes multi-machine concurrent in the future,
 				// appending to c.samps MUST be protected (mutex or per-class channel),
 				// because slices are not goroutine-safe.
@@ -502,6 +506,7 @@ type Class struct {
 	skew          []float64
 	seeds         []byte
 	tags          []string
+	tagMask       uint64
 	shapes        []*Shape // 最終結果
 	minWin        float64
 	maxWin        float64

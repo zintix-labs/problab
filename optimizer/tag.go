@@ -15,35 +15,41 @@
 package optimizer
 
 import (
+	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/buf"
+)
+
+const (
+	bg = "bg"
+	fg = "fg"
 )
 
 type IsTag func(sr *buf.SpinResult) bool
 
 type tagFn func(sr *buf.SpinResult) (string, bool)
 
-var tagers = map[string]tagFn{
-	"bg": IsOnlyBg,
-	"fg": IsEntryFree,
+var tagFns = map[string]tagFn{
+	bg: IsOnlyBg,
+	fg: IsEntryFree,
 }
 
 func IsOnlyBg(sr *buf.SpinResult) (string, bool) {
 	if sr.GameModeCount == 1 {
-		return "bg", true
+		return bg, true
 	}
 	return "", false
 }
 
 func IsEntryFree(sr *buf.SpinResult) (string, bool) {
-	if sr.GameModeCount > 1 && (sr.GameModeList[0].TotalWin/sr.Bet) < 4 && ((sr.TotalWin-sr.GameModeList[0].TotalWin)/sr.Bet) > 6 {
-		return "fg", true
+	if sr.GameModeCount > 1 && ((sr.TotalWin-sr.GameModeList[0].TotalWin)/sr.Bet) > 5 {
+		return fg, true
 	}
 	return "", false
 }
 
-func RegisterTager(tag string, isTag IsTag) bool {
-	if _, ok := tagers[tag]; !ok {
-		tagers[tag] = func(sr *buf.SpinResult) (string, bool) {
+func RegisterTag(tag string, isTag IsTag) bool {
+	if _, ok := tagFns[tag]; !ok {
+		tagFns[tag] = func(sr *buf.SpinResult) (string, bool) {
 			if isTag(sr) {
 				return tag, true
 			}
@@ -54,59 +60,67 @@ func RegisterTager(tag string, isTag IsTag) bool {
 	return false
 }
 
-type Tagers struct {
-	tags []tagFn
+type Tagger struct {
+	tags []string
+	fns  []tagFn
 }
 
-func GetTager(tags ...string) *Tagers {
+func GetTagger(tags ...string) (*Tagger, error) {
 	if len(tags) == 0 {
-		return &Tagers{}
+		return nil, errs.Warnf("tags is required")
 	}
-	m := make(map[string]struct{})
-	for _, t := range tags {
-		m[t] = struct{}{}
+	if len(tags) > 64 {
+		return nil, errs.Warnf("tags must be less than 64: %d given", len(tags))
 	}
-	result := &Tagers{
-		tags: make([]tagFn, 0, len(m)),
+	tg := &Tagger{
+		tags: tags,
+		fns:  make([]tagFn, 0, len(tags)),
 	}
-	for t := range m {
-		if fn, ok := tagers[t]; ok {
-			result.tags = append(result.tags, fn)
+	for i, t := range tags {
+		if fn, ok := tagFns[t]; ok {
+			tg.fns = append(tg.fns, fn)
+		} else {
+			return nil, errs.Warnf("tag %d not found: %s", i, t)
 		}
 	}
-	return result
+	return tg, nil
 }
 
-// TagInto 將符合的 tags 寫入 dst（會先清空長度），用於在熱路徑避免分配。
-// 回傳值為同一個底層陣列的 slice（可能與 dst 相同）。
-func (t *Tagers) TagInto(sr *buf.SpinResult, dst []string) []string {
-	if t == nil || len(t.tags) == 0 {
-		return dst[:0]
-	}
-	r := dst[:0]
-	for _, fn := range t.tags {
-		if s, ok := fn(sr); ok {
-			r = append(r, s)
+func (t *Tagger) Tagging(sr *buf.SpinResult) uint64 {
+	u := uint64(0)
+	for i, fn := range t.fns {
+		if _, ok := fn(sr); ok {
+			u |= 1 << i
 		}
 	}
-	return r
+	return u
 }
 
-func sub(check, tester []string) bool {
-	if len(check) > len(tester) {
-		return false
-	}
-	for _, s := range check {
-		ok := false
-		for _, t := range tester {
-			if s == t {
-				ok = true
+func (t *Tagger) Mask(tags ...string) uint64 {
+	u := uint64(0)
+	for _, s := range tags {
+		for i, g := range t.tags {
+			if g == s {
+				u |= 1 << i
 				break
 			}
 		}
-		if !ok {
-			return false
-		}
 	}
-	return true
+	return u
+}
+
+func (t *Tagger) IsCover(now uint64, fit uint64) bool {
+	return (now & fit) == fit
+}
+
+func (t *Tagger) IsEqual(now uint64, fit uint64) bool {
+	return (now == fit)
+}
+
+func (t *Tagger) IsAnyMatch(now uint64, fit uint64) bool {
+	return ((now & fit) != 0)
+}
+
+func (t *Tagger) IsNoMatch(now uint64, fit uint64) bool {
+	return !(t.IsAnyMatch(now, fit))
 }
