@@ -204,3 +204,110 @@ func (at *AliasTable) Pick(c *core.Core) int {
 	}
 	return at.Aliases[idx]
 }
+
+type AliasTableF64 struct {
+	Prob    []float64 `json:"prob"`
+	Aliases []int     `json:"aliases"`
+	Size    int       `json:"size"`
+}
+
+func BuildAliasTableF64(weights []float64) *AliasTableF64 {
+	if len(weights) == 0 {
+		return &AliasTableF64{
+			Prob:    []float64{},
+			Aliases: []int{},
+			Size:    0,
+		}
+	}
+
+	n := len(weights)
+
+	// Validate & compute sum
+	sum := 0.0
+	for _, w := range weights {
+		if w < 0 {
+			panic("AliasTableF64: negative weight encountered")
+		}
+		if math.IsNaN(w) || math.IsInf(w, 0) {
+			panic("AliasTableF64: NaN/Inf weight encountered")
+		}
+		sum += w
+	}
+
+	if sum == 0 {
+		panic("AliasTableF64: all weights are zero")
+	}
+
+	prob := make([]float64, n)
+	aliases := make([]int, n)
+
+	// For cleanliness/debugging: self-alias by default.
+	for i := range aliases {
+		aliases[i] = i
+	}
+
+	small := make([]int, 0, n)
+	large := make([]int, 0, n)
+
+	// Standard Vose: normalize to 1.0, then scale by N.
+	// Each bucket holds two outcomes: itself with prob[i] and alias[i] otherwise.
+	invSum := 1.0 / sum
+	scale := float64(n)
+	for i, w := range weights {
+		p := (w * invSum) * scale
+		prob[i] = p
+		if p < 1.0 {
+			small = append(small, i)
+		} else {
+			large = append(large, i)
+		}
+	}
+
+	for len(small) > 0 && len(large) > 0 {
+		s := small[len(small)-1]
+		small = small[:len(small)-1]
+		l := large[len(large)-1]
+		large = large[:len(large)-1]
+
+		aliases[s] = l
+		// Move the leftover probability mass from s to l.
+		prob[l] = prob[l] + prob[s] - 1.0
+
+		if prob[l] < 1.0 {
+			small = append(small, l)
+		} else {
+			large = append(large, l)
+		}
+	}
+
+	// Due to floating point rounding, any remaining entries should be exactly 1.0.
+	for len(large) > 0 {
+		l := large[len(large)-1]
+		large = large[:len(large)-1]
+		prob[l] = 1.0
+		aliases[l] = l
+	}
+	for len(small) > 0 {
+		s := small[len(small)-1]
+		small = small[:len(small)-1]
+		prob[s] = 1.0
+		aliases[s] = s
+	}
+
+	return &AliasTableF64{
+		Prob:    prob,
+		Aliases: aliases,
+		Size:    n,
+	}
+}
+
+func (at *AliasTableF64) Pick(c *core.Core) int {
+	if at.Size == 0 {
+		return -1
+	}
+	idx := c.IntN(at.Size)
+	if c.Float64() < at.Prob[idx] {
+		return idx
+	}
+	return at.Aliases[idx]
+}
