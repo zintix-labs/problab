@@ -287,9 +287,13 @@ func (g *GaussianMixtureShapeGenerator) Gen(c *core.Core) (*Shape, error) {
 			// mu = center + N(0,1)*MuStd
 			mu := center + c.NormFloat64()*g.MuStd
 
-			// optional: clamp mu into [minWin, maxWin] to avoid useless gauss
-			mu = max(mu, float64(g.cs.MinWin))
-			mu = min(mu, float64(g.cs.MaxWin))
+			// re pick
+			for {
+				if (mu >= float64(g.cs.MinWin)) && (mu <= float64(g.cs.MaxWin)) {
+					break
+				}
+				mu = center + c.NormFloat64()*g.MuStd
+			}
 
 			// --- Std: uniform in [StdMin, StdMax] ---
 			std := g.StdMin + c.Float64()*(g.StdMax-g.StdMin)
@@ -610,9 +614,14 @@ func (g *GammaMixtureShapeGenerator) Gen(c *core.Core) (*Shape, error) {
 			// mu = center + N(0,1)*MuStd
 			mu := center + c.NormFloat64()*g.MuStd
 
-			// optional: clamp mu into [minWin, maxWin] to avoid useless shape
-			mu = max(mu, float64(g.cs.MinWin))
-			mu = min(mu, float64(g.cs.MaxWin))
+			// re pick
+			for {
+				if (mu >= float64(g.cs.MinWin)) && (mu <= float64(g.cs.MaxWin)) {
+					break
+				}
+				mu = center + c.NormFloat64()*g.MuStd
+			}
+
 			if mu <= 0 {
 				mu = 1e-6 // guard
 			}
