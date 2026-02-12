@@ -494,7 +494,7 @@ func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 	}
 
 	if _, err = fp.Write(bufProb); err != nil {
-		errs.Wrap(err, fmt.Sprintf("save: write prob_%d.bin", gid))
+		return errs.Wrap(err, fmt.Sprintf("save: write prob_%d.bin", gid))
 	}
 	// 4 aliases little endian
 	aliasPath := filepath.Join(outDir, fmt.Sprintf("aliases_%d.bin", gid))
@@ -510,7 +510,7 @@ func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 	}
 
 	if _, err = fa.Write(bufAlias); err != nil {
-		errs.Wrap(err, fmt.Sprintf("save: write aliases_%d.bin", gid))
+		return errs.Wrap(err, fmt.Sprintf("save: write aliases_%d.bin", gid))
 	}
 	// 5 info (lightweight json: only the values needed for external tooling)
 	type pick struct {
