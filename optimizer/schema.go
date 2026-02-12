@@ -16,6 +16,7 @@ package optimizer
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -477,6 +478,63 @@ func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 	snapPath := filepath.Join(outDir, fmt.Sprintf("seed_bank_%d.bin", gid))
 	if err := os.WriteFile(snapPath, snap, 0o644); err != nil {
 		return errs.Wrap(err, "save: write seed_bank.bin")
+	}
+
+	// 3 prob little endian
+	probPath := filepath.Join(outDir, fmt.Sprintf("prob_%d.bin", gid))
+	fp, err := os.Create(probPath)
+	if err != nil {
+		return errs.Wrap(err, fmt.Sprintf("save: create prob_%d.bin", gid))
+	}
+	defer func() { _ = fp.Close() }()
+
+	bufProb := make([]byte, len(gc.Picker.Prob)*8)
+	for i, v := range gc.Picker.Prob {
+		binary.LittleEndian.PutUint64(bufProb[i*8:], uint64(v))
+	}
+
+	if _, err = fp.Write(bufProb); err != nil {
+		errs.Wrap(err, fmt.Sprintf("save: write prob_%d.bin", gid))
+	}
+	// 4 aliases little endian
+	aliasPath := filepath.Join(outDir, fmt.Sprintf("aliases_%d.bin", gid))
+	fa, err := os.Create(aliasPath)
+	if err != nil {
+		return errs.Wrap(err, fmt.Sprintf("save: create aliases_%d.bin", gid))
+	}
+	defer func() { _ = fa.Close() }()
+
+	bufAlias := make([]byte, len(gc.Picker.Aliases)*4)
+	for i, v := range gc.Picker.Aliases {
+		binary.LittleEndian.PutUint32(bufAlias[i*4:], uint32(v))
+	}
+
+	if _, err = fa.Write(bufAlias); err != nil {
+		errs.Wrap(err, fmt.Sprintf("save: write aliases_%d.bin", gid))
+	}
+	// 5 info (lightweight json: only the values needed for external tooling)
+	type pick struct {
+		Size  int `json:"size"`
+		Total int `json:"total"`
+	}
+	type info struct {
+		Picker  pick `json:"picker"`
+		SeedLen int  `json:"seed_len"`
+	}
+
+	infoPath := filepath.Join(outDir, fmt.Sprintf("info_%d.json", gid))
+	infoBytes, err := json.MarshalIndent(info{
+		Picker: pick{
+			Size:  gc.Picker.Size,
+			Total: gc.Picker.Total,
+		},
+		SeedLen: gc.SeedLen,
+	}, "", "  ")
+	if err != nil {
+		return errs.Wrap(err, "save: marshal info json")
+	}
+	if err := os.WriteFile(infoPath, infoBytes, 0o644); err != nil {
+		return errs.Wrap(err, "save: write info json")
 	}
 
 	// 3) Optional: quick sanity check that gacha can be read back (in-memory)
