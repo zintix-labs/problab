@@ -52,8 +52,8 @@ import (
 // Gacha 表示優化後的抽樣結構（對應 optimizer.Gacha）。
 // 為了避免循環導入，這裡定義一個簡化版本。
 type Gacha struct {
-	Picker  *sampler.AliasTable `json:"picker"`   // 抽樣表
-	SeedLen int                 `json:"seed_len"` // 抽到對應第幾個種子，就要 * SeedLen 取[n*SeedLen:(n+1)*SeedLen]
+	Picker  *sampler.AliasTableF64 `json:"picker"`   // 抽樣表
+	SeedLen int                    `json:"seed_len"` // 抽到對應第幾個種子，就要 * SeedLen 取[n*SeedLen:(n+1)*SeedLen]
 }
 
 // Pick 從 Gacha 中抽取一個索引範圍。
