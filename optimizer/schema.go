@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -414,7 +415,7 @@ func (t *Tuner) FinalScreening(c *core.Core) (*Gacha, []byte) {
 		}
 	}
 	// normalize
-	normalAT := sampler.BuildAliasTable(quantizeWeights(bestWeight))
+	normalAT := sampler.BuildAliasTableF64(bestWeight)
 	return &Gacha{
 		Picker:  normalAT,
 		SeedLen: seedLen,
@@ -490,7 +491,8 @@ func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 
 	bufProb := make([]byte, len(gc.Picker.Prob)*8)
 	for i, v := range gc.Picker.Prob {
-		binary.LittleEndian.PutUint64(bufProb[i*8:], uint64(v))
+		bits := math.Float64bits(v) // 只取位元表示
+		binary.LittleEndian.PutUint64(bufProb[i*8:], bits)
 	}
 
 	if _, err = fp.Write(bufProb); err != nil {
@@ -525,8 +527,7 @@ func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 	infoPath := filepath.Join(outDir, fmt.Sprintf("info_%d.json", gid))
 	infoBytes, err := json.MarshalIndent(info{
 		Picker: pick{
-			Size:  gc.Picker.Size,
-			Total: gc.Picker.Total,
+			Size: gc.Picker.Size,
 		},
 		SeedLen: gc.SeedLen,
 	}, "", "  ")
@@ -858,8 +859,8 @@ func (c *ClassSetting) validate() error {
 // Gacha 籤桶/抽卡
 type Gacha struct {
 	// 把各池按照比例混合後(各池內部權重*對應機率)計算出要取用第幾個種子的AliasTable
-	Picker  *sampler.AliasTable `json:"picker"`
-	SeedLen int                 `json:"seed_len"` // 抽到對應第幾個種子，就要 * SeedLen 取[n*SeedLen:(n+1)*SeedLen]
+	Picker  *sampler.AliasTableF64 `json:"picker"`
+	SeedLen int                    `json:"seed_len"` // 抽到對應第幾個種子，就要 * SeedLen 取[n*SeedLen:(n+1)*SeedLen]
 }
 
 func (g *Gacha) Pick(c *core.Core) (start int, end int) {
