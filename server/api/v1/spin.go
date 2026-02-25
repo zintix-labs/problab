@@ -43,7 +43,7 @@ func (s *SpinHandler) Spin(w http.ResponseWriter, r *http.Request) {
 	}
 	// 請求解析完成，設置超時 context
 	ctx := r.Context()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second) // 先修改超時機制，保證dev 載入大檔案可用性(原數據5秒)
 	defer cancel()
 
 	// 開始 Spin
