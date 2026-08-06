@@ -748,83 +748,83 @@ func (u *UniformShapeGenerator) Gen(c *core.Core) (*Shape, error) {
 
 // -------------
 
-func quantizeWeights(probs []float64) []int {
-	// Convert probs into integer weights that quantize with base accuracy
-	// First normalize probs to sum=1, then quantize with dynamic accuracy to avoid overflow
-	if len(probs) == 0 {
-		return nil
-	}
+// func quantizeWeights(probs []float64) []int {
+// 	// Convert probs into integer weights that quantize with base accuracy
+// 	// First normalize probs to sum=1, then quantize with dynamic accuracy to avoid overflow
+// 	if len(probs) == 0 {
+// 		return nil
+// 	}
 
-	// 1. Normalize weights to sum=1
-	sum := 0.0
-	for _, p := range probs {
-		if p > 0 {
-			sum += p
-		}
-	}
+// 	// 1. Normalize weights to sum=1
+// 	sum := 0.0
+// 	for _, p := range probs {
+// 		if p > 0 {
+// 			sum += p
+// 		}
+// 	}
 
-	if sum <= 0 {
-		// fallback uniform
-		ws := make([]int, len(probs))
-		for i := range ws {
-			ws[i] = 1
-		}
-		return ws
-	}
+// 	if sum <= 0 {
+// 		// fallback uniform
+// 		ws := make([]int, len(probs))
+// 		for i := range ws {
+// 			ws[i] = 1
+// 		}
+// 		return ws
+// 	}
 
-	// 2. Calculate dynamic accuracy to avoid overflow in BuildAliasTable
-	// BuildAliasTable checks: total * n <= math.MaxInt64
-	// where total = sum of quantized weights, n = len(probs)
-	// We want: accuracy * n <= math.MaxInt64
-	// So: accuracy <= math.MaxInt64 / n
-	n := len(probs)
-	maxSafeAccuracy := int64(math.MaxInt64) / int64(n)
+// 	// 2. Calculate dynamic accuracy to avoid overflow in BuildAliasTable
+// 	// BuildAliasTable checks: total * n <= math.MaxInt64
+// 	// where total = sum of quantized weights, n = len(probs)
+// 	// We want: accuracy * n <= math.MaxInt64
+// 	// So: accuracy <= math.MaxInt64 / n
+// 	n := len(probs)
+// 	maxSafeAccuracy := int64(math.MaxInt64) / int64(n)
 
-	// Use the smaller of the configured accuracy and the safe accuracy
-	base := int(accuracy) / n
-	if base < 1 {
-		base = 1
-	}
-	if int64(base) > maxSafeAccuracy {
-		base = int(maxSafeAccuracy)
-		// Ensure base is at least 1
-		if base < 1 {
-			base = 1
-		}
-	}
+// 	// Use the smaller of the configured accuracy and the safe accuracy
+// 	base := int(accuracy) / n
+// 	if base < 1 {
+// 		base = 1
+// 	}
+// 	if int64(base) > maxSafeAccuracy {
+// 		base = int(maxSafeAccuracy)
+// 		// Ensure base is at least 1
+// 		if base < 1 {
+// 			base = 1
+// 		}
+// 	}
 
-	// 3. Quantize normalized weights
-	ws := make([]int, len(probs))
-	for i, p := range probs {
-		if p < 0 {
-			p = 0
-		}
-		// Normalize first, then quantize
-		normalized := p / sum
-		w := int(math.Floor(normalized * float64(base)))
-		if w < 0 {
-			w = 0
-		}
-		ws[i] = w
-	}
+// 	// 3. Quantize normalized weights
+// 	ws := make([]int, len(probs))
+// 	for i, p := range probs {
+// 		if p < 0 {
+// 			p = 0
+// 		}
+// 		// Normalize first, then quantize
+// 		normalized := p / sum
+// 		w := int(math.Floor(normalized * float64(base)))
+// 		if w < 0 {
+// 			w = 0
+// 		}
+// 		ws[i] = w
+// 	}
 
-	// 4. Ensure at least one non-zero weight
-	hasNonZero := false
-	for _, w := range ws {
-		if w > 0 {
-			hasNonZero = true
-			break
-		}
-	}
-	if !hasNonZero {
-		// fallback uniform
-		for i := range ws {
-			ws[i] = 1
-		}
-	}
+// 	// 4. Ensure at least one non-zero weight
+// 	hasNonZero := false
+// 	for _, w := range ws {
+// 		if w > 0 {
+// 			hasNonZero = true
+// 			break
+// 		}
+// 	}
+// 	if !hasNonZero {
+// 		// fallback uniform
+// 		for i := range ws {
+// 			ws[i] = 1
+// 		}
+// 	}
 
-	return ws
-}
+// 	return ws
+// }
 
 func meanOf(wins, probs []float64) float64 {
 	var m float64

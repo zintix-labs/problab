@@ -39,11 +39,12 @@ import (
 )
 
 const baseWeight int = 1_000_000
-const accuracy uint = uint(1) << 52
 const maxTry int = 100_000
 const mercy int = 100
 const maxMine int = 1_000_000_000
 const epsilon float64 = 1e-12
+
+// const accuracy uint = uint(1) << 52
 
 // Sample 一個樣本點的資訊
 //
