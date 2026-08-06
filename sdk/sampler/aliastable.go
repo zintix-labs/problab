@@ -306,8 +306,47 @@ func (at *AliasTableF64) Pick(c *core.Core) int {
 		return -1
 	}
 	idx := c.IntN(at.Size)
-	if c.Float64() < at.Prob[idx] {
+	if bernoulliF64(c, at.Prob[idx]) {
 		return idx
 	}
 	return at.Aliases[idx]
+}
+
+// bernoulliF64 returns true with probability p without reducing p to the
+// 53-bit grid used by RAND.Float64.
+//
+// A float64 in [0, 1) is a finite binary fraction. We compare it with a
+// random binary fraction 64 bits at a time. If the first random word is equal
+// to the integer part of p*2^64, the decision depends on the remaining bits,
+// so the fractional remainder is compared with the next random word.
+//
+// This is especially important for alias-table thresholds below 2^-53. A
+// Float64 comparison would round every positive threshold in (0, 2^-53] to
+// the same minimum non-zero sampling probability. This function preserves the
+// exact probability represented by p (assuming Uint64 supplies uniform words).
+func bernoulliF64(c *core.Core, p float64) bool {
+	if p <= 0 {
+		return false
+	}
+	if p >= 1 {
+		return true
+	}
+
+	for p > 0 {
+		integer, fraction := math.Modf(math.Ldexp(p, 64))
+		r := c.Uint64()
+		cutoff := uint64(integer)
+
+		if r < cutoff {
+			return true
+		}
+		if r > cutoff {
+			return false
+		}
+
+		// The first 64 bits are equal; compare the remaining binary fraction.
+		p = fraction
+	}
+
+	return false
 }
