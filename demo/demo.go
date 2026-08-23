@@ -26,12 +26,17 @@ import (
 	"github.com/zintix-labs/problab/server/svrcfg"
 )
 
+// OptimalDir is the repository demo's promoted Optimal Artifact root.
+// Commands run from the problab repository root use this directory through
+// WithOptimalDir, enabling the mmap backend on supported platforms.
+const OptimalDir = "demo/optimal"
+
 func New() (*catalog.Catalog, error) {
 	return catalog.New(demo_configs.FS)
 }
 
 func NewServerConfig() (*svrcfg.SvrCfg, error) {
-	lab, err := NewProbLab()
+	lab, err := NewProbLabWithOptimalDir(OptimalDir)
 	if err != nil {
 		return nil, errs.NewFatal("new problab failed:" + err.Error())
 	}
@@ -44,10 +49,18 @@ func NewServerConfig() (*svrcfg.SvrCfg, error) {
 }
 
 func NewProbLab() (*problab.Problab, error) {
+	return newProbLab(problab.WithOptimalFS(optimal.FS))
+}
+
+func NewProbLabWithOptimalDir(root string) (*problab.Problab, error) {
+	return newProbLab(problab.WithOptimalDir(root))
+}
+
+func newProbLab(opt problab.ProblabOption) (*problab.Problab, error) {
 	return problab.NewAuto(
 		core.Default(),
 		problab.Configs(demo_configs.FS),
 		problab.Logics(demo_logic.Logics),
-		problab.WithOptimalFS(optimal.FS),
+		opt,
 	)
 }

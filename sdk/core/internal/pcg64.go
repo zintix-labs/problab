@@ -33,6 +33,11 @@ type PCG64 struct {
 	rng *r2.PCG
 }
 
+// SnapshotFormat identifies the binary state produced by math/rand/v2.PCG.
+func (r *PCG64) SnapshotFormat() string {
+	return "go.math/rand/v2.PCG.MarshalBinary/v1"
+}
+
 // NewPCG64WithSeed 以指定 seed 建立新的 PCG64 實例。
 func NewPCG64WithSeed(seed int64) *PCG64 {
 	x := uint64(seed) ^ (0x9e3779b97f4a7c15)

@@ -175,3 +175,5 @@ scripts/bin/*
 
 !demo/optimal/gacha_0.json.zst
 !demo/optimal/seed_bank_0.bin
+!demo/optimal/prob_0.bin
+!demo/optimal/aliases_0.bin

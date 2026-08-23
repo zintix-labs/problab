@@ -17,12 +17,12 @@ package problab
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"sync"
 	"sync/atomic"
 
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
+	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
 	"github.com/zintix-labs/problab/spec"
@@ -43,20 +43,22 @@ type MachinePool struct {
 	cf            core.PRNGFactory
 	initSeed      int64
 	seedMaker     *SeedMaker
-	optimalFS     fs.FS            // 優化文件系統（可選）
-	pool          chan *Machine    // 可用機台的通道，用於取得和歸還機台
-	broken        chan *Machine    // 壞掉機台的通道，用於送修或丟棄壞掉機台
-	done          chan struct{}    // 關閉訊號：關閉後不再允許借機/歸還/補機
-	closeOnce     sync.Once        // 確保 Close() 只執行一次
-	poolsize      int              // 好機台
-	rebuild       atomic.Int32     // 重起機台次數
-	inflight      atomic.Int32     // 使用中
-	panics        atomic.Int32     // panic 次數
-	fatals        atomic.Int32     // fatal 次數（機台狀態不可信）
-	closeReason   atomic.Value     // string: 關閉原因
-	closeInflight atomic.Int32     // 關閉當下 inflight（快照）
-	closeAvail    atomic.Int32     // 關閉當下 pool 可用數量（len(pool) 快照）
-	closeBroken   atomic.Int32     // 關閉當下 broken backlog（len(broken) 快照）
+	optimal       *optimalrt.Artifact // Problab instance 共用的不可變優化資料
+	pool          chan *Machine       // 可用機台的通道，用於取得和歸還機台
+	broken        chan *Machine       // 壞掉機台的通道，用於送修或丟棄壞掉機台
+	done          chan struct{}       // 關閉訊號：關閉後不再允許借機/歸還/補機
+	closeOnce     sync.Once           // 確保 Close() 只執行一次
+	borrowMu      sync.RWMutex        // Close 與新借用之間的 barrier
+	active        sync.WaitGroup      // 已借出且仍在執行的 Spin
+	poolsize      int                 // 好機台
+	rebuild       atomic.Int32        // 重起機台次數
+	inflight      atomic.Int32        // 使用中
+	panics        atomic.Int32        // panic 次數
+	fatals        atomic.Int32        // fatal 次數（機台狀態不可信）
+	closeReason   atomic.Value        // string: 關閉原因
+	closeInflight atomic.Int32        // 關閉當下 inflight（快照）
+	closeAvail    atomic.Int32        // 關閉當下 pool 可用數量（len(pool) 快照）
+	closeBroken   atomic.Int32        // 關閉當下 broken backlog（len(broken) 快照）
 }
 
 // newMachinePool 建立指定遊戲的機台池。
@@ -66,7 +68,7 @@ type MachinePool struct {
 // 初始化內容包含：
 //   - 建立 pool（可用機台）與 broken（壞機台）兩個 channel
 //   - 預先建立 n 台機台並放入 pool，以便立即提供服務
-func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, optimalFS fs.FS) (*MachinePool, error) {
+func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, optimal *optimalrt.Artifact) (*MachinePool, error) {
 	n = max(1, n) // 確保機台數量至少為1
 	p := &MachinePool{
 		gameName:  gs.GameName,
@@ -76,7 +78,7 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 		cf:        cf,
 		initSeed:  seed,
 		seedMaker: NewSeedMaker(seed),
-		optimalFS: optimalFS,
+		optimal:   optimal,
 		pool:      make(chan *Machine, n),   // 建立有緩衝的機台通道，容量為 n
 		broken:    make(chan *Machine, 100), // 建立有緩衝的壞掉機台通道，容量固定為100
 		done:      make(chan struct{}),
@@ -92,7 +94,7 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 
 	// 上架機台，將 n 台新機台放入池中
 	for i := 0; i < n; i++ {
-		m, err := newMachineWithSeed(gs, reg, cf, p.seedMaker.Next(), false, optimalFS)
+		m, err := newMachineWithSeed(gs, reg, cf, p.seedMaker.Next(), false, optimal)
 		if err != nil {
 			return nil, err
 		}
@@ -106,6 +108,11 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 //   - defer 歸還/補機時會觀察 done，避免對已關閉狀態進行 send
 func (p *MachinePool) Close() {
 	p.closeWithReason("closed")
+	// done 關閉後，等待所有已進入借用臨界區的呼叫完成 Add，之後
+	// WaitGroup 不會再增加，便可安全等待正在執行的 Spin 歸零。
+	p.borrowMu.Lock()
+	p.borrowMu.Unlock()
+	p.active.Wait()
 }
 
 // Closed 回報池是否已進入關閉狀態。
@@ -155,22 +162,30 @@ func isFatalErr(err error) bool {
 func (p *MachinePool) Spin(ctx context.Context, req *dto.SpinRequest) (dto dto.SpinResult, err error) {
 	var m *Machine
 	borrowed := false
+	p.borrowMu.RLock()
 	select {
 	case <-p.done:
+		p.borrowMu.RUnlock()
 		// 先觀察是否已關閉：關閉直接回失敗，不阻塞
 		return dto, errs.NewFatal("machine pool closed: " + p.ClosedReason())
 	case <-ctx.Done():
+		p.borrowMu.RUnlock()
 		// 如果通知取消
 		return dto, errs.NewWarn("spin canceled/timeout: " + ctx.Err().Error())
 	case m = <-p.pool:
 		// 有取出機台
 		borrowed = true
 		p.inflight.Add(1)
+		p.active.Add(1)
+		p.borrowMu.RUnlock()
 		// ok
 	}
+	defer p.active.Done()
 
 	// 理論上不會拿到 nil；若發生代表 pool 有嚴重問題。
 	if m == nil {
+		p.inflight.Add(-1)
+		borrowed = false
 		return dto, errs.NewFatal("machine pool got nil machine")
 	}
 
@@ -213,7 +228,7 @@ func (p *MachinePool) Spin(ctx context.Context, req *dto.SpinRequest) (dto dto.S
 			}
 
 			// 2) 補一台新機台（維持容量）
-			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, p.seedMaker.Next(), false, p.optimalFS)
+			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, p.seedMaker.Next(), false, p.optimal)
 			p.rebuild.Add(1)
 			if buildErr != nil {
 				err = errs.NewFatal(fmt.Sprintf("machine %s can not build", p.gameName))

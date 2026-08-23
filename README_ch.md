@@ -169,6 +169,25 @@ Problab 还提供一个面向数学设计与工程流程的 **参数调优工具
 
 它的目标是让「模拟、验算、调优、复现」在同一套引擎与数据结构上闭环完成。
 
+### Optimal Artifact 运行方式
+
+新的运行时配置使用一份 manifest 描述完整 Artifact：
+
+```yaml
+optimal_setting:
+  use_optimal: true
+  artifact: game_0/manifest.json
+```
+
+- `WithOptimalFS(fsys)`：每份 Artifact 只读入内存一次，适合 embed、示例与可携工具。
+- `WithOptimalDir(root)`：在支持的 Unix 平台对 probability、alias、seed bank
+  二进制文件进行只读 mmap。
+- 同一个 Problab 建立的 Machine、Simulator worker、MachinePool 全部共享同一份
+  不可变 Artifact。
+- 应用停止时先关闭 Runtime，再调用 `Problab.Close()`。
+
+旧的 `gachas`／`seed_bank` 配置仍可作为迁移兼容格式读取，但只能使用内存后端。
+
 > 说明：该模块仍处于早期阶段，接口与配置格式可能在 v1.0.0 之前演进。
 
 ---

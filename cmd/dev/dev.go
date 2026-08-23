@@ -45,6 +45,7 @@ func runDevPanel() {
 	if err != nil {
 		log.Fatal("set server configs error:" + err.Error())
 	}
+	defer func() { _ = scfg.Problab.Close() }()
 	server.Run(scfg)
 }
 

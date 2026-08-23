@@ -83,6 +83,11 @@ func (rt *SlotRuntime) closeWithReason(reason string) {
 		rt.reason.Store(reason)
 		rt.closed.Store(true)
 		close(rt.done)
+		for _, id := range rt.ids {
+			if pool := rt.pools[id]; pool != nil {
+				pool.Close()
+			}
+		}
 	})
 }
 

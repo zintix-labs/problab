@@ -20,5 +20,5 @@ import (
 
 // FS provides embedded default config YAMLs for external usage.
 //
-//go:embed *.json.zst *.bin
+//go:embed *.json.zst *.json *.bin
 var FS embed.FS

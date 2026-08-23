@@ -16,7 +16,9 @@ package optimizer
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -31,6 +33,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/errs"
+	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/sampler"
 	"github.com/zintix-labs/problab/spec"
@@ -371,11 +374,31 @@ func (t *Tuner) Run(gid spec.GID, betmode int, lab *problab.Problab, seed int64)
 	}
 	// 4. 結果存儲
 	fmt.Println("step4: save optimal file")
-	if err := t.Save(gid, ga, snap); err != nil {
+	betUnits, err := optimizerBetUnits(lab, gid)
+	if err != nil {
+		return err
+	}
+	if betmode >= len(betUnits) {
+		return errs.Warnf("betmode out of range: %d", betmode)
+	}
+	if err := t.SaveMode(gid, betmode, betUnits, lab.SnapshotFormat(), ga, snap); err != nil {
 		return err
 	}
 	fmt.Println("finish optimal")
 	return nil
+}
+
+func optimizerBetUnits(lab *problab.Problab, gid spec.GID) ([]int, error) {
+	summaries, err := lab.Summary()
+	if err != nil {
+		return nil, err
+	}
+	for _, summary := range summaries {
+		if summary.GID == gid {
+			return summary.BetUnits, nil
+		}
+	}
+	return nil, errs.Warnf("gid not found: %d", gid)
 }
 
 func (t *Tuner) FinalScreening(c *core.Core) (*Gacha, []byte) {
@@ -548,6 +571,137 @@ func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 	zr.Close()
 
 	return nil
+}
+
+// SaveMode publishes one mode into an Artifact v1 bundle while preserving the
+// historical Save output for existing consumers. A final manifest is published
+// atomically once every configured bet mode has a descriptor.
+func (t *Tuner) SaveMode(gid spec.GID, betMode int, betUnits []int, snapshotFormat string, gc *Gacha, snap []byte) error {
+	if betMode < 0 || betMode >= len(betUnits) {
+		return errs.Warnf("save mode: bet mode out of range: %d", betMode)
+	}
+	if err := t.Save(gid, gc, snap); err != nil {
+		return err
+	}
+	if gc == nil || gc.Picker == nil || gc.Picker.Size <= 0 || gc.SeedLen <= 0 {
+		return errs.Warnf("save mode: invalid gacha")
+	}
+	if len(snap) != gc.Picker.Size*gc.SeedLen {
+		return errs.Warnf("save mode: seed bank size mismatch")
+	}
+
+	bundleDir := filepath.Join("build", "optimizer", fmt.Sprintf("game_%d", gid))
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		return errs.Wrap(err, "save mode: mkdir bundle")
+	}
+	prob := make([]byte, gc.Picker.Size*8)
+	aliases := make([]byte, gc.Picker.Size*4)
+	for i := 0; i < gc.Picker.Size; i++ {
+		binary.LittleEndian.PutUint64(prob[i*8:], math.Float64bits(gc.Picker.Prob[i]))
+		binary.LittleEndian.PutUint32(aliases[i*4:], uint32(gc.Picker.Aliases[i]))
+	}
+	probName := fmt.Sprintf("prob_%d.bin", betMode)
+	aliasName := fmt.Sprintf("aliases_%d.bin", betMode)
+	seedName := fmt.Sprintf("seed_bank_%d.bin", betMode)
+	if err := writeAtomic(filepath.Join(bundleDir, probName), prob); err != nil {
+		return errs.Wrap(err, "save mode: write prob")
+	}
+	if err := writeAtomic(filepath.Join(bundleDir, aliasName), aliases); err != nil {
+		return errs.Wrap(err, "save mode: write aliases")
+	}
+	if err := writeAtomic(filepath.Join(bundleDir, seedName), snap); err != nil {
+		return errs.Wrap(err, "save mode: write seed bank")
+	}
+	descriptor := optimalrt.ManifestMode{
+		BetUnit:   betUnits[betMode],
+		Size:      gc.Picker.Size,
+		SeedLen:   gc.SeedLen,
+		SeedCount: gc.Picker.Size,
+		Prob:      artifactFileRef(probName, prob),
+		Aliases:   artifactFileRef(aliasName, aliases),
+		SeedBank:  artifactFileRef(seedName, snap),
+	}
+	descriptorBytes, err := json.MarshalIndent(descriptor, "", "  ")
+	if err != nil {
+		return errs.Wrap(err, "save mode: marshal descriptor")
+	}
+	if err := writeAtomic(filepath.Join(bundleDir, fmt.Sprintf("mode_%d.json", betMode)), descriptorBytes); err != nil {
+		return errs.Wrap(err, "save mode: write descriptor")
+	}
+
+	modes := make([]optimalrt.ManifestMode, len(betUnits))
+	for i := range betUnits {
+		raw, err := os.ReadFile(filepath.Join(bundleDir, fmt.Sprintf("mode_%d.json", i)))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil // Bundle is intentionally incomplete until every mode exists.
+			}
+			return errs.Wrap(err, "save mode: read descriptor")
+		}
+		if err := json.Unmarshal(raw, &modes[i]); err != nil {
+			return errs.Wrap(err, "save mode: parse descriptor")
+		}
+		if modes[i].BetUnit != betUnits[i] {
+			return errs.Warnf("save mode: stale mode_%d descriptor bet_unit", i)
+		}
+	}
+	manifest := optimalrt.Manifest{
+		SchemaVersion:  optimalrt.ManifestSchemaV1,
+		ArtifactID:     artifactID(snapshotFormat, modes),
+		SnapshotFormat: snapshotFormat,
+		Modes:          modes,
+	}
+	if err := manifest.Validate(); err != nil {
+		return errs.Wrap(err, "save mode: invalid manifest")
+	}
+	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return errs.Wrap(err, "save mode: marshal manifest")
+	}
+	if err := writeAtomic(filepath.Join(bundleDir, "manifest.json"), manifestBytes); err != nil {
+		return errs.Wrap(err, "save mode: publish manifest")
+	}
+	return nil
+}
+
+func artifactFileRef(name string, data []byte) optimalrt.FileRef {
+	sum := sha256.Sum256(data)
+	return optimalrt.FileRef{Path: name, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}
+}
+
+func artifactID(snapshotFormat string, modes []optimalrt.ManifestMode) string {
+	raw, _ := json.Marshal(struct {
+		SnapshotFormat string                   `json:"snapshot_format"`
+		Modes          []optimalrt.ManifestMode `json:"modes"`
+	}{snapshotFormat, modes})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func writeAtomic(target string, data []byte) error {
+	dir := filepath.Dir(target)
+	tmp, err := os.CreateTemp(dir, ".problab-artifact-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, target)
 }
 
 func mustReadFile(path string) []byte {
@@ -878,6 +1032,20 @@ func (g Gacha) Validate() error {
 	}
 	if g.SeedLen <= 0 {
 		return errs.Warnf("gacha: SeedLen must be > 0")
+	}
+	if g.Picker.Size <= 0 || len(g.Picker.Prob) != g.Picker.Size || len(g.Picker.Aliases) != g.Picker.Size {
+		return errs.Warnf("gacha: invalid AliasTable dimensions")
+	}
+	if uint64(g.Picker.Size) > uint64(^uint32(0)) {
+		return errs.Warnf("gacha: AliasTable exceeds uint32 artifact format")
+	}
+	for i := 0; i < g.Picker.Size; i++ {
+		if math.IsNaN(g.Picker.Prob[i]) || math.IsInf(g.Picker.Prob[i], 0) || g.Picker.Prob[i] < 0 || g.Picker.Prob[i] > 1 {
+			return errs.Warnf("gacha: invalid probability at %d", i)
+		}
+		if g.Picker.Aliases[i] < 0 || g.Picker.Aliases[i] >= g.Picker.Size {
+			return errs.Warnf("gacha: invalid alias at %d", i)
+		}
 	}
 	return nil
 }

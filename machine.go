@@ -15,19 +15,14 @@
 package problab
 
 import (
-	"bytes"
 	"crypto/rand"
-	"encoding/json"
-	"fmt"
-	"io"
-	"io/fs"
 	"math"
 	"math/big"
 	"sync"
 
-	"github.com/klauspost/compress/zstd"
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
+	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/sampler"
@@ -49,8 +44,8 @@ import (
 //   - SpinRequest / SpinResult 會被重用（避免 GC），每次 Spin 會覆寫內容。
 //   - 你若需要在 Spin 後保留結果，請在離開臨界區前轉成 DTO（或自行 copy 你需要的欄位）。
 //
-// Gacha 表示優化後的抽樣結構（對應 optimizer.Gacha）。
-// 為了避免循環導入，這裡定義一個簡化版本。
+// Gacha is the legacy JSON compatibility shape for optimizer.Gacha.
+// Deprecated: runtime Machines use the immutable internal Artifact instead.
 type Gacha struct {
 	Picker  *sampler.AliasTableF64 `json:"picker"`   // 抽樣表
 	SeedLen int                    `json:"seed_len"` // 抽到對應第幾個種子，就要 * SeedLen 取[n*SeedLen:(n+1)*SeedLen]
@@ -64,8 +59,8 @@ func (g *Gacha) Pick(c *core.Core) (start int, end int) {
 	return
 }
 
-// OptimalRuntime 存儲優化運行時數據（Gacha 和 SeedBank）。
-// 每個 betmode 對應一個 Gacha 和一個 SeedBank。
+// OptimalRuntime is retained for source compatibility with the legacy public
+// shape. Deprecated: Problab now owns one immutable shared Artifact per bundle.
 type OptimalRuntime struct {
 	Gachas []*Gacha // 對應每個 betmode，len(Gachas) == len(BetUnits)
 	Bank   [][]byte // 對應每個 betmode，每個 []byte 是完整的 SeedBank
@@ -73,16 +68,16 @@ type OptimalRuntime struct {
 
 // initseed 用於記錄出生時的 seed（追溯/重現的基礎資訊）；完整審計仍以 Core 的 Snapshot/Restore 為準。
 type Machine struct {
-	gameName    string           // 遊戲名稱（來自 GameSetting.GameName，主要用於觀測/日誌）
-	gameId      spec.GID         // 遊戲 ID（Catalog 內唯一；用於路由與查表）
-	core        *core.Core       // RNG 核心（PRNG + Snapshot/Restore 合約；熱路徑會頻繁取樣）
-	gh          *slot.Game       // 遊戲執行核心（Slot 邏輯入口；由 LogicRegistry + GameSetting 組裝）
-	BetUnits    []int            // 押注單位（由遊戲設定衍生；通常給外部列舉 UI/測試）
-	SpinRequest *buf.SpinRequest // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
-	SpinResult  *buf.SpinResult  // 可重用的結果 buffer（熱路徑；每次 Spin 會覆寫）
-	mu          sync.Mutex       // 防併發鎖：保護可重用 buffers 與核心狀態一致性
-	initseed    int64            // 出生 seed（便於追溯；完整重現請用 Snapshot/Restore）
-	optimal     *OptimalRuntime  // 優化運行時數據（nil 表示未啟用優化）
+	gameName    string              // 遊戲名稱（來自 GameSetting.GameName，主要用於觀測/日誌）
+	gameId      spec.GID            // 遊戲 ID（Catalog 內唯一；用於路由與查表）
+	core        *core.Core          // RNG 核心（PRNG + Snapshot/Restore 合約；熱路徑會頻繁取樣）
+	gh          *slot.Game          // 遊戲執行核心（Slot 邏輯入口；由 LogicRegistry + GameSetting 組裝）
+	BetUnits    []int               // 押注單位（由遊戲設定衍生；通常給外部列舉 UI/測試）
+	SpinRequest *buf.SpinRequest    // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
+	SpinResult  *buf.SpinResult     // 可重用的結果 buffer（熱路徑；每次 Spin 會覆寫）
+	mu          sync.Mutex          // 防併發鎖：保護可重用 buffers 與核心狀態一致性
+	initseed    int64               // 出生 seed（便於追溯；完整重現請用 Snapshot/Restore）
+	optimal     *optimalrt.Artifact // Problab instance 共用的不可變優化資料
 }
 
 // newMachine 以「隨機 seed」建立 Machine。
@@ -92,12 +87,12 @@ type Machine struct {
 //   - 同時保留可追溯性（seed 會被記錄在 Machine.initseed）
 //
 // seed 只保證了新建的Machine起點，如果需要在任意局後將機台"重設"到任意Core節點，請利用Snapshot Restore來操作
-func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, isSim bool, optimalFS fs.FS) (*Machine, error) {
+func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, isSim bool, optimal *optimalrt.Artifact) (*Machine, error) {
 	seed, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		return nil, errs.Wrap(err, "new crypto seed error in go std lib")
 	}
-	return newMachineWithSeed(gs, reg, cf, seed.Int64(), isSim, optimalFS)
+	return newMachineWithSeed(gs, reg, cf, seed.Int64(), isSim, optimal)
 }
 
 // newMachineWithSeed 以指定 seed 建立 Machine。
@@ -108,8 +103,8 @@ func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFacto
 //  1. core.New(cf.NewWithSeed(seed)) 建出 RNG 核心
 //  2. slot.NewGame(gs, reg, core, isSim) 依設定 + registry 建出 Slot 遊戲執行核心
 //  3. 初始化 Machine 需要的 buffers（SpinRequest/SpinResult）
-//  4. 如果啟用優化（UseOptimal = true），從 optimalFS 加載 Gacha 和 SeedBank
-func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, isSim bool, optimalFS fs.FS) (*Machine, error) {
+//  4. 如果啟用優化（UseOptimal = true），使用 Problab 預先解析的共用 Artifact
+func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, isSim bool, optimal *optimalrt.Artifact) (*Machine, error) {
 	m := &Machine{
 		gameName:    gs.GameName,
 		gameId:      spec.GID(gs.GameID),
@@ -119,7 +114,7 @@ func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.P
 		SpinRequest: nil,
 		SpinResult:  nil,
 		initseed:    seed,
-		optimal:     nil,
+		optimal:     optimal,
 	}
 	var err error
 	m.gh, err = slot.NewGame(gs, reg, m.core, isSim)
@@ -130,13 +125,8 @@ func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.P
 	m.SpinRequest = &buf.SpinRequest{}
 	m.SpinResult = m.gh.SpinResult
 
-	// 如果啟用優化，加載 Gacha 和 SeedBank
-	if gs.OptimalSetting.UseOptimal && optimalFS != nil {
-		optimal, err := loadOptimalRuntime(gs, optimalFS)
-		if err != nil {
-			return nil, err
-		}
-		m.optimal = optimal
+	if gs.OptimalSetting.UseOptimal && optimal == nil {
+		return nil, errs.NewFatal("resolved optimal artifact is required when use_optimal=true")
 	}
 
 	return m, nil
@@ -164,26 +154,17 @@ func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 		if m.optimal != nil {
 			// 有開啟優化
 			betMode := r.BetMode
-			if betMode < 0 || betMode >= len(m.optimal.Gachas) {
-				return dto.SpinResult{}, errs.NewWarn(fmt.Sprintf("bet_mode %d out of range for optimal (max: %d)", betMode, len(m.optimal.Gachas)-1))
-			}
-
-			gacha := m.optimal.Gachas[betMode]
-			bank := m.optimal.Bank[betMode]
-
-			// Pick 出 start 和 end
-			start, end := gacha.Pick(m.core)
-
-			// 邊界檢查
-			if start < 0 || end > len(bank) || start >= end {
-				return dto.SpinResult{}, errs.NewWarn(fmt.Sprintf("invalid gacha pick range: start=%d, end=%d, bank_len=%d", start, end, len(bank)))
+			seed, err := m.optimal.PickSeed(betMode, m.core)
+			if err != nil {
+				return dto.SpinResult{}, errs.NewWarn(err.Error())
 			}
 
 			// 設置到 StartState
 			if req.StartState == nil {
 				req.StartState = &buf.StartState{}
 			}
-			req.StartState.StartCoreSnap = bank[start:end]
+			// SpinResult 會把起始快照交給外部，因此不能直接暴露共用 bank。
+			req.StartState.StartCoreSnap = append(req.StartState.StartCoreSnap[:0], seed...)
 		}
 	}
 
@@ -235,21 +216,10 @@ func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
 	// 優化邏輯：如果啟用優化，從 Gacha 中 Pick 並設置 Core
 	if m.optimal != nil {
-		if betMode >= 0 && betMode < len(m.optimal.Gachas) {
-			gacha := m.optimal.Gachas[betMode]
-			bank := m.optimal.Bank[betMode]
-
-			// Pick 出 start 和 end
-			start, end := gacha.Pick(m.core)
+		if seed, err := m.optimal.PickSeed(betMode, m.core); err == nil {
 			snap, _ := m.SnapshotCore()
 			defer func() { _ = m.RestoreCore(snap) }()
-
-			// 邊界檢查
-			if start >= 0 && end <= len(bank) && start < end {
-
-				// 設置 Core 狀態
-				_ = m.RestoreCore(bank[start:end])
-			}
+			_ = m.RestoreCore(seed)
 		}
 	}
 
@@ -290,103 +260,4 @@ func (m *Machine) SnapshotCore() ([]byte, error) {
 // Restore() <- 保留語意
 func (m *Machine) RestoreCore(src []byte) error {
 	return m.core.Restore(src)
-}
-
-// loadGacha 從 optimalFS 加載 Gacha 文件（.json.zst 格式）。
-func loadGacha(optimalFS fs.FS, path string) (*Gacha, error) {
-	if optimalFS == nil {
-		return nil, errs.NewWarn("optimalFS is nil")
-	}
-	if path == "" {
-		return nil, errs.NewWarn("gacha path is empty")
-	}
-
-	// 讀取壓縮文件
-	compressed, err := fs.ReadFile(optimalFS, path)
-	if err != nil {
-		return nil, errs.Wrap(err, "read gacha file failed")
-	}
-
-	// 解壓 zstd
-	zr, err := zstd.NewReader(bytes.NewReader(compressed))
-	if err != nil {
-		return nil, errs.Wrap(err, "create zstd reader failed")
-	}
-	defer zr.Close()
-
-	// 讀取解壓後的 JSON
-	jsonBytes, err := io.ReadAll(zr)
-	if err != nil {
-		return nil, errs.Wrap(err, "read decompressed data failed")
-	}
-
-	// 解析 JSON
-	var gacha Gacha
-	if err := json.Unmarshal(jsonBytes, &gacha); err != nil {
-		return nil, errs.Wrap(err, "unmarshal gacha json failed")
-	}
-
-	// 驗證
-	if gacha.Picker == nil {
-		return nil, errs.Warnf("gacha: Picker is required")
-	}
-	if gacha.SeedLen <= 0 {
-		return nil, errs.Warnf("gacha: SeedLen must be > 0")
-	}
-
-	return &gacha, nil
-}
-
-// loadSeedBank 從 optimalFS 加載 SeedBank 文件（.bin 格式，純 []byte）。
-func loadSeedBank(optimalFS fs.FS, path string) ([]byte, error) {
-	if optimalFS == nil {
-		return nil, errs.NewWarn("optimalFS is nil")
-	}
-	if path == "" {
-		return nil, errs.NewWarn("seed_bank path is empty")
-	}
-
-	bank, err := fs.ReadFile(optimalFS, path)
-	if err != nil {
-		return nil, errs.Wrap(err, "read seed_bank file failed")
-	}
-
-	return bank, nil
-}
-
-// loadOptimalRuntime 從 optimalFS 加載優化運行時數據。
-func loadOptimalRuntime(gs *spec.GameSetting, optimalFS fs.FS) (*OptimalRuntime, error) {
-	opt := gs.OptimalSetting
-
-	// 校驗：gachas 和 seed_bank 數量必須等於 BetUnits 數量
-	if len(opt.Gachas) != len(gs.BetUnits) {
-		return nil, errs.NewFatal(fmt.Sprintf("gachas count (%d) must match bet_units count (%d)", len(opt.Gachas), len(gs.BetUnits)))
-	}
-	if len(opt.SeedBank) != len(gs.BetUnits) {
-		return nil, errs.NewFatal(fmt.Sprintf("seed_bank count (%d) must match bet_units count (%d)", len(opt.SeedBank), len(gs.BetUnits)))
-	}
-
-	optimal := &OptimalRuntime{
-		Gachas: make([]*Gacha, len(gs.BetUnits)),
-		Bank:   make([][]byte, len(gs.BetUnits)),
-	}
-
-	// 加載每個 betmode 的 Gacha 和 SeedBank
-	for i := range gs.BetUnits {
-		// 加載 Gacha
-		gacha, err := loadGacha(optimalFS, opt.Gachas[i])
-		if err != nil {
-			return nil, errs.Wrap(err, fmt.Sprintf("load gacha[%d] (%s) failed", i, opt.Gachas[i]))
-		}
-		optimal.Gachas[i] = gacha
-
-		// 加載 SeedBank
-		bank, err := loadSeedBank(optimalFS, opt.SeedBank[i])
-		if err != nil {
-			return nil, errs.Wrap(err, fmt.Sprintf("load seed_bank[%d] (%s) failed", i, opt.SeedBank[i]))
-		}
-		optimal.Bank[i] = bank
-	}
-
-	return optimal, nil
 }

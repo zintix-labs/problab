@@ -18,10 +18,7 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/zintix-labs/problab"
-	"github.com/zintix-labs/problab/demo/demo_configs"
-	"github.com/zintix-labs/problab/demo/demo_logic"
-	"github.com/zintix-labs/problab/sdk/core"
+	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/server"
 	"github.com/zintix-labs/problab/server/logger"
 	"github.com/zintix-labs/problab/server/svrcfg"
@@ -34,7 +31,9 @@ func main() {
 	cfg, err := loadConfigFromFlags()
 	if err != nil {
 		fmt.Println(err)
+		return
 	}
+	defer func() { _ = cfg.Problab.Close() }()
 	server.Run(cfg)
 }
 
@@ -52,11 +51,7 @@ func loadConfigFromFlags() (*svrcfg.SvrCfg, error) {
 
 	log, _ := logger.NewAsync(4096, cfg.norm())
 
-	lab, err := problab.NewAuto(
-		core.Default(),
-		problab.Configs(demo_configs.FS),
-		problab.Logics(demo_logic.Logics),
-	)
+	lab, err := demo.NewProbLabWithOptimalDir(demo.OptimalDir)
 	if err != nil {
 		return nil, err
 	}

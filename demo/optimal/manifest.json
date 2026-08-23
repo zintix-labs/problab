@@ -1,0 +1,28 @@
+{
+  "schema_version": "problab.optimal/v1",
+  "artifact_id": "eda07fab2ad0e4143bdf9b5b4faaf3dbc67a212c16a076016117b9c52d4c8380",
+  "snapshot_format": "go.math/rand/v2.PCG.MarshalBinary/v1",
+  "modes": [
+    {
+      "bet_unit": 40,
+      "size": 200,
+      "seed_len": 20,
+      "seed_count": 200,
+      "prob": {
+        "path": "prob_0.bin",
+        "size": 1600,
+        "sha256": "e4d8a08d6fb2ee488fc41301bff7a9074c1920cc87210c50d9d15e77f8b1203f"
+      },
+      "aliases": {
+        "path": "aliases_0.bin",
+        "size": 800,
+        "sha256": "3af471c03dff127d174614d36973ceed011db852df0bcf5efa3e137c47c94ab1"
+      },
+      "seed_bank": {
+        "path": "seed_bank_0.bin",
+        "size": 4000,
+        "sha256": "3067b1d03a24712f2e8127564589f0ca2ae65f8d40017123d25af738b5d28dfc"
+      }
+    }
+  ]
+}

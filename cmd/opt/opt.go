@@ -32,10 +32,11 @@ func main() {
 	flag.Var(gidFlag{&optgid}, "game", "target game id")
 	flag.IntVar(&mode, "mode", 0, "bet mode index")
 	flag.Parse()
-	lab, err := demo.NewProbLab()
+	lab, err := demo.NewProbLabWithOptimalDir(demo.OptimalDir)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer func() { _ = lab.Close() }()
 	tuner, err := optimizer.New(OptCfg, "opt_cfg.yaml")
 	if err != nil {
 		log.Fatal(err)

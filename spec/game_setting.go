@@ -62,12 +62,12 @@ func (gs *GameSetting) valid() error {
 	if err := gs.OptimalSetting.valid(); err != nil {
 		return err
 	}
-	if gs.OptimalSetting.UseOptimal {
-		if len(gs.OptimalSetting.Gachas) > len(gs.BetUnits) {
-			return errs.NewFatal("optimal_setting: gachas must be less than or equal to bet_units")
+	if gs.OptimalSetting.UseOptimal && gs.OptimalSetting.Artifact == "" {
+		if len(gs.OptimalSetting.Gachas) != len(gs.BetUnits) {
+			return errs.NewFatal("optimal_setting: gachas must have exactly one entry per bet_unit")
 		}
-		if len(gs.OptimalSetting.SeedBank) > len(gs.BetUnits) {
-			return errs.NewFatal("optimal_setting: seed_bank must be less than or equal to bet_units")
+		if len(gs.OptimalSetting.SeedBank) != len(gs.BetUnits) {
+			return errs.NewFatal("optimal_setting: seed_bank must have exactly one entry per bet_unit")
 		}
 	}
 

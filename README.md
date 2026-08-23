@@ -130,6 +130,28 @@ The goal is to close the loop of **simulate → verify → tune → reproduce** 
 
 > Note: this module is still evolving and APIs/configs may change before v1.0.0.
 
+### Optimal Artifact runtime
+
+An optimizer bundle is referenced by one manifest instead of separate mutable
+runtime objects:
+
+```yaml
+optimal_setting:
+  use_optimal: true
+  artifact: game_0/manifest.json
+```
+
+- `WithOptimalFS(fsys)` loads the bundle once into memory and is suitable for
+  embedded demos and portable tools.
+- `WithOptimalDir(root)` validates and read-only mmaps the binary probability,
+  alias, and seed-bank files on supported Unix platforms.
+- Every Machine, Simulator worker, and MachinePool created by the same Problab
+  instance shares the same immutable Artifact.
+- Stop runtimes first and call `Problab.Close()` at application shutdown.
+
+Legacy `gachas` and `seed_bank` configs remain readable for migration, but they
+use the memory backend and cannot receive the mmap benefit.
+
 ---
 
 ## Typical Use Cases

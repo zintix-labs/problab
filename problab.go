@@ -20,7 +20,8 @@
 //  3. CoreFactory：亂數核心工廠（PRNG factory），保證可重現（reproducible）與可審計（auditable）。
 //
 // 設計重點：
-//   - Problab 本身不綁定任何「檔案路徑」概念：設定檔來源一律以 fs.FS 的形式注入。
+//   - 遊戲設定來源不綁定檔案路徑，一律以 fs.FS 注入；大型 Optimal
+//     Artifact 可另外用 WithOptimalDir 指定普通檔案目錄以啟用 mmap。
 //   - Problab 會持有一份 Catalog（你要跑哪一批遊戲/設定檔）與一份 LogicRegistry（你支援哪些遊戲邏輯）。
 //   - Machine 是對外提供 Spin 的最小單位；遊戲邏輯開發者（數學家）主要操作的是 sdk 內的型別與資料結構。
 //
@@ -40,10 +41,13 @@ import (
 	"math/big"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zintix-labs/problab/catalog"
 	"github.com/zintix-labs/problab/errs"
+	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
 	"github.com/zintix-labs/problab/spec"
@@ -80,7 +84,8 @@ func Logics(regs ...*slot.LogicRegistry) []*slot.LogicRegistry {
 //  2. LogicRegistry：邏輯註冊表，提供「如何依據設定（LogicKey）建出遊戲邏輯」的 builders。
 //  3. CoreFactory：亂數核心工廠（PRNG factory），保證可重現（reproducible）與可審計（auditable）。
 //
-// Problab 本身不綁定任何「檔案路徑」概念：設定檔來源一律由 fs.FS 提供。
+// 遊戲設定來源不綁定任何檔案路徑，一律由 fs.FS 提供；Optimal Artifact
+// 則可選擇 fs.FS memory backend 或普通目錄 mmap backend。
 //
 // 使用流程通常分成兩階段：
 //   - 註冊/組裝階段（registration/build）：建立 catalog、合併 registries、檢查重複與缺漏。
@@ -100,21 +105,41 @@ func Logics(regs ...*slot.LogicRegistry) []*slot.LogicRegistry {
 //	//	m, _ := lab.NewMachine(1001, false)
 //	//	// m.Spin(...) -> 取得結果（通常再轉成 DTO 回傳）
 type Problab struct {
-	cat       *catalog.Catalog
-	reg       *slot.LogicRegistry
-	cf        core.PRNGFactory
-	sum       []catalog.Summary
-	optimalFS fs.FS
+	cat                *catalog.Catalog
+	reg                *slot.LogicRegistry
+	cf                 core.PRNGFactory
+	snapshotFormat     string
+	sum                []catalog.Summary
+	optimalFS          fs.FS
+	optimalDir         string
+	optimalUseDir      bool
+	optimalSourceCount int
+	optimal            *optimalrt.Store
+	closed             atomic.Bool
+	closeOnce          sync.Once
+	closeErr           error
 }
 
 // ProblabOption 是 Problab 的選項函數類型。
 type ProblabOption func(*Problab)
 
-// WithOptimalFS 設置優化文件系統（用於加載 Gacha 和 SeedBank）。
-// 如果 GameSetting 中 UseOptimal = true，會從此文件系統加載對應的優化文件。
+// WithOptimalFS 設置可攜式優化文件系統。Manifest v1 會只讀入記憶體一次；
+// legacy Gacha/SeedBank 亦可由此載入。正式環境若要 mmap 請使用 WithOptimalDir。
 func WithOptimalFS(optimalFS fs.FS) ProblabOption {
 	return func(p *Problab) {
 		p.optimalFS = optimalFS
+		p.optimalSourceCount++
+	}
+}
+
+// WithOptimalDir configures a regular-file Artifact directory. Manifest v1
+// binary files are opened through the read-only mmap backend on supported
+// Unix platforms. It is mutually exclusive with WithOptimalFS.
+func WithOptimalDir(root string) ProblabOption {
+	return func(p *Problab) {
+		p.optimalDir = root
+		p.optimalUseDir = true
+		p.optimalSourceCount++
 	}
 }
 
@@ -150,18 +175,78 @@ func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts .
 		return nil, err
 	}
 	lab := &Problab{
-		cat:       cata,
-		reg:       reg,
-		cf:        cf,
-		optimalFS: nil,
+		cat:        cata,
+		reg:        reg,
+		cf:         cf,
+		optimalFS:  nil,
+		optimalDir: "",
 	}
 
 	// 應用選項
 	for _, opt := range opts {
 		opt(lab)
 	}
+	if lab.optimalSourceCount > 1 {
+		return nil, errs.NewFatal("WithOptimalFS and WithOptimalDir are mutually exclusive")
+	}
+	probe := lab.cf.New(0)
+	if probe == nil {
+		return nil, errs.NewFatal("core factory returned nil PRNG")
+	}
+	probeSnapshot, err := probe.Snapshot()
+	if err != nil {
+		return nil, errs.Wrap(err, "snapshot PRNG probe")
+	}
+	if len(probeSnapshot) == 0 {
+		return nil, errs.NewFatal("PRNG snapshot must not be empty")
+	}
+	snapshotFormat := core.SnapshotFormatOfPRNG(probe)
+	lab.snapshotFormat = snapshotFormat
+	if lab.optimalUseDir {
+		lab.optimal, err = optimalrt.NewDirStore(lab.optimalDir, snapshotFormat, len(probeSnapshot))
+		if err != nil {
+			return nil, errs.Wrap(err, "create optimal directory store")
+		}
+	} else {
+		lab.optimal = optimalrt.NewStore(lab.optimalFS, snapshotFormat, len(probeSnapshot))
+	}
 
 	return lab, nil
+}
+
+// SnapshotFormat returns the optional identifier used by persisted PRNG
+// snapshots in Optimal Artifacts.
+func (p *Problab) SnapshotFormat() string {
+	if p == nil {
+		return ""
+	}
+	return p.snapshotFormat
+}
+
+// Close releases resources owned by this Problab instance. Runtime and pool
+// users must be stopped first; Close is safe to call more than once.
+func (p *Problab) Close() error {
+	if p == nil {
+		return nil
+	}
+	p.closeOnce.Do(func() {
+		p.closed.Store(true)
+		if p.optimal != nil {
+			p.closeErr = p.optimal.Close()
+		}
+	})
+	return p.closeErr
+}
+
+func (p *Problab) Closed() bool {
+	return p == nil || p.closed.Load()
+}
+
+func (p *Problab) ensureOpen() error {
+	if p == nil || p.closed.Load() {
+		return errs.NewFatal("problab is closed")
+	}
+	return nil
 }
 
 // NewAuto 建立一個直接進入執行階段的 Problab instance。
@@ -176,7 +261,44 @@ func NewAuto(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, op
 		return nil, err
 	}
 	lab.Freeze()
+	if err := lab.preloadOptimal(); err != nil {
+		_ = lab.Close()
+		return nil, err
+	}
 	return lab, nil
+}
+
+// preloadOptimal resolves every artifact referenced by the frozen catalog.
+// The Store deduplicates identical descriptors, so each unique artifact is
+// parsed exactly once per Problab instance.
+func (p *Problab) preloadOptimal() error {
+	for _, id := range p.cat.IDs() {
+		gs, err := p.cat.GameSettingById(id)
+		if err != nil {
+			return err
+		}
+		if _, err := p.resolveOptimal(gs); err != nil {
+			return errs.Wrap(err, fmt.Sprintf("preload optimal artifact for game_id=%d", id))
+		}
+	}
+	return nil
+}
+
+func (p *Problab) resolveOptimal(gs *spec.GameSetting) (*optimalrt.Artifact, error) {
+	if err := p.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if gs == nil || !gs.OptimalSetting.UseOptimal {
+		return nil, nil
+	}
+	if p.optimal == nil {
+		return nil, errs.NewFatal("optimal store is not initialized")
+	}
+	artifact, err := p.optimal.Resolve(gs)
+	if err != nil {
+		return nil, errs.Wrap(err, "resolve optimal artifact")
+	}
+	return artifact, nil
 }
 
 func (p *Problab) Register(ents ...catalog.Entry) error {
@@ -368,7 +490,11 @@ func (p *Problab) NewMachine(id spec.GID, isSim bool) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMachine(gs, p.reg, p.cf, isSim, p.optimalFS)
+	optimal, err := p.resolveOptimal(gs)
+	if err != nil {
+		return nil, err
+	}
+	return newMachine(gs, p.reg, p.cf, isSim, optimal)
 }
 
 // NewMachineWithSeed 與 NewMachine 相同，但由呼叫端指定初始 seed。
@@ -385,7 +511,11 @@ func (p *Problab) NewMachineWithSeed(id spec.GID, seed int64, isSim bool) (*Mach
 	if err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(gs, p.reg, p.cf, seed, isSim, p.optimalFS)
+	optimal, err := p.resolveOptimal(gs)
+	if err != nil {
+		return nil, err
+	}
+	return newMachineWithSeed(gs, p.reg, p.cf, seed, isSim, optimal)
 }
 
 func (p *Problab) NewMachineByJSON(raw []byte, seed int64) (*Machine, error) {
@@ -399,7 +529,11 @@ func (p *Problab) NewMachineByJSON(raw []byte, seed int64) (*Machine, error) {
 	if err := p.validCfg(cfg); err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, p.optimalFS)
+	optimal, err := p.resolveOptimal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, optimal)
 }
 
 func (p *Problab) NewMachineByYAML(raw []byte, seed int64) (*Machine, error) {
@@ -413,7 +547,11 @@ func (p *Problab) NewMachineByYAML(raw []byte, seed int64) (*Machine, error) {
 	if err := p.validCfg(cfg); err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, p.optimalFS)
+	optimal, err := p.resolveOptimal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, optimal)
 }
 
 func (p *Problab) validCfg(cfg *spec.GameSetting) error {
@@ -442,7 +580,11 @@ func (p *Problab) NewSimulator(id spec.GID) (*Simulator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newSimulator(gs, p.reg, p.cf, p.optimalFS)
+	optimal, err := p.resolveOptimal(gs)
+	if err != nil {
+		return nil, err
+	}
+	return newSimulator(gs, p.reg, p.cf, optimal)
 }
 
 func (p *Problab) NewSimulatorWithSeed(id spec.GID, seed int64) (*Simulator, error) {
@@ -453,7 +595,11 @@ func (p *Problab) NewSimulatorWithSeed(id spec.GID, seed int64) (*Simulator, err
 	if err != nil {
 		return nil, err
 	}
-	return newSimulatorWithSeed(gs, p.reg, p.cf, seed, p.optimalFS)
+	optimal, err := p.resolveOptimal(gs)
+	if err != nil {
+		return nil, err
+	}
+	return newSimulatorWithSeed(gs, p.reg, p.cf, seed, optimal)
 }
 
 func (p *Problab) NewSimulatorByJSON(raw []byte, seed int64) (*Simulator, error) {
@@ -467,7 +613,11 @@ func (p *Problab) NewSimulatorByJSON(raw []byte, seed int64) (*Simulator, error)
 	if err := p.validCfg(cfg); err != nil {
 		return nil, err
 	}
-	return newSimulatorWithSeed(cfg, p.reg, p.cf, seed, p.optimalFS)
+	optimal, err := p.resolveOptimal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newSimulatorWithSeed(cfg, p.reg, p.cf, seed, optimal)
 }
 
 func (p *Problab) NewSimulatorByYAML(raw []byte, seed int64) (*Simulator, error) {
@@ -481,10 +631,17 @@ func (p *Problab) NewSimulatorByYAML(raw []byte, seed int64) (*Simulator, error)
 	if err := p.validCfg(cfg); err != nil {
 		return nil, err
 	}
-	return newSimulatorWithSeed(cfg, p.reg, p.cf, seed, p.optimalFS)
+	optimal, err := p.resolveOptimal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newSimulatorWithSeed(cfg, p.reg, p.cf, seed, optimal)
 }
 
 func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
+	if err := p.ensureOpen(); err != nil {
+		return nil, err
+	}
 	// 1. 進入 runtime 前，catalog 必須 Freeze
 	p.Freeze()
 
@@ -503,10 +660,22 @@ func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
 		ttl: 5 * time.Second, // refresh after 5 seconds
 	}
 	rt.reason.Store("")
+	built := false
+	defer func() {
+		if !built {
+			for _, pool := range rt.pools {
+				pool.Close()
+			}
+		}
+	}()
 
 	// 2. 先全建好（fail-fast + cleanup）
 	for _, id := range ids {
 		gs, err := p.cat.GameSettingById(id)
+		if err != nil {
+			return nil, err
+		}
+		optimal, err := p.resolveOptimal(gs)
 		if err != nil {
 			return nil, err
 		}
@@ -515,13 +684,14 @@ func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
 		if err != nil {
 			return nil, errs.NewFatal("rand seed failed: " + err.Error())
 		}
-		mp, err := newMachinePool(rt.poolSize, gs, p.reg, p.cf, seed.Int64(), p.optimalFS)
+		mp, err := newMachinePool(rt.poolSize, gs, p.reg, p.cf, seed.Int64(), optimal)
 		if err != nil {
 			return nil, err
 		}
 		rt.pools[id] = mp
 	}
 	rt.Health() // set health data
+	built = true
 	return rt, nil
 }
 
@@ -561,6 +731,9 @@ func (p *Problab) NewDevSimulator(gid spec.GID, seed int64) (*DevSimulator, erro
 }
 
 func (p *Problab) NewCore(seed int64) (*core.Core, error) {
+	if err := p.ensureOpen(); err != nil {
+		return nil, err
+	}
 	c := core.New(p.cf.New(seed))
 	return c, nil
 }

@@ -20,6 +20,7 @@ import (
 
 type OptimalSetting struct {
 	UseOptimal bool     `yaml:"use_optimal" json:"use_optimal"`
+	Artifact   string   `yaml:"artifact,omitempty" json:"artifact,omitempty"`
 	Gachas     []string `yaml:"gachas"      json:"gachas"`
 	SeedBank   []string `yaml:"seed_bank"   json:"seed_bank"`
 }
@@ -30,6 +31,12 @@ type OptimalSetting struct {
 // 2) gachas and seed_bank must have the same length (1:1 mapping).
 func (s OptimalSetting) valid() error {
 	if !s.UseOptimal {
+		return nil
+	}
+	if s.Artifact != "" {
+		if len(s.Gachas) != 0 || len(s.SeedBank) != 0 {
+			return errs.NewFatal("optimal_setting: artifact cannot be combined with legacy gachas/seed_bank")
+		}
 		return nil
 	}
 

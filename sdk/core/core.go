@@ -22,11 +22,20 @@ type PRNG interface {
 	Restorable
 }
 
+// SnapshotFormatter is an optional, backward-compatible capability for PRNGs
+// whose serialized snapshots are stored in an Optimal Artifact. Custom PRNGs
+// do not have to implement it, but a non-empty ID lets the runtime reject an
+// artifact produced by an incompatible snapshot codec.
+type SnapshotFormatter interface {
+	SnapshotFormat() string
+}
+
 // Restorable 定義可快照與還原的狀態介面。
 type Restorable interface {
 	// Snapshot 回傳可用於還原的序列化狀態。
 	Snapshot() ([]byte, error)
-	// Restore 依序列化狀態還原 PRNG 內部狀態。
+	// Restore 依序列化狀態還原 PRNG 內部狀態。實作不得修改傳入的
+	// bytes；Optimal runtime 可能直接傳入唯讀 mmap 中的快照。
 	Restore([]byte) error
 }
 
@@ -81,6 +90,25 @@ func (d *DefaultPRNG) New(seed int64) PRNG {
 
 func Default() *DefaultPRNG {
 	return &DefaultPRNG{}
+}
+
+// SnapshotFormatOf reports the optional snapshot format ID of a factory.
+func SnapshotFormatOf(factory PRNGFactory) string {
+	if factory == nil {
+		return ""
+	}
+	return SnapshotFormatOfPRNG(factory.New(0))
+}
+
+// SnapshotFormatOfPRNG reports the optional snapshot format ID of one PRNG.
+func SnapshotFormatOfPRNG(rng PRNG) string {
+	if rng == nil {
+		return ""
+	}
+	if described, ok := rng.(SnapshotFormatter); ok {
+		return described.SnapshotFormat()
+	}
+	return ""
 }
 
 // Core 封裝 PRNG，並提供常用取樣與工具方法。
