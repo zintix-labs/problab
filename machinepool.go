@@ -109,10 +109,11 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 func (p *MachinePool) Close() {
 	p.closeWithReason("closed")
 	// done 關閉後，等待所有已進入借用臨界區的呼叫完成 Add，之後
-	// WaitGroup 不會再增加，便可安全等待正在執行的 Spin 歸零。
+	// 持有寫鎖期間 WaitGroup 不會再增加，便可安全等待正在執行的
+	// Spin 歸零；解鎖後的新呼叫只會觀察到 done 已關閉並立即返回。
 	p.borrowMu.Lock()
-	p.borrowMu.Unlock()
 	p.active.Wait()
+	p.borrowMu.Unlock()
 }
 
 // Closed 回報池是否已進入關閉狀態。
