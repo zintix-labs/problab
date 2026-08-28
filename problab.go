@@ -518,6 +518,30 @@ func (p *Problab) NewMachineWithSeed(id spec.GID, seed int64, isSim bool) (*Mach
 	return newMachineWithSeed(gs, p.reg, p.cf, seed, isSim, optimal)
 }
 
+// NewUnoptimizedMachineWithSeed builds a reproducible Machine that executes the
+// configured game logic without selecting a seed from an already-published
+// Optimal Artifact.
+//
+// Optimizer collection must use this entrypoint. Calling SpinInternal on a
+// normal Machine whose game has optimal_setting.use_optimal=true first restores
+// an artifact seed; a snapshot captured immediately before that call therefore
+// would not be the snapshot that produced the returned outcome. This method
+// clones only the GameSetting value, disables its OptimalSetting, and leaves the
+// frozen catalog untouched. The resulting snapshot-before-spin identity is the
+// exact replay atom consumed by optimizer/v2.
+func (p *Problab) NewUnoptimizedMachineWithSeed(id spec.GID, seed int64, isSim bool) (*Machine, error) {
+	if !p.cat.IsFrozen() {
+		return nil, errs.NewFatal("catalog is not frozen yet")
+	}
+	gs, err := p.cat.GameSettingById(id)
+	if err != nil {
+		return nil, err
+	}
+	raw := *gs
+	raw.OptimalSetting = spec.OptimalSetting{}
+	return newMachineWithSeed(&raw, p.reg, p.cf, seed, isSim, nil)
+}
+
 func (p *Problab) NewMachineByJSON(raw []byte, seed int64) (*Machine, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")

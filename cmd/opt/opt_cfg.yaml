@@ -1,97 +1,551 @@
-# optimize config
+# =============================================================================
+# Problab LP / Math Intent Optimizer v2 — embedded production configuration
+# =============================================================================
+#
+# cmd/opt reads this exact file through //go:embed. It is executable
+# configuration, not a non-binding example. Unknown fields, missing required
+# fields, multiple YAML documents, and contradictory cross-field values are
+# rejected by strict schema and semantic validation.
+#
+# Ownership is deliberately separated:
+#   - plans: routing, collection, candidate, and publication policy;
+#   - intents: the Designer-owned mathematical contract;
+#   - engine_options: bounded numerical controls owned by engineering.
+#
+# Every parsed value participates in the resolved configuration hash. Runtime
+# durations and progress events do not. Changing a seed, budget, tolerance, or
+# any Designer value therefore creates a different auditable run configuration.
+#
+# The solver uses a strict lexicographic sequence. Every later stage preserves
+# the solution space locked by all earlier stages:
+#
+#   1. prove-hard-feasibility
+#      Prove the immutable hard LP. Only infeasibility here can become
+#      INFEASIBLE_MODEL; hard rows are never relaxed automatically.
+#
+#   2. minimize-main-profile-deviation
+#      Minimize one common worst relative L1 deviation delta across all
+#      intent:true Classes. A Class compares actual Main Group shares against
+#      normalized `prefer` shares, relative to that Class's actual Main total.
+#
+#   3. maximize-other-bucket-visibility
+#      Maximize one common normalized floor rho_other for every replay-supported
+#      Other bucket across all eligible Classes:
+#          p_i >= rho_other * OtherTotal / supported_other_count
+#      This is a weak, system-neutral anti-zeroing preference, not a Designer
+#      target shape.
+#
+#   4. maximize-main-group-internal-visibility
+#      For each Main Group with at least two replay-supported sibling buckets,
+#      maximize one common normalized floor rho_main:
+#          p_i >= rho_main * GroupMass / supported_sibling_count
+#      Main Group hard intent still constrains only Group total. This refinement
+#      does not invent an internal uniform target or convert internal freedom
+#      into Designer-authored intent.
+#
+#   5. select-canonical-bucket-probabilities
+#      Lexicographically minimize primary bucket masses in stable Class/bucket
+#      order to choose one deterministic serialization representative. This is
+#      not a player-experience score and makes no claim that the representative
+#      is more fun than another point in the same locked feasible space.
+#
+# An infeasible soft-stage probe is a normal bisection signal. It narrows the
+# bracket; it does not fail the Run, rewrite the YAML, or ask the Designer to
+# loosen hard requirements. Backend/numerical failures remain distinct from
+# genuine mathematical infeasibility.
 
-trget_std: 2.0
-class_settings:
-  - 
-    class_name: base
-    match_tags: [bg]
-    min_win: 0
-    max_win: 10000
-    collect: 100
-    hit_prob: 0
-    exp_win: 0.75
-    basis: 150
-    shape_cfg:
-      # 支援 gaussian, gamma, uniform
-      method: gamma
-      gaussian:
-        k_range: [3,5]
-        mu_center: 0.75
-        mu_std: 15
-        std_range: [5,30]
-        amp_range: [0.1,0.7]
-        zero_range: [0.67,0.72]
-        spike:
-          mass_range: [0.00001,0.00005]
-          win_range: [300,500]
-        biases:
-      gamma:
-        k_range: [3,5]
-        mu_center: 2
-        mu_std: 15
-        std_range: [5,30]
-        amp_range: [0.1,0.7]
-        zero_range: [0.67,0.72]
-        spike:
-          mass_range: [0.00001,0.00005]
-          win_range: [300,500]
-        biases:
-          - 
-            range: [15,50]
-            prob: 100000
+# Required schema version. The current binary accepts exactly version 2.
+version: 2
 
-    # 暫時無作用
-    match_exp:
-      method: 
+# RunPlans select what to execute. They do not define payout mathematics.
+# cmd/opt accepts no CLI overrides and executes every plan in declaration order.
+plans:
+  # Required globally unique stable ID. Case and punctuation are significant.
+  - id: demo_0
 
-    quality_evaluate:
-      mean_median_ratio: [1,800000000000]
-    
-    shapes_collect: 1000
+    # Select one frozen Problab catalog game and exactly one zero-based bet mode.
+    # Sibling modes require separate RunPlans so each mode may own an independent
+    # intent, seed, collection budget, solve, and pending-publication transaction.
+    target:
+      game: 0
+      bet_modes: [0]
 
-  -
-    class_name: fg
-    match_tags: [fg]
-    min_win: 8
-    max_win: 10001
-    collect: 100
-    hit_prob: 6800
-    exp_win: 30
-    basis: 100
-    shape_cfg:
-      # 支援 gaussian, gamma, uniform
-      method: gamma
-      gaussian:
-        k_range: [3,10]
-        mu_center: 30
-        mu_std: 50
-        std_range: [15,100]
-        amp_range: [0.1,0.6]
-        zero_range:
-        spike:
-          mass_range: [0.00001,0.00005]
-          win_range: [5000,10000]
-        biases:
-      gamma:
-        k_range: [3,20]
-        mu_center: 30
-        mu_std: 50
-        std_range: [15,100]
-        amp_range: [0.1,0.6]
-        zero_range: 
-        spike:
-          mass_range: 
-          win_range: 
-        biases:
-          - 
-            range: [35,50]
-            prob: 200000
+    # Stable engine routing key. v2 currently accepts only intent_lp_v2.
+    engine: intent_lp_v2
 
-    # 暫時無作用
-    match_exp:
-      method: 
+    # Stable key of the Designer-owned MathIntent below.
+    intent: demo-designer-intent
 
-    quality_evaluate:
-      mean_median_ratio: [3,10]
-    
-    shapes_collect: 1000
+    # int64 seed for worker 0 and the deterministic sub-seed generator used by
+    # later workers. This is provenance, not a quality-tuning knob. A different
+    # seed intentionally produces a different collection experiment.
+    seed: 4127483647
+
+    # Execution policy. These values cannot alter or relax Designer hard rows.
+    collection:
+      # Positive number of independent raw Machines. Class quotas and max_spins
+      # are statically partitioned by worker index. Workers do not race for a
+      # shared quota or borrow another worker's unused spin budget. The same seed
+      # and worker count therefore reproduce the same streams and merge order;
+      # changing workers changes the stream partition and expected sample set.
+      workers: 4
+
+      # Positive aggregate progress-reporting cadence in produced spins. This
+      # does not create batches, change worker count, or change accepted results.
+      batch_size: 500000
+
+      # Positive hard budget in attempted spins, not accepted samples. Collection
+      # stops with CollectionInsufficient if all Class quotas are not full when
+      # the statically partitioned worker budgets are exhausted. It never retries
+      # indefinitely or silently reduces a Class's requested sample count.
+      max_spins: 10000000000
+
+    # Explicit outer-evaluation boundary. v2 currently emits one canonical LP
+    # candidate and makes no black-box claim about fun or player experience.
+    candidate_selection:
+      # Must be `none` until a separately bounded evaluator is registered.
+      evaluator: none
+      # Must be exactly 1 while evaluator is `none`.
+      max_candidates: 1
+
+    # Both formats are materialized from the same verified AliasTableF64 and
+    # seed bank. Adding a format does not rerun or change the LP.
+    output:
+      # optimal_gacha: legacy gacha_<mode>.json.zst + seed_bank_<mode>.bin.
+      # optimal_artifact_v1: manifest + prob/aliases/seed-bank binary bundle.
+      # The list must be non-empty, contain no duplicates, and use known formats.
+      format:
+        - optimal_gacha
+        - optimal_artifact_v1
+
+      # Common output root:
+      #   <directory>/gacha/game_<gid>
+      #   <directory>/artifact_v1/game_<gid>
+      #
+      # One successful mode first atomically replaces its mode directory under
+      # game_<gid>.pending. A partial set has no manifest and remains invisible
+      # to runtime consumers. When all runtime modes are present, each writer
+      # assembles a complete bundle, writes the manifest last, validates file
+      # digests/topology and the production loader, then atomically replaces the
+      # visible game directory. Pending state is retained so a later single-mode
+      # rerun can converge with the latest verified sibling modes.
+      directory: build/optimizer
+
+# =============================================================================
+# Designer-owned mathematical intent
+# =============================================================================
+#
+# Current human-audit totals:
+#   - Class weights: 1,000,000 exactly (the fixed system denominator);
+#   - derived unconditional RTP: 0.947932;
+#   - requested accepted replay atoms: 3,175,300.
+# These are comments only; the implementation derives and validates them from
+# the values below. RTP is intentionally not entered as a second source of truth.
+#
+# Class order is semantic. For each spin, a worker scans Classes in declaration
+# order, skips locally full quotas, accepts the first Class whose inclusive
+# win_range and tag predicate match, appends once, and stops scanning. Reordering
+# Classes can therefore change boundary ownership and the collected sample set.
+#
+# Common Class field contract:
+#   weight
+#     Positive integer unconditional probability numerator. All weights must sum
+#     exactly to the fixed ClassWeightBase of 1,000,000.
+#
+#   collect.samples
+#     Required accepted replay atoms, not spin attempts.
+#
+#   collect.win_range
+#     Inclusive [min,max] payout-multiplier filter. Endpoints are not reordered.
+#     For intent:true it must exactly match the first/last bucket boundaries.
+#
+#   collect.tags
+#     Logical AND: every `matches` tag must exist and every `mismatches` tag must
+#     be absent. Empty lists add no hidden predicate. Registered tag validity is
+#     checked when collection is bound to the selected game.
+#
+#   design.exp
+#     Exact conditional Class mean. For intent:true, coefficients are empirical
+#     means of the collected atoms in each bucket—never interval midpoints.
+#
+#   design.median
+#     Inclusive allowed range for the weighted lower median. The compiled rows
+#     enforce P(X < lower) <= 0.5 - quantile_epsilon and
+#     P(X <= upper) >= 0.5 using empirical bucket CDF coefficients. The complete
+#     interval must lie inside collect.win_range.
+#
+#   design.subjective.intent
+#     false: keep all accepted replay atoms empirically uniform. The Class gets
+#            no LP bucket variables; its empirical mean/median are prevalidated
+#            and its second moment is fixed in the global CV calculation.
+#     true:  create conditional atomic-bucket mass variables p[k,i]. Within a
+#            bucket, supported replay atoms remain uniform, so final per-atom
+#            mass is ClassProbability * p[k,i] / supported_atom_count[k,i].
+#
+#   buckets (intent:true only)
+#     At least three finite, strictly increasing boundaries. Atomic intervals are
+#     [b_i,b_i+1) except the final [b_last-1,b_last], whose right endpoint is
+#     closed. Empty-support buckets are explicit and forced to p=0.
+#
+#   main_experience.groups (intent:true only)
+#     Non-empty, non-overlapping unions of complete atomic buckets. Group
+#     endpoints must exactly match boundaries. Hard intent constrains Group
+#     totals only, never the shape inside a multi-bucket Group.
+#
+#   main_experience.probability
+#     Hard inclusive [min,max] for the union of all Main Groups, with
+#     0 < min <= max <= 1. If any atomic bucket lies outside Main Groups, max
+#     must be strictly less than 1; static validation rejects the degenerate
+#     OtherTotal=0 contract.
+#
+#   main_experience.prefer
+#     Non-negative Group-level relative weights with positive total and length
+#     equal to groups. They are normalized into a soft target profile. They are
+#     not absolute probabilities. Main profile optimization minimizes one common
+#     worst relative L1 deviation delta across all intent:true Classes.
+#
+#   design.risk (optional)
+#     No hidden default exists. When present, rounds must be >=2 and
+#     0 < collision.max < 1. After collection, actual replay support derives a
+#     per-bucket hard probability cap using the birthday/Poisson approximation.
+#     Duplicate replay snapshots are rejected so nominal sample count cannot
+#     falsely inflate collision capacity. Too little support is reported as
+#     INFEASIBLE_SUPPORT before the LP is solved.
+#
+# Additional hard/derived rows for intent:true Classes are: conditional mass
+# normalization; exact mean; lower-median bounds; Main-total bounds; optional
+# risk caps; global CV second-moment bounds; and, where supported Others exist,
+# the versioned semantic axiom
+# `main-group-dominates-supported-other-average-v1`, requiring every Main Group
+# mass to be at least the mean supported Other-bucket mass. A Group below that
+# threshold is not a principal experience and semantically belongs in Others;
+# the axiom still does not author any internal Group profile.
+
+intents:
+  demo-designer-intent:
+    overall:
+      # Inclusive unconditional coefficient-of-variation hard range. The fixed
+      # Class weights and exact Class means derive M=RTP, then CV is compiled as
+      # linear second-moment bounds M^2 * (1 + CV^2). The empirical second moment
+      # of intent:false Classes contributes a fixed constant; intent:true bucket
+      # second moments remain LP terms.
+      cv:
+        min: 3.0
+        max: 30.0
+
+    classes:
+      # Zero-win base-game outcomes. intent:false deliberately preserves the
+      # collected empirical distribution rather than asking LP to reshape it.
+      - name: zero
+        weight: 709460
+        collect:
+          samples: 1800000
+          win_range: [0.0, 0.0]
+          tags:
+            matches: [bg]
+            mismatches: []
+        design:
+          exp: 0.0
+          median: [0.0, 0.0]
+          subjective:
+            intent: false
+
+      # Small base-game wins. The sole Main Group is [0.00001,1.0), with hard
+      # Main total 50%..99%. Because there is one Group, prefer [1.0] adds no
+      # arbitrary shape. Other visibility protects supported buckets outside it.
+      - name: bg_min
+        weight: 275480
+        collect:
+          samples: 1040000
+          win_range: [0.00001, 10.0]
+          tags:
+            matches: [bg]
+            mismatches: []
+        design:
+          exp: 1.4
+          median: [0.01, 1.4]
+          subjective:
+            intent: true
+            buckets: [0.00001, 1.0, 2.0, 3.0, 8.0, 10.0]
+            main_experience:
+              groups:
+                - [0.00001, 1.0]
+              probability:
+                min: 0.50
+                max: 0.99
+              prefer: [1.0]
+          # risk omitted: no collision cap is added for this Class.
+
+      # Larger base-game wins. Two adjacent one-bucket Main Groups carry
+      # 50%..70% total mass; [0.65,0.35] expresses a soft 65:35 relative profile,
+      # not 65% and 35% absolute Class probability.
+      - name: bg_big
+        weight: 7880
+        collect:
+          samples: 55000
+          win_range: [10.0, 50.0]
+          tags:
+            matches: [bg]
+            mismatches: []
+        design:
+          exp: 17.0
+          median: [10, 17]
+          subjective:
+            intent: true
+            # [10,11), [11,15), [15,20), [20,30), [30,50]. A payout of
+            # exactly 15.0 belongs to [15,20), not [11,15).
+            buckets: [10.0, 11.0, 15.0, 20.0, 30.0, 50.0]
+            main_experience:
+              groups:
+                - [11.0, 15.0]
+                - [15.0, 20.0]
+              probability:
+                min: 0.50
+                max: 0.70
+              prefer: [0.65,0.35]
+
+      # Rare high base-game wins. A collision policy is enabled: actual unique
+      # support must make every bucket cap and aggregate capacity feasible.
+      - name: bg_max
+        weight: 80
+        collect:
+          samples: 2000
+          win_range: [50.0, 500.0]
+          tags:
+            matches: [bg]
+            mismatches: []
+        design:
+          exp: 100.0
+          median: [50.0, 100.0]
+          subjective:
+            intent: true
+            buckets: [50.0, 55.0, 80.0, 120.0, 180.0, 250.0, 350.0, 500.0]
+            main_experience:
+              groups:
+                - [55.0,80.0]
+              probability:
+                min: 0.50
+                max: 0.80
+              prefer: [1.0]
+          risk:
+            rounds: 100000
+            collision:
+              max: 0.05
+
+      # Entry free-game outcomes. Collision protection is intentionally enabled
+      # here with a shorter observation horizon and a looser maximum.
+      - name: fg_01
+        weight: 3440
+        collect:
+          samples: 45000
+          win_range: [8.0,25.0]
+          tags:
+            matches: [fg]
+            mismatches: []
+        design:
+          exp: 12.0
+          median: [8.0,12.0]
+          subjective:
+            intent: true
+            buckets: [8.0,10.0,15.0,25.0]
+            main_experience:
+              groups:
+                - [10.0,15.0]
+              probability:
+                min: 0.40
+                max: 0.70
+              prefer: [1.0]
+          risk:
+            rounds: 30000
+            collision:
+              max: 0.3
+
+      # Mid-low free-game outcomes. No risk block means no collision cap.
+      - name: fg_02
+        weight: 720
+        collect:
+          samples: 50000
+          win_range: [25.0,50.0]
+          tags:
+            matches: [fg]
+            mismatches: []
+        design:
+          exp: 30.0
+          median: [25.0,30.0]
+          subjective:
+            intent: true
+            buckets: [25.0, 28.0, 35.0,50.0]
+            main_experience:
+              groups:
+                - [25.0,28.0]
+              probability:
+                min: 0.60
+                max: 0.99
+              prefer: [1.0]
+
+      # Mid free-game outcomes. Two Main Groups have a strong soft 90:10 profile
+      # while their combined absolute mass remains within 60%..95%.
+      - name: fg_03
+        weight: 1494
+        collect:
+          samples: 80000
+          win_range: [50.0,100.0]
+          tags:
+            matches: [fg]
+            mismatches: []
+        design:
+          exp: 60.0
+          median: [50.0,60.0]
+          subjective:
+            intent: true
+            buckets: [50.0,60.0,75.0,100.0]
+            main_experience:
+              groups:
+                - [50.0,60.0]
+                - [60.0,75.0]
+              probability:
+                min: 0.6
+                max: 0.95
+              prefer: [0.9,0.1]
+
+      # High free-game outcomes with one Main Group and no collision policy.
+      - name: fg_04
+        weight: 1300
+        collect:
+          samples: 60000
+          win_range: [100.0,300.0]
+          tags:
+            matches: [fg]
+            mismatches: []
+        design:
+          exp: 160.0
+          median: [100.0,160.0]
+          subjective:
+            intent: true
+            buckets: [100.0,125.0,150.0,250.0,300.0]
+            main_experience:
+              groups:
+                - [125,150]
+              probability:
+                min: 0.4
+                max: 0.65
+              prefer: [1.0]
+
+      # Very high free-game outcomes with one Main Group.
+      - name: fg_05
+        weight: 100
+        collect:
+          samples: 40000
+          win_range: [300.0,500.0]
+          tags:
+            matches: [fg]
+            mismatches: []
+        design:
+          exp: 330
+          median: [300.0,330.0]
+          subjective:
+            intent: true
+            buckets: [300.0,330.0,360.0,420.0,500.0]
+            main_experience:
+              groups:
+                - [300.0,330.0]
+              probability:
+                min: 0.5
+                max: 0.85
+              prefer: [1.0]
+
+      # Extremely high free-game outcomes with sparse requested support.
+      - name: fg_06
+        weight: 35
+        collect:
+          samples: 3000
+          win_range: [500.0,750.0]
+          tags:
+            matches: [fg]
+            mismatches: []
+        design:
+          exp: 520
+          median: [500.0,520.0]
+          subjective:
+            intent: true
+            buckets: [500.0,525.0,540.0,600.0,750]
+            main_experience:
+              groups:
+                - [500.0,525.0]
+              probability:
+                min: 0.5
+                max: 0.99
+              prefer: [1.0]
+
+      # Rarest free-game tail. [750,850) spans two atomic buckets:
+      # [750,780) and [780,850). If both receive replay support, this is the
+      # current configuration's Main Group that activates the internal-visibility
+      # stage; the stage protects both siblings without assigning a target split.
+      - name: fg_07
+        weight: 11
+        collect:
+          samples: 300
+          win_range: [750.0,1000.0]
+          tags:
+            matches: [fg]
+            mismatches: []
+        design:
+          exp: 780
+          median: [750.0,780.0]
+          subjective:
+            intent: true
+            buckets: [750.0,780.0,850.0,1000.0]
+            main_experience:
+              groups:
+                - [750.0,850.0]
+              probability:
+                min: 0.4
+                max: 0.95
+              prefer: [1.0]
+
+# =============================================================================
+# Engineering-owned numerical controls
+# =============================================================================
+#
+# Every field is required, finite/bounded as documented, reported, and included
+# in the configuration hash. These are numerical safety and resolution controls;
+# they must never be changed automatically after an infeasible result to make a
+# Designer contract appear feasible.
+engine_options:
+  # Positive tolerance for scaled replay of original semantic rows after a
+  # backend solve. This is the final defense against an “optimal” backend result
+  # whose returned vector violates the authored model beyond accepted error.
+  feasibility_tolerance: 1.0e-9
+
+  # Positive tolerance for backend objective comparisons. This governs solver
+  # objective convergence/comparison, not semantic row replay.
+  optimality_tolerance: 1.0e-9
+
+  # Strict lower-median epsilon. Must satisfy 0 < epsilon < 0.5.
+  quantile_epsilon: 1.0e-9
+
+  # Positive dimensionless relative-L1 safety margin added to the final feasible
+  # Main-profile upper bracket before locking: fixed_delta=min(2,upper+tolerance).
+  # It is not an absolute probability allowance.
+  profile_tolerance: 1.0e-8
+
+  # Positive dimensionless retention margin subtracted from the last feasible
+  # rho for both visibility stages, clamped at zero. It is not an absolute
+  # bucket-probability tolerance.
+  visibility_tolerance: 1.0e-8
+
+  # Positive fixed intermediate-probe budget after endpoint checks for common
+  # Main-profile delta. If delta=0 is feasible, no intermediate bisection runs;
+  # otherwise the engine performs exactly this many midpoint probes.
+  profile_bisection_iterations: 40
+
+  # Positive fixed intermediate-probe budget after rho=0 and rho=1 checks for
+  # common normalized Other-bucket visibility. An infeasible probe only tightens
+  # the bracket and never changes the Run's hard-feasibility status.
+  other_visibility_bisection_iterations: 40
+
+  # Positive fixed intermediate-probe budget after rho=0 and rho=1 checks for
+  # common normalized visibility among supported siblings inside eligible Main
+  # Groups. If no Group has at least two supported buckets, the stage is reported
+  # as inapplicable and does not call the solver.
+  main_group_internal_visibility_bisection_iterations: 40

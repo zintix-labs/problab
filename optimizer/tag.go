@@ -15,6 +15,8 @@
 package optimizer
 
 import (
+	"fmt"
+
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/buf"
 )
@@ -58,6 +60,33 @@ func RegisterTag(tag string, isTag IsTag) bool {
 		return true
 	}
 	return false
+}
+
+// NewRegisterTags resets the shared tag registry to exactly the package
+// baseline ({bg, fg}) and then registers tags for exactly one game's
+// collection run. It exists so optimizer/v2 can reuse this legacy,
+// process-wide registry safely across multiple games in one process without
+// accumulating stale entries or silently colliding on reused names: instead
+// of detecting collisions, it makes them structurally impossible by starting
+// from the same known baseline every time.
+//
+// Concurrency precondition (caller's responsibility): this function mutates
+// package-level state with no internal synchronization, matching every other
+// function in this file. It must never be called concurrently with itself,
+// with RegisterTag, or with GetTagger from another goroutine. In practice
+// this means: within one process, collection Runs that call this function
+// (i.e. optimizer/v2's Collector.Collect) must execute strictly
+// sequentially, never in parallel, for as long as this function is in use.
+// Do not remove this constraint without adding real synchronization to
+// tagFns first.
+func NewRegisterTags(tags map[string]IsTag) error {
+	tagFns = map[string]tagFn{bg: IsOnlyBg, fg: IsEntryFree}
+	for name, fn := range tags {
+		if !RegisterTag(name, fn) {
+			return fmt.Errorf("register tag %q: collides with built-in tag name", name)
+		}
+	}
+	return nil
 }
 
 type Tagger struct {
