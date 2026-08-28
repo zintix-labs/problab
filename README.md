@@ -118,15 +118,36 @@ sps : 19,010,181 spins/sec
 
 ```
 
-### Built-in Parameter Tuning (Optimizer)
+### Built-in Optimizer (`optimizer/v2` + `cmd/opt`)
 
-Problab also includes an early-stage **optimizer toolchain** for math workflows:
+Problab ships a **linear-programming-based math design optimizer**, wired into the
+CLI at `cmd/opt`. It is not a curve-fitting or generate-and-filter tool — it treats
+the designer's YAML as an explicit, typed intent contract and proves feasibility
+before returning a result:
 
-- Collects discrete win samples from the same execution path
-- Generates candidate shapes with configurable generators and filters
-- Outputs reusable **optimal artifacts** for runtime sampling / deterministic replay
+- **Discrete, semantic modeling** — outcomes are grouped into `Class`es and
+  `atomic bucket`s with explicit `Main Group` / `Other` visibility, not an assumed
+  continuous or Gaussian shape.
+- **Hard vs. soft, by construction** — designer hard constraints (exact mean,
+  median range, CV range, Main total, collision-risk caps) must hold exactly, or
+  the run reports a typed `INFEASIBLE_*` status with a diagnosed cause; only
+  explicitly declared soft preferences (Main profile shape, bucket visibility)
+  are allowed to trade off, and how much is reported and locked, never silently
+  absorbed.
+- **No silent relaxation** — infeasible is infeasible: the optimizer never
+  auto-widens tolerances, retries with a different seed, or drops a constraint to
+  force a result.
+- **Real collected outcomes, not interval midpoints** — every LP coefficient
+  (mean, second moment, CDF) is computed from actual simulated spins collected
+  through the same execution path described above, then replayed and
+  re-verified at publication time.
 
-The goal is to close the loop of **simulate → verify → tune → reproduce** on a single engine.
+Run it with `go run ./cmd/opt` against `cmd/opt/opt_cfg.yaml`, or use the
+`optimizer/v2` package directly as a library.
+
+> See [`cmd/opt/problab-optimizer-v2-design-intent-and-constraint-knowledge.md`](cmd/opt/problab-optimizer-v2-design-intent-and-constraint-knowledge.md)
+> for the full design rationale and constraint reference — including why the
+> optimizer deliberately avoids presupposing continuous/Gaussian distributions.
 
 > Note: this module is still evolving and APIs/configs may change before v1.0.0.
 

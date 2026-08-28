@@ -159,15 +159,33 @@ RTP 95%置信区间: [95.42%, 95.69%]
 ...
 ```
 
-### 内置参数调优（Optimizer）
+### 内置 Optimizer（`optimizer/v2` + `cmd/opt`）
 
-Problab 还提供一个面向数学设计与工程流程的 **参数调优工具链**：
+Problab 提供一套 **以线性规划（LP）为核心的数学设计 Optimizer**，接入 CLI 入口
+`cmd/opt`。它不是曲线拟合或「生成候选再筛选」的工具——它把设计师写的 YAML
+当成一份明确、可分类型别的意图契约，先证明可行性，才会回传结果：
 
-- 基于实际运行路径 **采样/收集** 离散得分样本
-- 通过可配置的形状生成与筛选策略，生成满足目标约束的候选分布
-- 产出可直接用于运行时复现的 **优化结果文件**（用于抽样与回放）
+- **离散、语意化建模**——结果被分组成 `Class` 与 `atomic bucket`，并有明确的
+  `Main Group` / `Other` 可见度语意，而不是预设一个连续或常态分布形状。
+- **Hard/soft 从架构上就分开**——设计师的 hard 条件（精确均值、中位数区间、
+  CV 区间、Main 总量、碰撞风险上限）必须被精确满足，否则回传带诊断原因的
+  typed `INFEASIBLE_*` 状态；只有明确宣告的 soft 偏好（Main profile 形状、
+  bucket 能见度）才允许有取舍，而且取舍多少会被量化回报并锁定，不会被悄悄
+  吸收掉。
+- **不做静默放宽**——无解就是无解：optimizer 不会自动放宽容忍度、不会换个
+  seed 重试、也不会为了硬凑出一个结果而丢掉某条约束。
+- **系数来自真实收集样本，不是区间中点**——每一条 LP 系数（均值、二阶矩、
+  CDF）都来自透过上述同一条执行路径实际模拟出的 spin 结果，并在发布前重新
+  playback 验证。
 
-它的目标是让「模拟、验算、调优、复现」在同一套引擎与数据结构上闭环完成。
+可用 `go run ./cmd/opt`（搭配 `cmd/opt/opt_cfg.yaml`）执行，也可以直接把
+`optimizer/v2` 当作库来用。
+
+> 完整设计理念与约束参考，见
+> [`cmd/opt/problab-optimizer-v2-design-intent-and-constraint-knowledge.md`](cmd/opt/problab-optimizer-v2-design-intent-and-constraint-knowledge.md)
+>（包含为什么这套 optimizer 刻意不预设连续/常态分布）。
+
+> 说明：该模块仍处于早期阶段，接口与配置格式可能在 v1.0.0 之前演进。
 
 ### Optimal Artifact 运行方式
 
