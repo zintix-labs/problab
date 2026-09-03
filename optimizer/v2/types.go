@@ -460,13 +460,16 @@ type Diagnostic struct {
 
 // AdvisoryCode identifies a non-fatal static configuration topology risk. An
 // advisory never relaxes or adds mathematical constraints; it exposes a fact
-// that can change first-match collection ownership or leave a predicate-local
-// payout interval uncovered.
+// that can change first-match collection ownership.
 type AdvisoryCode string
 
 const (
 	AdvisoryClassCollectionOverlap AdvisoryCode = "ClassCollectionOverlap"
-	AdvisoryClassCollectionGap     AdvisoryCode = "ClassCollectionGap"
+	// AdvisoryClassCollectionGap is retained for compatibility with persisted
+	// reports and external consumers. AnalyzeCollectionTopology no longer emits
+	// it because intentional collection gaps are valid selection semantics and
+	// do not imply that Classes must densely cover the payout domain.
+	AdvisoryClassCollectionGap AdvisoryCode = "ClassCollectionGap"
 )
 
 // Advisory is structured separately from Diagnostic because it never carries

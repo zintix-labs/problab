@@ -457,11 +457,12 @@ func TestConfigValidateSemanticInvariants(t *testing.T) {
 	}
 }
 
-// TestAnalyzeCollectionTopologySeparatesNonFatalFactsFromHardValidation locks
-// the advisory boundary: same-predicate overlaps and gaps are explainable
-// collection risks, while ranges under a different predicate are not compared
-// because config alone cannot prove the game tags are jointly reachable.
-func TestAnalyzeCollectionTopologySeparatesNonFatalFactsFromHardValidation(t *testing.T) {
+// TestAnalyzeCollectionTopologyReportsOverlapButAllowsGaps locks the advisory
+// boundary: same-predicate overlaps affect declaration-order ownership and are
+// reported, while an intentional uncovered interval is a valid Class selection
+// choice. Ranges under a different predicate are not compared because config
+// alone cannot prove that the game tags are jointly reachable.
+func TestAnalyzeCollectionTopologyReportsOverlapButAllowsGaps(t *testing.T) {
 	classes := []ClassIntent{
 		{Name: "first", Collect: CollectIntent{WinRange: ClosedInterval{0, 10}, Tags: TagFilters{Matches: []string{"bg"}}}},
 		{Name: "second", Collect: CollectIntent{WinRange: ClosedInterval{10, 20}, Tags: TagFilters{Matches: []string{"bg"}}}},
@@ -470,8 +471,8 @@ func TestAnalyzeCollectionTopologySeparatesNonFatalFactsFromHardValidation(t *te
 	}
 	intent := MathIntent{Classes: classes}
 	got := AnalyzeCollectionTopology("topology", intent)
-	if len(got) != 2 {
-		t.Fatalf("advisories=%+v, want one overlap and one gap", got)
+	if len(got) != 1 {
+		t.Fatalf("advisories=%+v, want only the overlap advisory", got)
 	}
 	if got[0].Code != AdvisoryClassCollectionOverlap ||
 		!strings.Contains(got[0].Message, `"first" and "second"`) ||
@@ -480,14 +481,6 @@ func TestAnalyzeCollectionTopologySeparatesNonFatalFactsFromHardValidation(t *te
 			"intents.topology.classes[1].collect",
 		}) {
 		t.Fatalf("overlap advisory=%+v", got[0])
-	}
-	if got[1].Code != AdvisoryClassCollectionGap ||
-		!strings.Contains(got[1].Message, "(20, 25)") ||
-		!reflect.DeepEqual(got[1].SourcePaths, []string{
-			"intents.topology.classes[1].collect.win_range",
-			"intents.topology.classes[2].collect.win_range",
-		}) {
-		t.Fatalf("gap advisory=%+v", got[1])
 	}
 	if repeated := AnalyzeCollectionTopology("topology", intent); !reflect.DeepEqual(repeated, got) {
 		t.Fatalf("topology analysis is nondeterministic: first=%+v repeated=%+v", got, repeated)

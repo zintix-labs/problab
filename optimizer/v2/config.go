@@ -363,10 +363,16 @@ func (intent MathIntent) ExpectedRTP() float64 {
 	return total.Value()
 }
 
-// AnalyzeCollectionTopology reports deterministic, non-fatal overlap and gap
-// facts among Classes that have the same tag predicate. Different predicates
-// are deliberately not compared: custom game tags may be mutually exclusive in
+// AnalyzeCollectionTopology reports deterministic, non-fatal overlap facts
+// among Classes that have the same tag predicate. Different predicates are
+// deliberately not compared: custom game tags may be mutually exclusive in
 // ways the configuration layer cannot prove without executing game logic.
+//
+// Gaps are intentionally not reported. A collection range selects the outcomes
+// that belong to a Class; the configuration does not require same-predicate
+// Classes to exhaustively cover every payout value. Reporting a continuous
+// interval gap would therefore warn about a valid design choice and cannot, by
+// itself, prove that any reachable game outcome was omitted.
 func AnalyzeCollectionTopology(intentID string, intent MathIntent) []Advisory {
 	groups := make(map[string][]int)
 	for index, class := range intent.Classes {
@@ -402,43 +408,6 @@ func AnalyzeCollectionTopology(intentID string, intent MathIntent) []Advisory {
 						fmt.Sprintf("intents.%s.classes[%d].collect", intentID, b),
 					},
 				})
-			}
-		}
-
-		sort.SliceStable(indexes, func(i, j int) bool {
-			left := intent.Classes[indexes[i]].Collect.WinRange
-			right := intent.Classes[indexes[j]].Collect.WinRange
-			if left.Lower() != right.Lower() {
-				return left.Lower() < right.Lower()
-			}
-			if left.Upper() != right.Upper() {
-				return left.Upper() < right.Upper()
-			}
-			return indexes[i] < indexes[j]
-		})
-		if len(indexes) < 2 {
-			continue
-		}
-		coveredThrough := intent.Classes[indexes[0]].Collect.WinRange.Upper()
-		coveringIndex := indexes[0]
-		for _, index := range indexes[1:] {
-			class := intent.Classes[index]
-			if class.Collect.WinRange.Lower() > coveredThrough {
-				advisories = append(advisories, Advisory{
-					Code: AdvisoryClassCollectionGap,
-					Message: fmt.Sprintf(
-						"classes with the same tag predicate leave payout interval (%.12g, %.12g) uncovered between %q and %q",
-						coveredThrough, class.Collect.WinRange.Lower(), intent.Classes[coveringIndex].Name, class.Name,
-					),
-					SourcePaths: []string{
-						fmt.Sprintf("intents.%s.classes[%d].collect.win_range", intentID, coveringIndex),
-						fmt.Sprintf("intents.%s.classes[%d].collect.win_range", intentID, index),
-					},
-				})
-			}
-			if class.Collect.WinRange.Upper() > coveredThrough {
-				coveredThrough = class.Collect.WinRange.Upper()
-				coveringIndex = index
 			}
 		}
 	}
