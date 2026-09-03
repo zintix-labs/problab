@@ -4,7 +4,7 @@ go 1.25.2
 
 require (
 	github.com/cheggaaa/pb/v3 v3.1.7
-	github.com/go-chi/chi/v5 v5.2.3
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/klauspost/compress v1.18.2
 	github.com/mattn/go-runewidth v0.0.19
 	golang.org/x/crypto v0.55.0
