@@ -15,9 +15,6 @@
 package problab
 
 import (
-	"crypto/rand"
-	"math"
-	"math/big"
 	"sync"
 
 	"github.com/zintix-labs/problab/dto"
@@ -66,7 +63,6 @@ type OptimalRuntime struct {
 	Bank   [][]byte // 對應每個 betmode，每個 []byte 是完整的 SeedBank
 }
 
-// initseed 用於記錄出生時的 seed（追溯/重現的基礎資訊）；完整審計仍以 Core 的 Snapshot/Restore 為準。
 type Machine struct {
 	gameName    string              // 遊戲名稱（來自 GameSetting.GameName，主要用於觀測/日誌）
 	gameId      spec.GID            // 遊戲 ID（Catalog 內唯一；用於路由與查表）
@@ -76,47 +72,48 @@ type Machine struct {
 	SpinRequest *buf.SpinRequest    // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
 	SpinResult  *buf.SpinResult     // 可重用的結果 buffer（熱路徑；每次 Spin 會覆寫）
 	mu          sync.Mutex          // 防併發鎖：保護可重用 buffers 與核心狀態一致性
-	initseed    int64               // 出生 seed（便於追溯；完整重現請用 Snapshot/Restore）
+	rngMode     rngMode             // deterministic 或 production new-cycle reseed lifecycle
+	poolSlot    uint64              // MachinePool 的穩定 slot identity；非 pool Machine 為 0
+	poolGen     uint64              // 此 slot 的重建 generation；非 pool Machine 為 0
 	optimal     *optimalrt.Artifact // Problab instance 共用的不可變優化資料
 }
 
-// newMachine 以「隨機 seed」建立 Machine。
-//
-// 這裡使用 crypto/rand 產生 seed 是為了：
-//   - 在對外服務情境避免可預測 RNG
-//   - 同時保留可追溯性（seed 會被記錄在 Machine.initseed）
-//
-// seed 只保證了新建的Machine起點，如果需要在任意局後將機台"重設"到任意Core節點，請利用Snapshot Restore來操作
-func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, isSim bool, optimal *optimalrt.Artifact) (*Machine, error) {
-	seed, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	if err != nil {
-		return nil, errs.Wrap(err, "new crypto seed error in go std lib")
-	}
-	return newMachineWithSeed(gs, reg, cf, seed.Int64(), isSim, optimal)
-}
+type rngMode uint8
 
-// newMachineWithSeed 以指定 seed 建立 Machine。
+const (
+	rngDeterministic rngMode = iota
+	rngProduction
+)
+
+// newMachineWithSeed 以指定 opaque byte seed 建立 Machine。
 //
 // 這是最常用的「可重現」入口：同一份 GameSetting + 同一個 seed，應能得到一致的隨機序列（取決於 Core 實作）。
 //
 // 建立流程（概念）：
-//  1. core.New(cf.NewWithSeed(seed)) 建出 RNG 核心
+//  1. cf.New(seed) + core.New(...) 建出 RNG 核心
 //  2. slot.NewGame(gs, reg, core, isSim) 依設定 + registry 建出 Slot 遊戲執行核心
 //  3. 初始化 Machine 需要的 buffers（SpinRequest/SpinResult）
 //  4. 如果啟用優化（UseOptimal = true），使用 Problab 預先解析的共用 Artifact
-func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, isSim bool, optimal *optimalrt.Artifact) (*Machine, error) {
+func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, isSim bool, optimal *optimalrt.Artifact, mode rngMode) (*Machine, error) {
+	seed = append([]byte(nil), seed...)
+	rng, err := cf.New(seed)
+	if err != nil {
+		return nil, errs.Wrap(err, "create PRNG")
+	}
+	if rng == nil {
+		return nil, errs.NewFatal("core factory returned nil PRNG")
+	}
 	m := &Machine{
 		gameName:    gs.GameName,
 		gameId:      spec.GID(gs.GameID),
-		core:        core.New(cf.New(seed)),
+		core:        core.New(rng),
 		gh:          nil,
 		BetUnits:    nil,
 		SpinRequest: nil,
 		SpinResult:  nil,
-		initseed:    seed,
+		rngMode:     mode,
 		optimal:     optimal,
 	}
-	var err error
 	m.gh, err = slot.NewGame(gs, reg, m.core, isSim)
 	if err != nil {
 		return nil, err
@@ -148,8 +145,15 @@ func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 		return dto.SpinResult{}, err
 	}
 
+	isNewCycle := req.StartState == nil || len(req.StartState.StartCoreSnap) == 0
+	if isNewCycle && m.rngMode == rngProduction {
+		if err := m.core.Reseed(); err != nil {
+			return dto.SpinResult{}, errs.NewFatal("reseed PRNG before new game cycle: " + err.Error())
+		}
+	}
+
 	// 2.5. 優化邏輯：如果新局且啟用優化，從 Gacha 中 Pick 並設置 StartCoreSnap
-	if req.StartState == nil || len(req.StartState.StartCoreSnap) == 0 {
+	if isNewCycle {
 		// 新局，且外部沒有指定 StartCoreSnap
 		if m.optimal != nil {
 			// 有開啟優化

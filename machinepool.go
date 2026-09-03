@@ -17,6 +17,7 @@ package problab
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -41,8 +42,7 @@ type MachinePool struct {
 	gs            *spec.GameSetting
 	logic         *slot.LogicRegistry
 	cf            core.PRNGFactory
-	initSeed      int64
-	seedMaker     *SeedMaker
+	initSeed      []byte              // 敏感 root seed，只供 slot/generation 派生
 	optimal       *optimalrt.Artifact // Problab instance 共用的不可變優化資料
 	pool          chan *Machine       // 可用機台的通道，用於取得和歸還機台
 	broken        chan *Machine       // 壞掉機台的通道，用於送修或丟棄壞掉機台
@@ -68,23 +68,23 @@ type MachinePool struct {
 // 初始化內容包含：
 //   - 建立 pool（可用機台）與 broken（壞機台）兩個 channel
 //   - 預先建立 n 台機台並放入 pool，以便立即提供服務
-func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, optimal *optimalrt.Artifact) (*MachinePool, error) {
+func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, optimal *optimalrt.Artifact) (*MachinePool, error) {
 	n = max(1, n) // 確保機台數量至少為1
+	seed = append([]byte(nil), seed...)
 	p := &MachinePool{
-		gameName:  gs.GameName,
-		gameId:    gs.GameID,
-		gs:        gs,
-		logic:     reg,
-		cf:        cf,
-		initSeed:  seed,
-		seedMaker: NewSeedMaker(seed),
-		optimal:   optimal,
-		pool:      make(chan *Machine, n),   // 建立有緩衝的機台通道，容量為 n
-		broken:    make(chan *Machine, 100), // 建立有緩衝的壞掉機台通道，容量固定為100
-		done:      make(chan struct{}),
-		poolsize:  n,
-		inflight:  atomic.Int32{},
-		rebuild:   atomic.Int32{},
+		gameName: gs.GameName,
+		gameId:   gs.GameID,
+		gs:       gs,
+		logic:    reg,
+		cf:       cf,
+		initSeed: seed,
+		optimal:  optimal,
+		pool:     make(chan *Machine, n),   // 建立有緩衝的機台通道，容量為 n
+		broken:   make(chan *Machine, 100), // 建立有緩衝的壞掉機台通道，容量固定為100
+		done:     make(chan struct{}),
+		poolsize: n,
+		inflight: atomic.Int32{},
+		rebuild:  atomic.Int32{},
 	}
 
 	p.closeReason.Store("")
@@ -94,13 +94,37 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 
 	// 上架機台，將 n 台新機台放入池中
 	for i := 0; i < n; i++ {
-		m, err := newMachineWithSeed(gs, reg, cf, p.seedMaker.Next(), false, optimal)
+		seed, err := p.machineSeed(uint64(i), 0)
 		if err != nil {
 			return nil, err
 		}
+		m, err := newMachineWithSeed(gs, reg, cf, seed, false, optimal, rngProduction)
+		if err != nil {
+			return nil, err
+		}
+		m.poolSlot = uint64(i)
+		m.poolGen = 0
 		p.pool <- m
 	}
 	return p, nil
+}
+
+func (p *MachinePool) machineSeed(slot, generation uint64) ([]byte, error) {
+	poolSize := uint64(p.poolsize)
+	if slot >= poolSize {
+		return nil, errs.NewFatal("MachinePool slot is out of range")
+	}
+	if generation > (math.MaxUint64-slot)/poolSize {
+		return nil, errs.NewFatal("MachinePool seed generation overflow")
+	}
+	seed, err := p.cf.DeriveSeed(p.initSeed, core.StreamID{
+		Domain: "runtime/machine",
+		Index:  generation*poolSize + slot,
+	})
+	if err != nil {
+		return nil, errs.Wrap(err, "derive MachinePool seed")
+	}
+	return append([]byte(nil), seed...), nil
 }
 
 // Close 進入關閉狀態：
@@ -228,14 +252,28 @@ func (p *MachinePool) Spin(ctx context.Context, req *dto.SpinRequest) (dto dto.S
 				return
 			}
 
-			// 2) 補一台新機台（維持容量）
-			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, p.seedMaker.Next(), false, p.optimal)
+			// 2) 補同一個 stable slot 的下一個 generation（維持容量）
+			if m.poolGen == math.MaxUint64 {
+				err = errs.NewFatal(fmt.Sprintf("machine %s seed generation overflow", p.gameName))
+				p.closeWithReason("rebuild_failed")
+				return
+			}
+			nextGeneration := m.poolGen + 1
+			seed, deriveErr := p.machineSeed(m.poolSlot, nextGeneration)
+			if deriveErr != nil {
+				err = errs.NewFatal(fmt.Sprintf("machine %s can not derive rebuild seed: %v", p.gameName, deriveErr))
+				p.closeWithReason("rebuild_failed")
+				return
+			}
+			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, seed, false, p.optimal, rngProduction)
 			p.rebuild.Add(1)
 			if buildErr != nil {
 				err = errs.NewFatal(fmt.Sprintf("machine %s can not build", p.gameName))
 				p.closeWithReason("rebuild_failed")
 				return
 			}
+			newMachine.poolSlot = m.poolSlot
+			newMachine.poolGen = nextGeneration
 
 			// 補機前再看一次是否已關閉（避免並行 Close 後 send / block）
 			select {

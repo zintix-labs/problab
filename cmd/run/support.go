@@ -82,7 +82,7 @@ func bindVar() {
 func executeSimulator() { // 取得spin數
 	cfg.valid() // 基本檢查
 
-	lab, err := demo.NewProbLabWithOptimalDir(demo.OptimalDir)
+	lab, err := demo.NewProbLab()
 	if err != nil {
 		log.Fatal(err)
 	}

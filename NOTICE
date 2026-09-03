@@ -10,5 +10,13 @@ This project includes or is derived from the following third-party software:
 Portions of the bounded random generation logic and the Ziggurat-based exponential
 sampling are adapted from the Go standard library sources referenced above.
 
+2) golang.org/x/crypto/chacha20
+   Copyright (c) 2009 The Go Authors. All rights reserved.
+   License: BSD 3-Clause
+   Source: https://pkg.go.dev/golang.org/x/crypto/chacha20
+
+The default PRNG uses the Go-maintained ChaCha20 implementation from this
+module.
+
 A copy of the BSD 3-Clause License is provided in:
 third_party/licenses/GO_BSD-3-Clause.txt

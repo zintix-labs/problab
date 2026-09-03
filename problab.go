@@ -36,9 +36,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"io/fs"
-	"math"
-	"math/big"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -108,6 +107,8 @@ type Problab struct {
 	cat                *catalog.Catalog
 	reg                *slot.LogicRegistry
 	cf                 core.PRNGFactory
+	seedEntropy        io.Reader
+	seedEntropyMu      sync.Mutex
 	snapshotFormat     string
 	sum                []catalog.Summary
 	optimalFS          fs.FS
@@ -143,6 +144,15 @@ func WithOptimalDir(root string) ProblabOption {
 	}
 }
 
+// WithSeedEntropy configures the entropy source used only when Problab asks
+// the Factory to generate a new root seed. It is not the per-cycle reseed
+// provider; that capability belongs to the concrete PRNG Factory.
+func WithSeedEntropy(entropy io.Reader) ProblabOption {
+	return func(p *Problab) {
+		p.seedEntropy = entropy
+	}
+}
+
 // New 建立一個 Problab instance。
 //
 // 這是「組裝階段（registration/build）」的入口：
@@ -175,11 +185,12 @@ func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts .
 		return nil, err
 	}
 	lab := &Problab{
-		cat:        cata,
-		reg:        reg,
-		cf:         cf,
-		optimalFS:  nil,
-		optimalDir: "",
+		cat:         cata,
+		reg:         reg,
+		cf:          cf,
+		seedEntropy: rand.Reader,
+		optimalFS:   nil,
+		optimalDir:  "",
 	}
 
 	// 應用選項
@@ -189,7 +200,17 @@ func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts .
 	if lab.optimalSourceCount > 1 {
 		return nil, errs.NewFatal("WithOptimalFS and WithOptimalDir are mutually exclusive")
 	}
-	probe := lab.cf.New(0)
+	if lab.seedEntropy == nil {
+		return nil, errs.NewFatal("seed entropy reader required")
+	}
+	probeSeed, err := lab.generateSeed()
+	if err != nil {
+		return nil, errs.Wrap(err, "generate PRNG probe seed")
+	}
+	probe, err := lab.cf.New(probeSeed)
+	if err != nil {
+		return nil, errs.Wrap(err, "create PRNG probe")
+	}
 	if probe == nil {
 		return nil, errs.NewFatal("core factory returned nil PRNG")
 	}
@@ -199,6 +220,9 @@ func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts .
 	}
 	if len(probeSnapshot) == 0 {
 		return nil, errs.NewFatal("PRNG snapshot must not be empty")
+	}
+	if err := probe.Restore(append([]byte(nil), probeSnapshot...)); err != nil {
+		return nil, errs.Wrap(err, "restore PRNG probe snapshot")
 	}
 	snapshotFormat := core.SnapshotFormatOfPRNG(probe)
 	lab.snapshotFormat = snapshotFormat
@@ -212,6 +236,28 @@ func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts .
 	}
 
 	return lab, nil
+}
+
+func (p *Problab) generateSeed() ([]byte, error) {
+	p.seedEntropyMu.Lock()
+	defer p.seedEntropyMu.Unlock()
+	seed, err := p.cf.GenerateSeed(p.seedEntropy)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), seed...), nil
+}
+
+// DeriveSeed derives a deterministic child seed using this Problab's Factory.
+func (p *Problab) DeriveSeed(parent []byte, stream core.StreamID) ([]byte, error) {
+	if err := p.ensureOpen(); err != nil {
+		return nil, err
+	}
+	seed, err := p.cf.DeriveSeed(append([]byte(nil), parent...), stream)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), seed...), nil
 }
 
 // SnapshotFormat returns the optional identifier used by persisted PRNG
@@ -476,12 +522,13 @@ func (p *Problab) Summary() ([]catalog.Summary, error) {
 //
 // 行為：
 //  1. 由 Catalog 取得對應的 GameSetting（通常來自 fs.FS 內的 YAML/JSON）。
-//  2. 以 CoreFactory 產生 RNG 核心（seed 由 crypto/rand 產生）。
+//  2. 由 CoreFactory.GenerateSeed 產生 root seed，再建立 RNG 核心。
 //  3. 透過 LogicRegistry 依據 GameSetting 內的 LogicKey 建出可執行的遊戲邏輯。
 //
 // isSim 用於區分「模擬/分析」與「對外服務」的執行模式（例如：某些dto深拷貝行為可能只在 prod 開啟以增加 sim 的性能）。
 //
-// 注意：seed 會被記錄在 Machine 內（initseed），用於追溯/重現；真正的可審計能力以 Core 的 Snapshot/Restore 合約為準。
+// root seed 不保存在 Machine；可審計重播以受控的 Core Snapshot/Restore
+// 與外部 settlement audit record 為準。
 func (p *Problab) NewMachine(id spec.GID, isSim bool) (*Machine, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")
@@ -494,7 +541,15 @@ func (p *Problab) NewMachine(id spec.GID, isSim bool) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMachine(gs, p.reg, p.cf, isSim, optimal)
+	seed, err := p.generateSeed()
+	if err != nil {
+		return nil, errs.Wrap(err, "generate Machine seed")
+	}
+	mode := rngProduction
+	if isSim {
+		mode = rngDeterministic
+	}
+	return newMachineWithSeed(gs, p.reg, p.cf, seed, isSim, optimal, mode)
 }
 
 // NewMachineWithSeed 與 NewMachine 相同，但由呼叫端指定初始 seed。
@@ -504,6 +559,19 @@ func (p *Problab) NewMachine(id spec.GID, isSim bool) (*Machine, error) {
 //
 // 注意：seed 只是「出生入口」。若要在任意時間點完整重現，請使用 Core 的 Snapshot/Restore（以 []byte 交換狀態）。
 func (p *Problab) NewMachineWithSeed(id spec.GID, seed int64, isSim bool) (*Machine, error) {
+	return p.NewMachineWithSeedBytes(id, core.EncodeInt64Seed(seed), isSim)
+}
+
+// NewMachineWithSeedString uses the string's unmodified UTF-8 bytes as seed
+// material. Explicitly seeded Machines are deterministic and do not reseed at
+// the production-cycle boundary.
+func (p *Problab) NewMachineWithSeedString(id spec.GID, seed string, isSim bool) (*Machine, error) {
+	return p.NewMachineWithSeedBytes(id, []byte(seed), isSim)
+}
+
+// NewMachineWithSeedBytes builds a deterministic Machine from opaque seed
+// material. The seed is cloned before it crosses the Factory boundary.
+func (p *Problab) NewMachineWithSeedBytes(id spec.GID, seed []byte, isSim bool) (*Machine, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")
 	}
@@ -515,7 +583,7 @@ func (p *Problab) NewMachineWithSeed(id spec.GID, seed int64, isSim bool) (*Mach
 	if err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(gs, p.reg, p.cf, seed, isSim, optimal)
+	return newMachineWithSeed(gs, p.reg, p.cf, seed, isSim, optimal, rngDeterministic)
 }
 
 // NewUnoptimizedMachineWithSeed builds a reproducible Machine that executes the
@@ -530,6 +598,10 @@ func (p *Problab) NewMachineWithSeed(id spec.GID, seed int64, isSim bool) (*Mach
 // frozen catalog untouched. The resulting snapshot-before-spin identity is the
 // exact replay atom consumed by optimizer/v2.
 func (p *Problab) NewUnoptimizedMachineWithSeed(id spec.GID, seed int64, isSim bool) (*Machine, error) {
+	return p.NewUnoptimizedMachineWithSeedBytes(id, core.EncodeInt64Seed(seed), isSim)
+}
+
+func (p *Problab) NewUnoptimizedMachineWithSeedBytes(id spec.GID, seed []byte, isSim bool) (*Machine, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")
 	}
@@ -539,10 +611,14 @@ func (p *Problab) NewUnoptimizedMachineWithSeed(id spec.GID, seed int64, isSim b
 	}
 	raw := *gs
 	raw.OptimalSetting = spec.OptimalSetting{}
-	return newMachineWithSeed(&raw, p.reg, p.cf, seed, isSim, nil)
+	return newMachineWithSeed(&raw, p.reg, p.cf, seed, isSim, nil, rngDeterministic)
 }
 
 func (p *Problab) NewMachineByJSON(raw []byte, seed int64) (*Machine, error) {
+	return p.NewMachineByJSONWithSeedBytes(raw, core.EncodeInt64Seed(seed))
+}
+
+func (p *Problab) NewMachineByJSONWithSeedBytes(raw []byte, seed []byte) (*Machine, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")
 	}
@@ -557,10 +633,14 @@ func (p *Problab) NewMachineByJSON(raw []byte, seed int64) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, optimal)
+	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, optimal, rngDeterministic)
 }
 
 func (p *Problab) NewMachineByYAML(raw []byte, seed int64) (*Machine, error) {
+	return p.NewMachineByYAMLWithSeedBytes(raw, core.EncodeInt64Seed(seed))
+}
+
+func (p *Problab) NewMachineByYAMLWithSeedBytes(raw []byte, seed []byte) (*Machine, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")
 	}
@@ -575,7 +655,7 @@ func (p *Problab) NewMachineByYAML(raw []byte, seed int64) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, optimal)
+	return newMachineWithSeed(cfg, p.reg, p.cf, seed, true, optimal, rngDeterministic)
 }
 
 func (p *Problab) validCfg(cfg *spec.GameSetting) error {
@@ -608,10 +688,22 @@ func (p *Problab) NewSimulator(id spec.GID) (*Simulator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newSimulator(gs, p.reg, p.cf, optimal)
+	seed, err := p.generateSeed()
+	if err != nil {
+		return nil, errs.Wrap(err, "generate Simulator seed")
+	}
+	return newSimulatorWithSeed(gs, p.reg, p.cf, seed, optimal)
 }
 
 func (p *Problab) NewSimulatorWithSeed(id spec.GID, seed int64) (*Simulator, error) {
+	return p.NewSimulatorWithSeedBytes(id, core.EncodeInt64Seed(seed))
+}
+
+func (p *Problab) NewSimulatorWithSeedString(id spec.GID, seed string) (*Simulator, error) {
+	return p.NewSimulatorWithSeedBytes(id, []byte(seed))
+}
+
+func (p *Problab) NewSimulatorWithSeedBytes(id spec.GID, seed []byte) (*Simulator, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")
 	}
@@ -627,6 +719,10 @@ func (p *Problab) NewSimulatorWithSeed(id spec.GID, seed int64) (*Simulator, err
 }
 
 func (p *Problab) NewSimulatorByJSON(raw []byte, seed int64) (*Simulator, error) {
+	return p.NewSimulatorByJSONWithSeedBytes(raw, core.EncodeInt64Seed(seed))
+}
+
+func (p *Problab) NewSimulatorByJSONWithSeedBytes(raw []byte, seed []byte) (*Simulator, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")
 	}
@@ -645,6 +741,10 @@ func (p *Problab) NewSimulatorByJSON(raw []byte, seed int64) (*Simulator, error)
 }
 
 func (p *Problab) NewSimulatorByYAML(raw []byte, seed int64) (*Simulator, error) {
+	return p.NewSimulatorByYAMLWithSeedBytes(raw, core.EncodeInt64Seed(seed))
+}
+
+func (p *Problab) NewSimulatorByYAMLWithSeedBytes(raw []byte, seed []byte) (*Simulator, error) {
 	if !p.cat.IsFrozen() {
 		return nil, errs.NewFatal("catalog is not frozen yet")
 	}
@@ -704,11 +804,11 @@ func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
 			return nil, err
 		}
 
-		seed, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+		seed, err := p.generateSeed()
 		if err != nil {
-			return nil, errs.NewFatal("rand seed failed: " + err.Error())
+			return nil, errs.NewFatal("generate MachinePool seed: " + err.Error())
 		}
-		mp, err := newMachinePool(rt.poolSize, gs, p.reg, p.cf, seed.Int64(), optimal)
+		mp, err := newMachinePool(rt.poolSize, gs, p.reg, p.cf, seed, optimal)
 		if err != nil {
 			return nil, err
 		}
@@ -755,9 +855,23 @@ func (p *Problab) NewDevSimulator(gid spec.GID, seed int64) (*DevSimulator, erro
 }
 
 func (p *Problab) NewCore(seed int64) (*core.Core, error) {
+	return p.NewCoreWithSeedBytes(core.EncodeInt64Seed(seed))
+}
+
+func (p *Problab) NewCoreWithSeedString(seed string) (*core.Core, error) {
+	return p.NewCoreWithSeedBytes([]byte(seed))
+}
+
+func (p *Problab) NewCoreWithSeedBytes(seed []byte) (*core.Core, error) {
 	if err := p.ensureOpen(); err != nil {
 		return nil, err
 	}
-	c := core.New(p.cf.New(seed))
-	return c, nil
+	rng, err := p.cf.New(append([]byte(nil), seed...))
+	if err != nil {
+		return nil, errs.Wrap(err, "create PRNG")
+	}
+	if rng == nil {
+		return nil, errs.NewFatal("core factory returned nil PRNG")
+	}
+	return core.New(rng), nil
 }

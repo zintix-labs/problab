@@ -9,8 +9,6 @@ import (
 	"encoding/binary"
 	"math"
 	"testing"
-
-	"github.com/zintix-labs/problab/sdk/core"
 )
 
 func TestAliasTableF64BinaryMatchesSliceTable(t *testing.T) {
@@ -26,8 +24,8 @@ func TestAliasTableF64BinaryMatchesSliceTable(t *testing.T) {
 		t.Fatalf("NewAliasTableF64Binary: %v", err)
 	}
 
-	c1 := core.New(core.Default().New(991))
-	c2 := core.New(core.Default().New(991))
+	c1 := newTestCore(t, 991)
+	c2 := newTestCore(t, 991)
 	for i := 0; i < 100_000; i++ {
 		if got, want := binaryTable.Pick(c1), regular.Pick(c2); got != want {
 			t.Fatalf("pick %d mismatch: binary=%d regular=%d", i, got, want)

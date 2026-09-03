@@ -56,6 +56,7 @@ func (r *scriptedPRNG) IntN(max int) int {
 
 func (r *scriptedPRNG) Snapshot() ([]byte, error) { return nil, nil }
 func (r *scriptedPRNG) Restore([]byte) error      { return nil }
+func (r *scriptedPRNG) Reseed() error             { return nil }
 
 func TestBernoulliF64Boundaries(t *testing.T) {
 	const half = uint64(1) << 63

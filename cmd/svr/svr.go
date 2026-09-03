@@ -51,7 +51,7 @@ func loadConfigFromFlags() (*svrcfg.SvrCfg, error) {
 
 	log, _ := logger.NewAsync(4096, cfg.norm())
 
-	lab, err := demo.NewProbLabWithOptimalDir(demo.OptimalDir)
+	lab, err := demo.NewProbLab()
 	if err != nil {
 		return nil, err
 	}

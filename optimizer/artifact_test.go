@@ -18,11 +18,19 @@ import (
 
 func TestSaveModePublishesManifestOnlyWhenBundleComplete(t *testing.T) {
 	t.Chdir(t.TempDir())
-	snap1, err := core.Default().New(11).Snapshot()
+	rng1, err := core.Default().New(core.EncodeInt64Seed(11))
+	if err != nil {
+		t.Fatalf("PRNG 1: %v", err)
+	}
+	snap1, err := rng1.Snapshot()
 	if err != nil {
 		t.Fatalf("snapshot 1: %v", err)
 	}
-	snap2, err := core.Default().New(22).Snapshot()
+	rng2, err := core.Default().New(core.EncodeInt64Seed(22))
+	if err != nil {
+		t.Fatalf("PRNG 2: %v", err)
+	}
+	snap2, err := rng2.Snapshot()
 	if err != nil {
 		t.Fatalf("snapshot 2: %v", err)
 	}
@@ -30,7 +38,7 @@ func TestSaveModePublishesManifestOnlyWhenBundleComplete(t *testing.T) {
 	gacha := &Gacha{Picker: sampler.BuildAliasTableF64([]float64{1, 3}), SeedLen: len(snap1)}
 	tuner := new(Tuner)
 	betUnits := []int{10, 20}
-	format := core.SnapshotFormatOf(core.Default())
+	format := core.SnapshotFormatOfPRNG(rng1)
 
 	if err := tuner.SaveMode(7, 0, betUnits, format, gacha, bank); err != nil {
 		t.Fatalf("SaveMode 0: %v", err)

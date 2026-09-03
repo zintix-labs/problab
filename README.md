@@ -145,10 +145,6 @@ before returning a result:
 Run it with `go run ./cmd/opt` against `cmd/opt/opt_cfg.yaml`, or use the
 `optimizer/v2` package directly as a library.
 
-> See [`cmd/opt/problab-optimizer-v2-design-intent-and-constraint-knowledge.md`](cmd/opt/problab-optimizer-v2-design-intent-and-constraint-knowledge.md)
-> for the full design rationale and constraint reference — including why the
-> optimizer deliberately avoids presupposing continuous/Gaussian distributions.
-
 > Note: this module is still evolving and APIs/configs may change before v1.0.0.
 
 ### Optimal Artifact runtime
@@ -240,12 +236,21 @@ This is the **recommended way** to build real games with Problab.
 - Seed-driven execution
 - Replayable results
 - Identical behavior between simulation and server
+- ChaCha20 default with explicit PCG64 compatibility mode
 
 This makes Problab suitable for:
 
 - math audits
 - regression testing
 - production issue investigation
+
+Custom PRNG factories accept opaque `[]byte` seed material and own deterministic
+stream derivation. Existing public `int64` seed constructors remain available;
+use `core.PCG64()` when old PCG output or optimizer artifacts must remain
+bit-exact. Production new-game cycles call the PRNG's mandatory `Reseed` hook,
+while explicit seeded, simulator, optimizer, and replay paths remain
+deterministic. Local design notes and migration records are intentionally not
+part of the distributed module.
 
 ---
 

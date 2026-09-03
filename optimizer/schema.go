@@ -169,7 +169,7 @@ func (t *Tuner) RegisterEval(fn func(round int, wins []float64, weights []float6
 	t.eval = fn
 }
 
-func (t *Tuner) collect(gid spec.GID, betmode int, lab *problab.Problab, seed int64) error {
+func (t *Tuner) collect(gid spec.GID, betmode int, lab *problab.Problab, seed []byte) error {
 	if _, ok := lab.EntryById(gid); !ok {
 		return errs.Warnf("gid not found: %d", gid)
 	}
@@ -180,7 +180,7 @@ func (t *Tuner) collect(gid spec.GID, betmode int, lab *problab.Problab, seed in
 	if err != nil {
 		return err
 	}
-	m, err := lab.NewMachineWithSeed(gid, seed, false)
+	m, err := lab.NewMachineWithSeedBytes(gid, seed, false)
 	if err != nil {
 		return err
 	}
@@ -317,15 +317,23 @@ func (p *progressPrinter) Stop() {
 }
 
 func (t *Tuner) Run(gid spec.GID, betmode int, lab *problab.Problab, seed int64) error {
-	seeds := problab.NewSeedMaker(seed)
+	rootSeed := core.EncodeInt64Seed(seed)
+	collectSeed, err := lab.DeriveSeed(rootSeed, core.StreamID{Domain: "optimizer/v1/phase", Index: 0})
+	if err != nil {
+		return errs.Wrap(err, "derive optimizer collect seed")
+	}
+	fitSeed, err := lab.DeriveSeed(rootSeed, core.StreamID{Domain: "optimizer/v1/phase", Index: 1})
+	if err != nil {
+		return errs.Wrap(err, "derive optimizer fit seed")
+	}
 	// 執行優化
 	// 1. collect
 	fmt.Println("step1: collect")
-	if err := t.collect(gid, betmode, lab, seeds.Next()); err != nil {
+	if err := t.collect(gid, betmode, lab, collectSeed); err != nil {
 		return err
 	}
 	// 2. By Class
-	core, err := lab.NewCore(seeds.Next())
+	core, err := lab.NewCoreWithSeedBytes(fitSeed)
 	if err != nil {
 		return err
 	}

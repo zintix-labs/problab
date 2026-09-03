@@ -21,6 +21,7 @@ import (
 
 	"github.com/zintix-labs/problab"
 	legacyoptimizer "github.com/zintix-labs/problab/optimizer"
+	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/spec"
 )
 
@@ -119,16 +120,22 @@ func (c *Collector) Collect(
 	}
 	workers := plan.Plan.Collection.Workers
 	machines := make([]*problab.Machine, workers)
-	seedMaker := problab.NewSeedMaker(plan.Plan.Seed)
+	rootSeed := core.EncodeInt64Seed(plan.Plan.Seed)
 	for worker := range workers {
 		// Match Simulator.SimMP: worker zero retains the original single-stream
 		// seed, while every additional worker receives the next deterministic
 		// sub-seed. This preserves workers=1 collection output.
-		seed := plan.Plan.Seed
+		seed := rootSeed
 		if worker > 0 {
-			seed = seedMaker.Next()
+			seed, err = c.Lab.DeriveSeed(rootSeed, core.StreamID{
+				Domain: "optimizer/v2/worker",
+				Index:  uint64(worker - 1),
+			})
+			if err != nil {
+				return CollectedProblem{}, nil, fmt.Errorf("derive optimizer seed for worker %d: %w", worker, err)
+			}
 		}
-		machines[worker], err = c.Lab.NewUnoptimizedMachineWithSeed(plan.Plan.Target.Game, seed, true)
+		machines[worker], err = c.Lab.NewUnoptimizedMachineWithSeedBytes(plan.Plan.Target.Game, seed, true)
 		if err != nil {
 			return CollectedProblem{}, nil, fmt.Errorf("create raw optimizer machine for worker %d: %w", worker, err)
 		}

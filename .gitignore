@@ -170,10 +170,11 @@ scripts/bin/*
 *.zst
 
 # ------------------------------
-# project 
+# Local-only project artifacts
 # ------------------------------
 
-!demo/optimal/gacha_0.json.zst
-!demo/optimal/seed_bank_0.bin
-!demo/optimal/prob_0.bin
-!demo/optimal/aliases_0.bin
+# Generated demo Optimal artifacts may contain replayable PRNG snapshots.
+demo/optimal/
+
+# Design notes and change rationale are maintained locally.
+docs/

@@ -18,9 +18,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
-	demooptimal "github.com/zintix-labs/problab/demo/optimal"
 	"github.com/zintix-labs/problab/sdk/core"
 )
 
@@ -30,8 +28,8 @@ import (
 // must bypass it and reproduce a spin directly from its pre-spin Core snapshot.
 func TestNewUnoptimizedMachineWithSeedPreservesReplayIdentity(t *testing.T) {
 	lab, err := NewAuto(
-		core.Default(), Configs(demo_configs.FS), Logics(demo_logic.Logics),
-		WithOptimalFS(demooptimal.FS),
+		core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
+		WithOptimalFS(testManifestFS(t, false)),
 	)
 	if err != nil {
 		t.Fatalf("NewAuto: %v", err)

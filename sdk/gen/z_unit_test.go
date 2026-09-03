@@ -43,7 +43,11 @@ func TestGenScreenByReelSetIdx(t *testing.T) {
 			}},
 		},
 	}
-	c := core.New(core.Default().New(1))
+	rng, err := core.Default().New(core.EncodeInt64Seed(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := core.New(rng)
 	g := NewScreenGenerator(c, ss, gs)
 	screen := g.GenScreenByReelSetIdx(1)
 	for _, v := range screen {

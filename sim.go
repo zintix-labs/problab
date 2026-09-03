@@ -15,10 +15,7 @@
 package problab
 
 import (
-	"crypto/rand"
 	"io"
-	"math"
-	"math/big"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,49 +34,54 @@ const capPrepare int = 100
 
 // Simulator 用於模擬遊戲行為，可建立多台機台並平行紀錄統計。
 type Simulator struct {
-	GameName  string                   // 遊戲名稱
-	GameId    spec.GID                 // 遊戲名稱enum
-	initBets  int                      // 用戶帶的錢(以轉數設定)
-	gs        *spec.GameSetting        // 方便重用建立Statistician
-	logic     *slot.LogicRegistry      // 邏輯註冊表
-	cf        core.PRNGFactory         // 亂數生成器
-	initSeed  int64                    // 初始下的種子
-	seedmaker *SeedMaker               // 種子生成器
-	optimal   *optimalrt.Artifact      // Problab instance 共用的不可變優化資料
-	mBuf      []*Machine               // 併發執行機台實例
-	rBuf      []*recorder.SpinRecorder // 併發遊戲紀錄員
-	sBuf      []*stats.StatReport      // 併發統計結果報表(僅Players需要)
+	GameName string                   // 遊戲名稱
+	GameId   spec.GID                 // 遊戲名稱enum
+	initBets int                      // 用戶帶的錢(以轉數設定)
+	gs       *spec.GameSetting        // 方便重用建立Statistician
+	logic    *slot.LogicRegistry      // 邏輯註冊表
+	cf       core.PRNGFactory         // 亂數生成器
+	initSeed []byte                   // 敏感 root seed，只供 worker 派生的 private owned clone
+	optimal  *optimalrt.Artifact      // Problab instance 共用的不可變優化資料
+	mBuf     []*Machine               // 併發執行機台實例
+	rBuf     []*recorder.SpinRecorder // 併發遊戲紀錄員
+	sBuf     []*stats.StatReport      // 併發統計結果報表(僅Players需要)
 }
 
-func newSimulator(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, optimal *optimalrt.Artifact) (*Simulator, error) {
-	seed, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	if err != nil {
-		return nil, err
-	}
-	return newSimulatorWithSeed(gs, reg, cf, seed.Int64(), optimal)
-}
-
-func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed int64, optimal *optimalrt.Artifact) (*Simulator, error) {
+func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, optimal *optimalrt.Artifact) (*Simulator, error) {
+	seed = append([]byte(nil), seed...)
 	s := &Simulator{
-		GameName:  gs.GameName,
-		GameId:    gs.GameID,
-		initBets:  0,
-		gs:        gs,
-		logic:     reg,
-		cf:        cf,
-		initSeed:  seed,
-		seedmaker: NewSeedMaker(seed),
-		optimal:   optimal,
-		mBuf:      make([]*Machine, 1, capPrepare),
-		rBuf:      make([]*recorder.SpinRecorder, 0, capPrepare),
-		sBuf:      make([]*stats.StatReport, 0, capPrepare),
+		GameName: gs.GameName,
+		GameId:   gs.GameID,
+		initBets: 0,
+		gs:       gs,
+		logic:    reg,
+		cf:       cf,
+		initSeed: seed,
+		optimal:  optimal,
+		mBuf:     make([]*Machine, 1, capPrepare),
+		rBuf:     make([]*recorder.SpinRecorder, 0, capPrepare),
+		sBuf:     make([]*stats.StatReport, 0, capPrepare),
 	}
-	m, err := newMachineWithSeed(gs, reg, cf, s.initSeed, true, optimal)
+	m, err := newMachineWithSeed(gs, reg, cf, s.initSeed, true, optimal, rngDeterministic)
 	if err != nil {
 		return nil, err
 	}
 	s.mBuf[0] = m
 	return s, nil
+}
+
+func (s *Simulator) workerSeed(worker int) ([]byte, error) {
+	if worker == 0 {
+		return append([]byte(nil), s.initSeed...), nil
+	}
+	seed, err := s.cf.DeriveSeed(s.initSeed, core.StreamID{
+		Domain: "sim/worker",
+		Index:  uint64(worker - 1),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), seed...), nil
 }
 
 // Sim 單線模擬器：以一台機台連續跑指定 round 並回傳統計結果與用時
@@ -132,7 +134,11 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 		return nil, 0, errs.NewWarn("round must > 0")
 	}
 	for len(s.mBuf) < mp {
-		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.Next(), true, s.optimal)
+		seed, err := s.workerSeed(len(s.mBuf))
+		if err != nil {
+			return nil, 0, errs.Wrap(err, "derive Simulator worker seed")
+		}
+		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, seed, true, s.optimal, rngDeterministic)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -187,7 +193,11 @@ func (s *Simulator) SimPlayers(mp int, players int, initBets int, betMode int, r
 
 	// 	準備並行機台
 	for len(s.mBuf) < mp {
-		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, s.seedmaker.Next(), true, s.optimal)
+		seed, err := s.workerSeed(len(s.mBuf))
+		if err != nil {
+			return nil, nil, 0, errs.Wrap(err, "derive Simulator worker seed")
+		}
+		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, seed, true, s.optimal, rngDeterministic)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -266,41 +276,37 @@ func (s *Simulator) reset() {
 	s.initBets = 0
 }
 
-const mask63 = uint64(1<<63) - 1
-
+// SeedMaker retains the legacy PCG64 child-seed sequence for source
+// compatibility. New code should use PRNGFactory.DeriveSeed with an explicit
+// StreamID instead.
 type SeedMaker struct {
-	state atomic.Uint64 // always in [0, 2^63)
+	parent []byte
+	next   atomic.Uint64
 }
 
-func NewSeedMaker(seed int64) *SeedMaker {
-	s := &SeedMaker{}
-	s.state.Store(uint64(seed) & mask63)
-	return s
-}
-
-// state 走全週期（不重複），再用可逆 mix63 打散
+// NewSeedMaker creates the legacy PCG64 child-seed sequence.
 //
-// 注意：此方法可能在併發環境下被多 goroutines 同時呼叫（例如 SimMP / SimPlayers）。
-// 因此 state 的推進必須是原子的：
-//   - 使用 CAS（Compare-And-Swap）迴圈確保每次呼叫都會取得唯一的下一個 state。
-//   - 回傳值使用推進後的 state 經 mix63 打散後的結果。
-func (s *SeedMaker) Next() int64 {
-	for {
-		old := s.state.Load()                                            // always masked
-		next := (old*6364136223846793005 + 1442695040888963407) & mask63 // full-period LCG mod 2^63
-		if s.state.CompareAndSwap(old, next) {
-			return int64(mix63(next)) // 一定非負
-		}
-	}
+// Deprecated: new stream partitioning should use PRNGFactory.DeriveSeed with
+// an explicit StreamID domain and ordinal.
+func NewSeedMaker(seed int64) *SeedMaker {
+	return &SeedMaker{parent: core.EncodeInt64Seed(seed)}
 }
 
-// mix63：只用「可逆」的 bit 操作 + 乘奇數（mod 2^63）
-func mix63(x uint64) uint64 {
-	x &= mask63
-	x ^= x >> 30
-	x = (x * 0xBF58476D1CE4E5B9) & mask63 // 乘奇數 ⇒ mod 2^63 可逆
-	x ^= x >> 27
-	x = (x * 0x94D049BB133111EB) & mask63
-	x ^= x >> 31
-	return x & mask63
+// Next atomically reserves the next legacy ordinal and resolves it through the
+// PCG64 compatibility Factory. The sequence is identical to the former local
+// LCG implementation.
+func (s *SeedMaker) Next() int64 {
+	index := s.next.Add(1) - 1
+	seed, err := core.PCG64().DeriveSeed(s.parent, core.StreamID{
+		Domain: "legacy/seedmaker",
+		Index:  index,
+	})
+	if err != nil {
+		panic("problab: derive legacy SeedMaker seed: " + err.Error())
+	}
+	value, err := core.DecodeInt64Seed(seed)
+	if err != nil {
+		panic("problab: decode legacy SeedMaker seed: " + err.Error())
+	}
+	return value
 }

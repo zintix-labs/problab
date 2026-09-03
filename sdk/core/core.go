@@ -14,12 +14,31 @@
 
 package core
 
-import "github.com/zintix-labs/problab/sdk/core/internal"
+import (
+	"fmt"
+	"io"
+)
+
+// StreamID identifies one deterministic child stream. Domain is contextual
+// separation for factories that support it; the PCG64 compatibility factory
+// intentionally ignores Domain to retain its historical sequence.
+type StreamID struct {
+	Domain string
+	Index  uint64
+}
+
+// Reseeder is the mandatory new-game-cycle lifecycle hook. A legacy PRNG may
+// implement an explicitly documented no-op, but method presence alone is not a
+// cryptographic or regulatory compliance claim.
+type Reseeder interface {
+	Reseed() error
+}
 
 // PRNG 定義 Core 所需的亂數來源，需同時支援取樣與狀態保存/還原。
 type PRNG interface {
 	RAND
 	Restorable
+	Reseeder
 }
 
 // SnapshotFormatter is an optional, backward-compatible capability for PRNGs
@@ -67,37 +86,35 @@ type RAND interface {
 }
 
 type PRNGFactory interface {
-	// New 以指定 seed 建立新的 PRNG。
+	// Every seed accepted by one Factory instance must select the same PRNG
+	// algorithm, snapshot format, and fixed snapshot size. A Problab instance
+	// probes this invariant once and uses it for every Machine and Artifact.
 	//
-	// 合約（很重要）：在同一個實作與同一個版本下，New(seed) 必須是「決定性」的——
-	// 也就是相同的 seed 必須產生相同的初始內部狀態與輸出序列。
-	//
-	// 為什麼只保留 New？
-	//   - Problab 需要可重現（審計/回放/併發模擬的多機台派生）。
-	//   - seed 的生命週期由 Problab 統一管理：外部未提供時由 Problab 產生並保存 baseSeed，
-	//     後續所有 Machine/Sim 皆由 baseSeed 以固定算法派生子 seed。
-	//   - 因此 Problab 內部永遠不需要呼叫「不帶 seed 的 New()」，避免行為不一致與難以重現。
-	New(int64) PRNG
-}
-
-// DefaultPRNG 實作預設的 CoreFactory
-type DefaultPRNG struct{}
-
-// New 滿足合約
-func (d *DefaultPRNG) New(seed int64) PRNG {
-	return internal.NewPCG64WithSeed(seed)
-}
-
-func Default() *DefaultPRNG {
-	return &DefaultPRNG{}
+	// New deterministically constructs a PRNG from opaque seed material. It
+	// must not retain or mutate the caller's slice.
+	New(seed []byte) (PRNG, error)
+	// GenerateSeed synchronously consumes entropy to create a new root seed.
+	// Implementations must not retain the reader.
+	GenerateSeed(entropy io.Reader) ([]byte, error)
+	// DeriveSeed deterministically derives one child seed without modifying or
+	// retaining parent. Domain must be non-empty; specific factories may
+	// document compatibility behavior such as PCG64 intentionally ignoring it.
+	DeriveSeed(parent []byte, stream StreamID) ([]byte, error)
 }
 
 // SnapshotFormatOf reports the optional snapshot format ID of a factory.
-func SnapshotFormatOf(factory PRNGFactory) string {
+func SnapshotFormatOf(factory PRNGFactory, probeSeed []byte) (string, error) {
 	if factory == nil {
-		return ""
+		return "", fmt.Errorf("core: PRNG factory is nil")
 	}
-	return SnapshotFormatOfPRNG(factory.New(0))
+	rng, err := factory.New(probeSeed)
+	if err != nil {
+		return "", fmt.Errorf("core: create snapshot format probe: %w", err)
+	}
+	if rng == nil {
+		return "", fmt.Errorf("core: PRNG factory returned nil")
+	}
+	return SnapshotFormatOfPRNG(rng), nil
 }
 
 // SnapshotFormatOfPRNG reports the optional snapshot format ID of one PRNG.

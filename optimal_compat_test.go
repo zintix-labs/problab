@@ -21,7 +21,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
-	demooptimal "github.com/zintix-labs/problab/demo/optimal"
 	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/sampler"
@@ -39,15 +38,15 @@ func TestOptimalMachineRequiresSource(t *testing.T) {
 	}
 }
 
-func TestBundledDemoOptimalArtifact(t *testing.T) {
+func TestDefaultChaCha20OptimalArtifact(t *testing.T) {
 	lab, err := NewAuto(
 		core.Default(),
-		Configs(demo_configs.FS),
+		Configs(testManifestConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(demooptimal.FS),
+		WithOptimalFS(testManifestFS(t, false)),
 	)
 	if err != nil {
-		t.Fatalf("NewAuto with bundled artifact: %v", err)
+		t.Fatalf("NewAuto with compatible artifact: %v", err)
 	}
 	defer func() { _ = lab.Close() }()
 	machine, err := lab.NewMachineWithSeed(0, 99, true)
@@ -55,10 +54,45 @@ func TestBundledDemoOptimalArtifact(t *testing.T) {
 		t.Fatalf("NewMachineWithSeed: %v", err)
 	}
 	if machine.optimal == nil || machine.optimal.Backend() != "memory" {
-		t.Fatal("bundled demo did not load its manifest memory artifact")
+		t.Fatal("fixture did not load its manifest memory artifact")
 	}
 	if result := machine.SpinInternal(0); result == nil {
-		t.Fatal("bundled demo optimal spin returned nil")
+		t.Fatal("fixture optimal spin returned nil")
+	}
+}
+
+func TestExplicitPCG64LoadsLegacyCompatibleArtifact(t *testing.T) {
+	lab, err := NewAuto(
+		core.PCG64(),
+		Configs(testManifestConfigFS(t)),
+		Logics(demo_logic.Logics),
+		WithOptimalFS(testPCGManifestFS(t)),
+	)
+	if err != nil {
+		t.Fatalf("NewAuto with explicit PCG64 artifact: %v", err)
+	}
+	defer func() { _ = lab.Close() }()
+	machine, err := lab.NewMachineWithSeed(0, 832, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := machine.SpinInternal(0); result == nil {
+		t.Fatal("PCG64 artifact replay returned nil")
+	}
+}
+
+func TestOptimalArtifactRejectsBothAlgorithmMismatchDirections(t *testing.T) {
+	if _, err := NewAuto(
+		core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
+		WithOptimalFS(testPCGManifestFS(t)),
+	); err == nil {
+		t.Fatal("ChaCha20 runtime accepted a PCG64 artifact")
+	}
+	if _, err := NewAuto(
+		core.PCG64(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
+		WithOptimalFS(testManifestFS(t, false)),
+	); err == nil {
+		t.Fatal("PCG64 runtime accepted a ChaCha20 artifact")
 	}
 }
 
@@ -274,14 +308,8 @@ func TestManifestOptimalRejectsCorruptFile(t *testing.T) {
 
 func testOptimalFS(t testing.TB) fs.FS {
 	t.Helper()
-	snap1, err := core.Default().New(100).Snapshot()
-	if err != nil {
-		t.Fatalf("snapshot 1: %v", err)
-	}
-	snap2, err := core.Default().New(200).Snapshot()
-	if err != nil {
-		t.Fatalf("snapshot 2: %v", err)
-	}
+	snap1 := testDefaultSnapshot(t, 100)
+	snap2 := testDefaultSnapshot(t, 200)
 	gacha := Gacha{
 		Picker:  sampler.BuildAliasTableF64([]float64{1, 1}),
 		SeedLen: len(snap1),
@@ -314,8 +342,9 @@ func testManifestConfigFS(t testing.TB) fs.FS {
 	if err != nil {
 		t.Fatalf("read demo config: %v", err)
 	}
-	updated := strings.Replace(string(raw), "artifact: manifest.json", "artifact: game0/manifest.json", 1)
-	if updated == string(raw) {
+	enabled := enableTestOptimal(t, string(raw))
+	updated := strings.Replace(enabled, "artifact: manifest.json", "artifact: game0/manifest.json", 1)
+	if updated == enabled {
 		t.Fatal("test config manifest path was not replaced")
 	}
 	return fstest.MapFS{"game.yaml": &fstest.MapFile{Data: []byte(updated)}}
@@ -328,23 +357,27 @@ func testLegacyConfigFS(t testing.TB) fs.FS {
 		t.Fatalf("read demo config: %v", err)
 	}
 	replacement := "gachas: [gacha_0.json.zst]\n  seed_bank: [seed_bank_0.bin]"
-	updated := strings.Replace(string(raw), "artifact: manifest.json", replacement, 1)
-	if updated == string(raw) {
+	enabled := enableTestOptimal(t, string(raw))
+	updated := strings.Replace(enabled, "artifact: manifest.json", replacement, 1)
+	if updated == enabled {
 		t.Fatal("test config legacy block was not replaced")
 	}
 	return fstest.MapFS{"game.yaml": &fstest.MapFile{Data: []byte(updated)}}
 }
 
+func enableTestOptimal(t testing.TB, config string) string {
+	t.Helper()
+	updated := strings.Replace(config, "use_optimal: false", "use_optimal: true", 1)
+	if updated == config {
+		t.Fatal("test config optimal flag was not enabled")
+	}
+	return updated
+}
+
 func testManifestFS(t testing.TB, corrupt bool) fs.FS {
 	t.Helper()
-	snap1, err := core.Default().New(100).Snapshot()
-	if err != nil {
-		t.Fatalf("snapshot 1: %v", err)
-	}
-	snap2, err := core.Default().New(200).Snapshot()
-	if err != nil {
-		t.Fatalf("snapshot 2: %v", err)
-	}
+	snap1 := testDefaultSnapshot(t, 100)
+	snap2 := testDefaultSnapshot(t, 200)
 	table := sampler.BuildAliasTableF64([]float64{1, 1})
 	prob := make([]byte, table.Size*8)
 	aliases := make([]byte, table.Size*4)
@@ -356,7 +389,7 @@ func testManifestFS(t testing.TB, corrupt bool) fs.FS {
 	manifest := optimalrt.Manifest{
 		SchemaVersion:  optimalrt.ManifestSchemaV1,
 		ArtifactID:     "test-artifact",
-		SnapshotFormat: core.SnapshotFormatOf(core.Default()),
+		SnapshotFormat: "problab.chacha20.rfc8439/state-v1",
 		Modes: []optimalrt.ManifestMode{{
 			BetUnit:   40,
 			Size:      table.Size,
@@ -381,6 +414,63 @@ func testManifestFS(t testing.TB, corrupt bool) fs.FS {
 		"game0/aliases.bin":   &fstest.MapFile{Data: aliases},
 		"game0/seed_bank.bin": &fstest.MapFile{Data: bank},
 	}
+}
+
+func testPCGManifestFS(t testing.TB) fs.FS {
+	t.Helper()
+	factory := core.PCG64()
+	snapshots := make([][]byte, 2)
+	for i, seed := range []int64{100, 200} {
+		rng, err := factory.New(core.EncodeInt64Seed(seed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshots[i], err = rng.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	table := sampler.BuildAliasTableF64([]float64{1, 1})
+	prob := make([]byte, table.Size*8)
+	aliases := make([]byte, table.Size*4)
+	for i := 0; i < table.Size; i++ {
+		binary.LittleEndian.PutUint64(prob[i*8:], math.Float64bits(table.Prob[i]))
+		binary.LittleEndian.PutUint32(aliases[i*4:], uint32(table.Aliases[i]))
+	}
+	bank := append(append([]byte(nil), snapshots[0]...), snapshots[1]...)
+	manifest := optimalrt.Manifest{
+		SchemaVersion:  optimalrt.ManifestSchemaV1,
+		ArtifactID:     "explicit-pcg64-compatibility-fixture",
+		SnapshotFormat: "go.math/rand/v2.PCG.MarshalBinary/v1",
+		Modes: []optimalrt.ManifestMode{{
+			BetUnit: 40, Size: table.Size, SeedLen: len(snapshots[0]), SeedCount: table.Size,
+			Prob: testFileRef("prob.bin", prob), Aliases: testFileRef("aliases.bin", aliases),
+			SeedBank: testFileRef("seed_bank.bin", bank),
+		}},
+	}
+	manifestRaw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fstest.MapFS{
+		"game0/manifest.json": &fstest.MapFile{Data: manifestRaw},
+		"game0/prob.bin":      &fstest.MapFile{Data: prob},
+		"game0/aliases.bin":   &fstest.MapFile{Data: aliases},
+		"game0/seed_bank.bin": &fstest.MapFile{Data: bank},
+	}
+}
+
+func testDefaultSnapshot(t testing.TB, seed int64) []byte {
+	t.Helper()
+	rng, err := core.Default().New(core.EncodeInt64Seed(seed))
+	if err != nil {
+		t.Fatalf("create PRNG: %v", err)
+	}
+	snapshot, err := rng.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot PRNG: %v", err)
+	}
+	return snapshot
 }
 
 func testFileRef(name string, data []byte) optimalrt.FileRef {

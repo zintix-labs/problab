@@ -20,8 +20,6 @@ import (
 	"math/big"
 	"slices"
 	"testing"
-
-	"github.com/zintix-labs/problab/sdk/core"
 )
 
 // -----------------------------------------------------------------------------
@@ -94,7 +92,7 @@ func setEqual(a, b []int) bool {
 // TestWeightedShuffle_Basic 驗證基本的加權洗牌機率分佈
 // 檢查項目: 高權重項目排在前面的機率較高
 func TestWeightedShuffle_Basic(t *testing.T) {
-	c := core.New(core.Default().New(1))
+	c := newTestCore(t, 1)
 	weights := []int{10, 90} // Index 1 (權重90) 應該有較高機率排在前面
 	trials := 10000
 	firstIdxCount := 0
@@ -119,7 +117,7 @@ func TestWeightedShuffle_Basic(t *testing.T) {
 // TestWeightedShuffleZerosAtEnd 驗證權重為 0 的項目是否被排在最後
 // 檢查項目: 權重 0 的項目應出現在非 0 權重項目之後
 func TestWeightedShuffleZerosAtEnd(t *testing.T) {
-	c := core.New(core.Default().New(1))
+	c := newTestCore(t, 1)
 	weights := []int{0, 3, 0, 2}
 
 	got := WeightedShuffle(c, weights)
@@ -159,7 +157,7 @@ func TestWeightedShuffleZerosAtEnd(t *testing.T) {
 // 檢查項目: 輸入負權重應導致 panic
 func TestWeightedShuffle_NegativePanic(t *testing.T) {
 	rd, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	c := core.New(core.Default().New(rd.Int64()))
+	c := newTestCore(t, rd.Int64())
 	assertPanic(t, func() {
 		WeightedShuffle(c, []int{10, -1})
 	}, "Negative Weight")
@@ -172,7 +170,7 @@ func TestWeightedShuffle_NegativePanic(t *testing.T) {
 // TestWeightedShuffleWithFilterSkipsZeros 驗證過濾零權重的加權洗牌
 // 檢查項目: 結果中不應包含權重為 0 的項目
 func TestWeightedShuffleWithFilterSkipsZeros(t *testing.T) {
-	c := core.New(core.Default().New(2))
+	c := newTestCore(t, 2)
 	weights := []int{0, 1, 0, 2}
 
 	got := WeightedShuffleWithFilter(c, weights)
@@ -188,7 +186,7 @@ func TestWeightedShuffleWithFilterSkipsZeros(t *testing.T) {
 // 檢查項目: 輸入負權重應導致 panic
 func TestWeightedShuffleWithFilter_NegativePanic(t *testing.T) {
 	rd, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	c := core.New(core.Default().New(rd.Int64()))
+	c := newTestCore(t, rd.Int64())
 	assertPanic(t, func() {
 		WeightedShuffleWithFilter(c, []int{10, -1})
 	}, "Negative Weight")
@@ -202,7 +200,7 @@ func TestWeightedShuffleWithFilter_NegativePanic(t *testing.T) {
 // 檢查項目: 抽樣結果應符合權重比例
 func TestWeightedSample_Basic(t *testing.T) {
 	rd, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	c := core.New(core.Default().New(rd.Int64()))
+	c := newTestCore(t, rd.Int64())
 	weights := []int{10, 10, 80}
 	trials := 100000
 	samples := make([]int, 0, trials)
@@ -224,8 +222,8 @@ func TestWeightedSampleMatchesFilteredShuffle(t *testing.T) {
 	const seed = 7
 
 	// 使用相同的 seed 建立兩個 core，確保隨機數序列一致
-	order := WeightedShuffleWithFilter(core.New(core.Default().New(seed)), weights)
-	got := WeightedSample(core.New(core.Default().New(seed)), weights, 2)
+	order := WeightedShuffleWithFilter(newTestCore(t, seed), weights)
+	got := WeightedSample(newTestCore(t, seed), weights, 2)
 
 	expected := order[:2]
 	if !slices.Equal(expected, got) {
@@ -238,7 +236,7 @@ func TestWeightedSampleMatchesFilteredShuffle(t *testing.T) {
 func TestWeightedSampleKExceedsPositives(t *testing.T) {
 	weights := []int{0, 2, 0}
 	// 請求 5 個項目，但只有 1 個權重 > 0
-	got := WeightedSample(core.New(core.Default().New(11)), weights, 5)
+	got := WeightedSample(newTestCore(t, 11), weights, 5)
 
 	if len(got) != 1 || got[0] != 1 {
 		t.Fatalf("expected only index 1, got %v", got)
@@ -249,7 +247,7 @@ func TestWeightedSampleKExceedsPositives(t *testing.T) {
 // 檢查項目: 應回傳空切片
 func TestWeightedSampleAllZero(t *testing.T) {
 	weights := []int{0, 0, 0}
-	got := WeightedSample(core.New(core.Default().New(13)), weights, 3)
+	got := WeightedSample(newTestCore(t, 13), weights, 3)
 	if len(got) != 0 {
 		t.Fatalf("expected empty result, got %v", got)
 	}
@@ -259,7 +257,7 @@ func TestWeightedSampleAllZero(t *testing.T) {
 // 檢查項目: 輸入負權重應導致 panic
 func TestWeightedSampleNegativePanics(t *testing.T) {
 	seed, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	c := core.New(core.Default().New(seed.Int64()))
+	c := newTestCore(t, seed.Int64())
 	assertPanic(t, func() {
 		WeightedSample(c, []int{1, -1, 2}, 2)
 	}, "Negative Weight")
@@ -273,7 +271,7 @@ func TestWeightedSampleNegativePanics(t *testing.T) {
 // 檢查項目: 大量抽樣結果應符合權重比例
 func TestAliasTable_Distribution(t *testing.T) {
 	seed, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	c := core.New(core.Default().New(seed.Int64()))
+	c := newTestCore(t, seed.Int64())
 	weights := []int{10, 20, 70}
 	at := BuildAliasTable(weights)
 
@@ -312,7 +310,7 @@ func TestAliasTable_Panics(t *testing.T) {
 // 檢查項目: 大量抽樣結果應符合權重比例
 func TestLUT_Distribution(t *testing.T) {
 	seed, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	c := core.New(core.Default().New(seed.Int64()))
+	c := newTestCore(t, seed.Int64())
 	weights := []int{1, 2, 7} // 適合 LUT 的小權重
 	lut := BuildLUT(weights)
 
@@ -353,7 +351,7 @@ func TestLUT_Panics(t *testing.T) {
 // 檢查項目: 洗牌後元素集合不變 (總和不變)，長度不變
 func TestShuffle_Basic(t *testing.T) {
 	seed, _ := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
-	c := core.New(core.Default().New(seed.Int64()))
+	c := newTestCore(t, seed.Int64())
 	src := []int{1, 2, 3, 4, 5}
 	original := make([]int, len(src))
 	copy(original, src)

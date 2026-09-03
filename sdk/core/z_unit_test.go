@@ -20,9 +20,18 @@ import (
 	"testing"
 )
 
+func newDefaultTestCore(t testing.TB, seed int64) *Core {
+	t.Helper()
+	rng, err := Default().New(EncodeInt64Seed(seed))
+	if err != nil {
+		t.Fatalf("create default PRNG: %v", err)
+	}
+	return New(rng)
+}
+
 func TestCoreDeterminism(t *testing.T) {
-	c1 := New(Default().New(7))
-	c2 := New(Default().New(7))
+	c1 := newDefaultTestCore(t, 7)
+	c2 := newDefaultTestCore(t, 7)
 	for i := 0; i < 5; i++ {
 		if c1.Uint64() != c2.Uint64() {
 			t.Fatalf("Uint64 mismatch at %d", i)
@@ -37,7 +46,7 @@ func TestCoreDeterminism(t *testing.T) {
 }
 
 func TestCorePickAndShuffle(t *testing.T) {
-	c := New(Default().New(9))
+	c := newDefaultTestCore(t, 9)
 	if got := c.Pick(nil); got != -1 {
 		t.Fatalf("expected -1 for empty pick, got %d", got)
 	}
@@ -57,8 +66,8 @@ func TestCorePickAndShuffle(t *testing.T) {
 }
 
 func TestExpFloat64Deterministic(t *testing.T) {
-	c1 := New(Default().New(11))
-	c2 := New(Default().New(11))
+	c1 := newDefaultTestCore(t, 11)
+	c2 := newDefaultTestCore(t, 11)
 	v1 := c1.ExpFloat64()
 	v2 := c2.ExpFloat64()
 	if v1 != v2 {
@@ -70,7 +79,7 @@ func TestExpFloat64Deterministic(t *testing.T) {
 }
 
 func TestCoreUintN_EdgeCases(t *testing.T) {
-	c := New(Default().New(42))
+	c := newDefaultTestCore(t, 42)
 	// UintN(0) should return 0
 	if got := c.UintN(0); got != 0 {
 		t.Fatalf("UintN(0) expected 0, got %d", got)
@@ -82,7 +91,7 @@ func TestCoreUintN_EdgeCases(t *testing.T) {
 }
 
 func TestCoreIntN_EdgeCases(t *testing.T) {
-	c := New(Default().New(42))
+	c := newDefaultTestCore(t, 42)
 	// IntN(0) should return -1
 	if got := c.IntN(0); got != -1 {
 		t.Fatalf("IntN(0) expected -1, got %d", got)
@@ -98,7 +107,7 @@ func TestCoreIntN_EdgeCases(t *testing.T) {
 }
 
 func TestCorePick_EdgeCases(t *testing.T) {
-	c := New(Default().New(42))
+	c := newDefaultTestCore(t, 42)
 	// Pick from empty slice
 	if got := c.Pick(nil); got != -1 {
 		t.Fatalf("Pick(nil) expected -1, got %d", got)
@@ -123,7 +132,7 @@ func TestCorePick_EdgeCases(t *testing.T) {
 }
 
 func TestCoreShuffleInts_EdgeCases(t *testing.T) {
-	c := New(Default().New(42))
+	c := newDefaultTestCore(t, 42)
 	// Shuffle empty slice
 	empty := []int{}
 	c.ShuffleInts(empty)
@@ -146,7 +155,7 @@ func TestCoreShuffleInts_EdgeCases(t *testing.T) {
 }
 
 func TestCoreShuffleInts_PreservesElements(t *testing.T) {
-	c := New(Default().New(42))
+	c := newDefaultTestCore(t, 42)
 	src := []int{1, 2, 3, 4, 5}
 	original := slices.Clone(src)
 	c.ShuffleInts(src)
@@ -165,7 +174,7 @@ func TestCoreShuffleInts_PreservesElements(t *testing.T) {
 }
 
 func TestCoreFloat64_Range(t *testing.T) {
-	c := New(Default().New(42))
+	c := newDefaultTestCore(t, 42)
 	for i := 0; i < 1000; i++ {
 		v := c.Float64()
 		if v < 0 || v >= 1.0 {
@@ -178,8 +187,8 @@ func TestCoreFloat64_Range(t *testing.T) {
 }
 
 func TestCoreDifferentSeeds_DifferentValues(t *testing.T) {
-	c1 := New(Default().New(1))
-	c2 := New(Default().New(2))
+	c1 := newDefaultTestCore(t, 1)
+	c2 := newDefaultTestCore(t, 2)
 	// Different seeds should produce different sequences (with high probability)
 	different := false
 	for i := 0; i < 10; i++ {

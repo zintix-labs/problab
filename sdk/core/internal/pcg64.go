@@ -33,6 +33,10 @@ type PCG64 struct {
 	rng *r2.PCG
 }
 
+// Reseed is intentionally a no-op for legacy compatibility. PCG64 does not
+// consume external entropy and is not a cryptographic PRNG.
+func (*PCG64) Reseed() error { return nil }
+
 // SnapshotFormat identifies the binary state produced by math/rand/v2.PCG.
 func (r *PCG64) SnapshotFormat() string {
 	return "go.math/rand/v2.PCG.MarshalBinary/v1"

@@ -24,17 +24,17 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/demo"
 	legacyoptimizer "github.com/zintix-labs/problab/optimizer"
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/spec"
 )
 
 // TestCollectWorkersAreDeterministicAndPreserveWorkerZeroSeed locks the public
 // stream-partition contract: scheduling cannot affect a fixed Seed/Workers
 // pair, worker zero preserves the old sequential seed, and worker one starts at
-// SeedMaker's first deterministic sub-seed.
+// Factory.DeriveSeed's first deterministic sub-seed.
 func TestCollectWorkersAreDeterministicAndPreserveWorkerZeroSeed(t *testing.T) {
 	lab, err := demo.NewProbLab()
 	if err != nil {
@@ -80,8 +80,14 @@ func TestCollectWorkersAreDeterministicAndPreserveWorkerZeroSeed(t *testing.T) {
 		t.Fatal("worker zero did not retain the original sequential seed")
 	}
 
-	seedMaker := problab.NewSeedMaker(seed)
-	workerOne, err := lab.NewUnoptimizedMachineWithSeed(spec.GID(1), seedMaker.Next(), true)
+	workerOneSeed, err := lab.DeriveSeed(core.EncodeInt64Seed(seed), core.StreamID{
+		Domain: "optimizer/v2/worker",
+		Index:  0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerOne, err := lab.NewUnoptimizedMachineWithSeedBytes(spec.GID(1), workerOneSeed, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +97,7 @@ func TestCollectWorkersAreDeterministicAndPreserveWorkerZeroSeed(t *testing.T) {
 	}
 	workerOneOffset := int(partitionShare(samples, workers, 0))
 	if !bytes.Equal(first.Classes[0].Samples[workerOneOffset].Snapshot, wantWorkerOne) {
-		t.Fatal("worker one did not receive SeedMaker's first deterministic sub-seed")
+		t.Fatal("worker one did not receive Factory.DeriveSeed's first deterministic sub-seed")
 	}
 }
 

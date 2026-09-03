@@ -181,10 +181,6 @@ Problab 提供一套 **以线性规划（LP）为核心的数学设计 Optimizer
 可用 `go run ./cmd/opt`（搭配 `cmd/opt/opt_cfg.yaml`）执行，也可以直接把
 `optimizer/v2` 当作库来用。
 
-> 完整设计理念与约束参考，见
-> [`cmd/opt/problab-optimizer-v2-design-intent-and-constraint-knowledge.md`](cmd/opt/problab-optimizer-v2-design-intent-and-constraint-knowledge.md)
->（包含为什么这套 optimizer 刻意不预设连续/常态分布）。
-
 > 说明：该模块仍处于早期阶段，接口与配置格式可能在 v1.0.0 之前演进。
 
 ### Optimal Artifact 运行方式
@@ -234,12 +230,19 @@ optimal_setting:
 - 基于种子的执行
 - 可重放的结果
 - 模拟与服务器行为一致
+- 默认使用 ChaCha20，并保留显式 PCG64 兼容模式
 
 这使得 Problab 适用于：
 
 - 数学审计
 - 回归测试
 - 生产问题调查
+
+自定义 PRNG Factory 现在接收不透明的 `[]byte` seed，并负责确定性的串流派生。
+既有公开 `int64` seed API 仍然保留；需要旧 PCG 输出或 optimizer artifact
+逐位兼容时，请显式使用 `core.PCG64()`。Production 新游戏周期会调用 PRNG
+强制实现的 `Reseed` hook；显式 seed、Simulator、Optimizer 与 replay 路径仍保持
+确定性。本地设计说明与迁移记录不包含在发布的 module 中。
 
 ---
 
