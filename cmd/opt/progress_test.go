@@ -86,6 +86,110 @@ func TestCLIProgressReporterShowsStagesAndClassMilestones(t *testing.T) {
 	}
 }
 
+func TestCLIProgressReporterShowsReplayDeficitsFreshSummaryAndSavedBank(t *testing.T) {
+	var output bytes.Buffer
+	reporter := newCLIProgressReporter(&output)
+	path := "/absolute/output/collected/game_1/mode_0/seed_bank_1788754321.bin"
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-replay", State: "started", BetMode: 0,
+		Path: "/absolute/input.bin", SourceIndex: 1, SourceCount: 3,
+	})
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-replay", State: "progress", BetMode: 0,
+		Path: "/absolute/input.bin", SourceIndex: 1, SourceCount: 3,
+		Records: 2, TotalRecords: 4, Accepted: 1, Duplicates: 1,
+	})
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-replay", State: "completed", BetMode: 0,
+		Path: "/absolute/input.bin", SourceIndex: 1, SourceCount: 3,
+		Records: 3, TotalRecords: 4, Accepted: 2, Duplicates: 1,
+		EndReason: optimizerv2.CollectionReplayEndQuotasFull,
+	})
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-replay", State: "info", BetMode: 0,
+		EndReason: optimizerv2.CollectionReplayEndQuotasFull, RemainingSources: 2,
+	})
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-missing", State: "info", BetMode: 0,
+		Classes: []optimizerv2.ClassCollectionProgress{{Name: "rare", Accepted: 2, Requested: 3}},
+	})
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-progress", State: "completed", BetMode: 0,
+		Spins: 7, Accepted: 3, Requested: 3,
+		Classes: []optimizerv2.ClassCollectionProgress{{Name: "rare", ReplayAccepted: 2, FreshAccepted: 1, Accepted: 3, Requested: 3}},
+	})
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-bank", State: "completed", BetMode: 0,
+		Path: path, SeedLength: 53, SeedCount: 3, Bytes: 159, SHA256: "abc123",
+	})
+	got := output.String()
+	for _, want := range []string{
+		"[Replay] source 1/3: /absolute/input.bin",
+		"50.00% records=2/4 accepted=1 duplicate=1",
+		"records=3/4 accepted=2 duplicate=1 unmatched=0 rejected=0 (quotas full)",
+		"remaining 2 sources not opened: quotas full",
+		"[Missing] rare=1",
+		"fresh spins=7 accepted=1 total=3/3",
+		"[Save] " + path,
+		"seeds=3 bytes=159 sha256=abc123",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("collection output=%q want substring %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{"latest", "manifest", "Descriptor", `"report"`} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("collection output contains %q: %q", unwanted, got)
+		}
+	}
+}
+
+func TestCLIProgressReporterRefreshesReplayProgressInPlace(t *testing.T) {
+	var output bytes.Buffer
+	reporter := newCLIProgressReporter(&output)
+	reporter.interactive = true
+
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-replay", State: "started",
+		Path: "/absolute/input.bin", SourceIndex: 1, SourceCount: 1,
+	})
+	for records := uint64(500_000); records <= 1_000_000; records += 500_000 {
+		reporter.Report(optimizerv2.StageEvent{
+			Stage: "collection-replay", State: "progress",
+			Path: "/absolute/input.bin", SourceIndex: 1, SourceCount: 1,
+			Records: records, TotalRecords: 3_175_300, Accepted: records,
+		})
+	}
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-replay", State: "completed",
+		Path: "/absolute/input.bin", SourceIndex: 1, SourceCount: 1,
+		Records: 3_175_300, TotalRecords: 3_175_300, Accepted: 3_175_300,
+		EndReason: optimizerv2.CollectionReplayEndQuotasFull,
+	})
+
+	got := output.String()
+	if count := strings.Count(got, "\n"); count != 2 {
+		t.Fatalf("interactive replay wrote %d physical lines, want source header plus final summary: %q", count, got)
+	}
+	if count := strings.Count(got, "\r\x1b[2K"); count != 3 {
+		t.Fatalf("interactive replay used %d in-place redraws, want two progress redraws plus final replacement: %q", count, got)
+	}
+	for _, want := range []string{
+		"[Replay] source 1/1: /absolute/input.bin\n",
+		"records=500000/3175300 accepted=500000",
+		"records=1000000/3175300 accepted=1000000",
+		"[Replay] source 1/1: records=3175300/3175300 accepted=3175300",
+		"(quotas full)\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interactive replay output=%q want substring %q", got, want)
+		}
+	}
+	if reporter.replayInline {
+		t.Fatal("completed replay left an interactive progress row open")
+	}
+}
+
 // TestCLIProgressReporterPrintsDerivedExpectedRTP locks the requested static
 // information line without reintroducing overall.mean as authored config.
 func TestCLIProgressReporterPrintsDerivedExpectedRTP(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/zintix-labs/problab"
 	legacyoptimizer "github.com/zintix-labs/problab/optimizer"
@@ -36,22 +37,25 @@ type CollectedSample struct {
 }
 
 // CollectedClass retains the source ClassIntent next to its accepted replay
-// atoms. Samples stay in deterministic worker-index/acceptance order; equal
-// payouts are never reordered because their snapshots are distinct artifact
-// identities.
+// atoms. Samples stay in deterministic replay-source/record then
+// worker-index/local-acceptance order; equal payouts are never reordered
+// because their snapshots are distinct artifact identities.
 type CollectedClass struct {
 	Intent  ClassIntent
 	Samples []CollectedSample
 }
 
 // CollectedProblem is the complete read-only collection result for one game
-// and bet mode. Spins records produced spins, not accepted outcomes.
+// and bet mode. Spins records fresh produced spins, not replay records or
+// accepted outcomes.
 type CollectedProblem struct {
-	Game    spec.GID
-	BetMode int
-	BetUnit int
-	Spins   uint64
-	Classes []CollectedClass
+	Game           spec.GID
+	BetMode        int
+	BetUnit        int
+	SnapshotLength int
+	Spins          uint64
+	Classes        []CollectedClass
+	Evidence       CollectionEvidence
 }
 
 type classPredicate struct {
@@ -59,13 +63,55 @@ type classPredicate struct {
 	mismatchMask uint64
 }
 
+type collectionDeficits []uint64
+
+type collectionRuntime struct {
+	betUnit     int
+	snapshotLen int
+	tagger      *legacyoptimizer.Tagger
+	predicates  []classPredicate
+}
+
+func newCollectedProblem(plan ResolvedPlan, betMode, betUnit, snapshotLength int) CollectedProblem {
+	collected := CollectedProblem{
+		Game: plan.Plan.Target.Game, BetMode: betMode, BetUnit: betUnit,
+		SnapshotLength: snapshotLength,
+		Classes:        make([]CollectedClass, len(plan.Intent.Classes)),
+		Evidence: CollectionEvidence{
+			ReplaySources: make([]CollectionReplaySourceReport, 0, len(plan.Plan.Collection.CollectedSeed)),
+			Classes:       make([]CollectionClassEvidence, len(plan.Intent.Classes)),
+		},
+	}
+	for i, class := range plan.Intent.Classes {
+		collected.Classes[i] = CollectedClass{Intent: cloneClassIntent(class)}
+		collected.Evidence.Classes[i] = CollectionClassEvidence{Name: class.Name, Requested: class.Collect.Samples}
+	}
+	return collected
+}
+
+// firstAcceptingClass applies the declaration-ordered first-match rule shared
+// by replay and fresh workers. A full Class is skipped before its predicate is
+// evaluated, so deficits can only decrease during a Run.
+func firstAcceptingClass(classes []ClassIntent, predicates []classPredicate, remaining []uint64, tags uint64, win float64) int {
+	for classIndex, class := range classes {
+		if classIndex >= len(remaining) || remaining[classIndex] == 0 || classIndex >= len(predicates) {
+			continue
+		}
+		if classAccepts(class, predicates[classIndex], tags, win) {
+			return classIndex
+		}
+	}
+	return -1
+}
+
 // Collector creates one independent raw Machine/PRNG stream per configured
 // worker. Keeping Problab as an explicit dependency makes collection testable
 // without placing simulation or command-line concerns inside the math engine.
 type Collector struct {
-	Lab      *problab.Problab
-	Reporter Reporter
-	GameTags map[spec.GID]map[string]legacyoptimizer.IsTag
+	Lab              *problab.Problab
+	Reporter         Reporter
+	GameTags         map[spec.GID]map[string]legacyoptimizer.IsTag
+	WorkingDirectory string
 }
 
 // NewCollector creates the production collector. A nil Lab is rejected by
@@ -75,11 +121,10 @@ func NewCollector(lab *problab.Problab) *Collector {
 	return &Collector{Lab: lab}
 }
 
-// Collect executes raw game logic until every statically partitioned Class
-// quota is full or every worker's statically partitioned MaxSpins budget is
-// exhausted. Each worker owns an independent Machine and scans Classes in YAML
-// declaration order, skips its full local Classes, assigns the outcome to the
-// first matching Class, appends once, and immediately breaks.
+// Collect first replays configured raw snapshot banks through the current game,
+// mode, tags, and Class predicates. It then executes raw game logic only for
+// the remaining Class deficits until they are full or every worker's statically
+// partitioned MaxSpins budget is exhausted.
 //
 // Static partitioning is intentional: no worker can race for a shared final
 // quota or borrow another worker's unused spin budget. The same seed and worker
@@ -98,6 +143,9 @@ func (c *Collector) Collect(
 	if c == nil || c.Lab == nil {
 		return CollectedProblem{}, nil, fmt.Errorf("v2 collector requires a Problab dependency")
 	}
+	if ctx == nil {
+		return CollectedProblem{}, nil, fmt.Errorf("v2 collector context is nil")
+	}
 	if err := ctx.Err(); err != nil {
 		return CollectedProblem{}, nil, err
 	}
@@ -106,6 +154,9 @@ func (c *Collector) Collect(
 	}
 	if plan.Plan.Collection.BatchSize == 0 {
 		return CollectedProblem{}, Diagnostics{configDiagnostic("collection.batch_size must be greater than zero")}, nil
+	}
+	if plan.Plan.Collection.MaxSpins == 0 {
+		return CollectedProblem{}, Diagnostics{configDiagnostic("collection.max_spins must be greater than zero")}, nil
 	}
 	betUnit, err := optimizerBetUnit(c.Lab, plan.Plan.Target.Game, betMode)
 	if err != nil {
@@ -118,9 +169,67 @@ func (c *Collector) Collect(
 	if err != nil {
 		return CollectedProblem{}, Diagnostics{configDiagnostic(err.Error())}, nil
 	}
+	rootSeed := core.EncodeInt64Seed(plan.Plan.Seed)
+	replayMachine, err := c.Lab.NewUnoptimizedMachineWithSeedBytes(plan.Plan.Target.Game, rootSeed, true)
+	if err != nil {
+		return CollectedProblem{}, nil, fmt.Errorf("create raw optimizer replay machine: %w", err)
+	}
+	initialSnapshot, err := replayMachine.SnapshotCore()
+	if err != nil {
+		return CollectedProblem{}, nil, fmt.Errorf("snapshot raw optimizer replay machine: %w", err)
+	}
+	if len(initialSnapshot) == 0 {
+		return CollectedProblem{}, nil, fmt.Errorf("raw optimizer replay machine returned an empty Core snapshot")
+	}
+
+	collected := newCollectedProblem(plan, betMode, betUnit, len(initialSnapshot))
+	deficits := make(collectionDeficits, len(plan.Intent.Classes))
+	requested := uint64(0)
+	for i, class := range plan.Intent.Classes {
+		deficits[i] = class.Collect.Samples
+		requested, err = checkedAddUint64(requested, class.Collect.Samples, "total requested collection samples")
+		if err != nil {
+			return CollectedProblem{}, nil, err
+		}
+	}
+
+	reports, err := replayCollectionBanks(
+		ctx, c, plan, betMode, replayMachine,
+		collectionRuntime{betUnit: betUnit, snapshotLen: len(initialSnapshot), tagger: tagger, predicates: predicates},
+		&collected, deficits, make(replayIdentitySet),
+	)
+	if err != nil {
+		return CollectedProblem{}, nil, err
+	}
+	collected.Evidence.ReplaySources = reports
+	if err := summarizeReplayEvidence(&collected); err != nil {
+		return CollectedProblem{}, nil, err
+	}
+
+	remaining, err := sumUint64s(deficits, "remaining collection deficits")
+	if err != nil {
+		return CollectedProblem{}, nil, err
+	}
+	if remaining == 0 {
+		if err := validateCollectionEvidence(collected); err != nil {
+			return CollectedProblem{}, nil, err
+		}
+		if c.Reporter != nil {
+			c.Reporter.Report(collectionProgressEventWithState(collected, requested, "completed"))
+		}
+		return collected, nil, nil
+	}
+	if c.Reporter != nil {
+		c.Reporter.Report(StageEvent{
+			Stage: "collection-missing", State: "info", BetMode: betMode,
+			Accepted: requested - remaining, Requested: requested,
+			Classes: currentClassProgress(collected),
+		})
+		c.Reporter.Report(collectionProgressEventWithState(collected, requested, "progress"))
+	}
+
 	workers := plan.Plan.Collection.Workers
 	machines := make([]*problab.Machine, workers)
-	rootSeed := core.EncodeInt64Seed(plan.Plan.Seed)
 	for worker := range workers {
 		// Match Simulator.SimMP: worker zero retains the original single-stream
 		// seed, while every additional worker receives the next deterministic
@@ -141,21 +250,7 @@ func (c *Collector) Collect(
 		}
 	}
 
-	collected := CollectedProblem{
-		Game: plan.Plan.Target.Game, BetMode: betMode, BetUnit: betUnit,
-		Classes: make([]CollectedClass, len(plan.Intent.Classes)),
-	}
-	remaining := uint64(0)
-	for i, class := range plan.Intent.Classes {
-		collected.Classes[i] = CollectedClass{Intent: cloneClassIntent(class)}
-		remaining += class.Collect.Samples
-	}
-	requested := remaining
-	if c.Reporter != nil {
-		c.Reporter.Report(collectionProgressEvent(collected, requested, remaining))
-	}
-
-	workerQuotas := partitionClassQuotas(plan.Intent.Classes, workers)
+	workerQuotas := partitionQuotas(deficits, workers)
 
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
@@ -191,8 +286,6 @@ func (c *Collector) Collect(
 		workerAccepted[worker] = make([]uint64, len(plan.Intent.Classes))
 	}
 	nextReport := plan.Plan.Collection.BatchSize
-	lastReportedSpins := uint64(0)
-	lastReportedAccepted := uint64(0)
 	completed := 0
 	for completed < workers {
 		select {
@@ -208,10 +301,9 @@ func (c *Collector) Collect(
 				cancelWorkers()
 			}
 		}
-		spins, acceptedByClass, accepted := aggregateWorkerProgress(workerSpins, workerAccepted)
+		spins, acceptedByClass, _ := aggregateWorkerProgress(workerSpins, workerAccepted)
 		if c.Reporter != nil && spins >= nextReport {
-			c.Reporter.Report(collectionProgressCountsEvent(betMode, spins, plan.Intent.Classes, acceptedByClass, requested))
-			lastReportedSpins, lastReportedAccepted = spins, accepted
+			c.Reporter.Report(freshCollectionProgressEvent(collected, spins, acceptedByClass, requested, "progress"))
 			for nextReport <= spins {
 				if ^uint64(0)-nextReport < plan.Plan.Collection.BatchSize {
 					nextReport = ^uint64(0)
@@ -230,22 +322,30 @@ func (c *Collector) Collect(
 		}
 	}
 
-	sequence := uint64(0)
+	sequence := collected.Evidence.ReplayAccepted
 	for worker := range workerResults {
 		result := workerResults[worker]
-		collected.Spins += result.spins
-		for _, accepted := range result.samples {
-			accepted.sample.Sequence = sequence
-			sequence++
-			collected.Classes[accepted.classIndex].Samples = append(
-				collected.Classes[accepted.classIndex].Samples,
-				accepted.sample,
-			)
+		collected.Spins, err = checkedAddUint64(collected.Spins, result.spins, "fresh collection spins")
+		if err != nil {
+			return CollectedProblem{}, nil, err
 		}
 	}
-	remaining = requested - sequence
-	if c.Reporter != nil && (collected.Spins != lastReportedSpins || sequence != lastReportedAccepted) {
-		c.Reporter.Report(collectionProgressEvent(collected, requested, remaining))
+	if collected.Spins > plan.Plan.Collection.MaxSpins {
+		return CollectedProblem{}, nil, fmt.Errorf("fresh collection spins %d exceed max_spins %d", collected.Spins, plan.Plan.Collection.MaxSpins)
+	}
+	collected.Evidence.FreshSpins = collected.Spins
+	if _, err := mergeWorkerSamples(&collected, deficits, workerResults, &sequence); err != nil {
+		return CollectedProblem{}, nil, err
+	}
+	remaining, err = sumUint64s(deficits, "remaining collection deficits")
+	if err != nil {
+		return CollectedProblem{}, nil, err
+	}
+	if err := validateCollectionEvidence(collected); err != nil {
+		return CollectedProblem{}, nil, err
+	}
+	if c.Reporter != nil {
+		c.Reporter.Report(collectionProgressEventWithState(collected, requested, "completed"))
 	}
 
 	if remaining == 0 {
@@ -254,7 +354,7 @@ func (c *Collector) Collect(
 	diagnostic := Diagnostic{
 		Code:           DiagnosticCollectionInsufficient,
 		Status:         StatusInfeasibleSupport,
-		Message:        fmt.Sprintf("collection stopped after %d spins with %d requested samples still missing", collected.Spins, remaining),
+		Message:        fmt.Sprintf("collection stopped after %d fresh spins with %d requested samples still missing", collected.Spins, remaining),
 		Representation: RepresentationAtomicBuckets,
 	}
 	for i, class := range collected.Classes {
@@ -268,6 +368,7 @@ func (c *Collector) Collect(
 			Metrics: []NamedValue{
 				{Name: "requested", Value: float64(class.Intent.Collect.Samples), Unit: "samples"},
 				{Name: "collected", Value: float64(len(class.Samples)), Unit: "samples"},
+				{Name: "missing", Value: float64(missing), Unit: "samples"},
 			},
 		})
 	}
@@ -293,6 +394,79 @@ type collectionWorkerProgress struct {
 	accepted []uint64
 }
 
+func mergeWorkerSamples(
+	collected *CollectedProblem,
+	deficits collectionDeficits,
+	workerResults []collectionWorkerResult,
+	nextSequence *uint64,
+) (uint64, error) {
+	if collected == nil || nextSequence == nil {
+		return 0, fmt.Errorf("merge fresh worker samples: nil collection state")
+	}
+	if len(deficits) != len(collected.Classes) || len(collected.Evidence.Classes) != len(collected.Classes) {
+		return 0, fmt.Errorf("merge fresh worker samples: Class dimensions are inconsistent")
+	}
+	acceptedTotal := uint64(0)
+	for workerIndex, result := range workerResults {
+		if result.worker != workerIndex {
+			return 0, fmt.Errorf("merge fresh worker samples: result[%d] belongs to worker %d", workerIndex, result.worker)
+		}
+		observedByClass := make([]uint64, len(collected.Classes))
+		for sampleIndex, accepted := range result.samples {
+			if accepted.classIndex < 0 || accepted.classIndex >= len(collected.Classes) {
+				return 0, fmt.Errorf("merge fresh worker %d sample[%d]: class index %d is out of range", workerIndex, sampleIndex, accepted.classIndex)
+			}
+			class := &collected.Classes[accepted.classIndex]
+			if accepted.sample.ClassID != class.Intent.Name {
+				return 0, fmt.Errorf("merge fresh worker %d sample[%d]: class id %q does not match %q", workerIndex, sampleIndex, accepted.sample.ClassID, class.Intent.Name)
+			}
+			if len(accepted.sample.Snapshot) == 0 || len(accepted.sample.Snapshot) != collected.SnapshotLength {
+				return 0, fmt.Errorf("merge fresh worker %d sample[%d]: snapshot length %d does not match %d", workerIndex, sampleIndex, len(accepted.sample.Snapshot), collected.SnapshotLength)
+			}
+			if deficits[accepted.classIndex] == 0 {
+				return 0, fmt.Errorf("merge fresh worker %d sample[%d]: class %q exceeds its global deficit", workerIndex, sampleIndex, class.Intent.Name)
+			}
+			if *nextSequence == math.MaxUint64 {
+				return 0, fmt.Errorf("merge fresh worker samples: collection Sequence overflow")
+			}
+			accepted.sample.Sequence = *nextSequence
+			(*nextSequence)++
+			class.Samples = append(class.Samples, accepted.sample)
+			deficits[accepted.classIndex]--
+			observedByClass[accepted.classIndex]++
+
+			evidence := &collected.Evidence.Classes[accepted.classIndex]
+			var err error
+			evidence.FreshAccepted, err = checkedAddUint64(evidence.FreshAccepted, 1, "Class fresh accepted samples")
+			if err != nil {
+				return 0, err
+			}
+			evidence.Accepted, err = checkedAddUint64(evidence.Accepted, 1, "Class accepted samples")
+			if err != nil {
+				return 0, err
+			}
+			acceptedTotal, err = checkedAddUint64(acceptedTotal, 1, "fresh accepted samples")
+			if err != nil {
+				return 0, err
+			}
+		}
+		if len(result.classAccepted) != len(observedByClass) {
+			return 0, fmt.Errorf("merge fresh worker %d: accepted counter dimension %d does not match %d Classes", workerIndex, len(result.classAccepted), len(observedByClass))
+		}
+		for classIndex := range observedByClass {
+			if observedByClass[classIndex] != result.classAccepted[classIndex] {
+				return 0, fmt.Errorf("merge fresh worker %d: class[%d] accepted counter=%d samples=%d", workerIndex, classIndex, result.classAccepted[classIndex], observedByClass[classIndex])
+			}
+		}
+	}
+	var err error
+	collected.Evidence.FreshAccepted, err = checkedAddUint64(collected.Evidence.FreshAccepted, acceptedTotal, "aggregate fresh accepted samples")
+	if err != nil {
+		return 0, err
+	}
+	return acceptedTotal, nil
+}
+
 // collectWorker owns every mutable value it touches: one Machine, one set of
 // local quotas, and one accepted-sample log. progress contains copied counters
 // only; the coordinator is the sole Reporter caller.
@@ -314,6 +488,7 @@ func collectWorker(
 		classAccepted: make([]uint64, len(classes)),
 	}
 	remaining := uint64(0)
+	remainingByClass := append([]uint64(nil), quotas...)
 	for _, quota := range quotas {
 		remaining += quota
 	}
@@ -349,13 +524,8 @@ func collectWorker(
 			tags = tagger.Tagging(spin)
 		}
 		result.spins++
-		for classIndex, class := range classes {
-			if result.classAccepted[classIndex] >= quotas[classIndex] {
-				continue
-			}
-			if !classAccepts(class, predicates[classIndex], tags, win) {
-				continue
-			}
+		if classIndex := firstAcceptingClass(classes, predicates, remainingByClass, tags, win); classIndex >= 0 {
+			class := classes[classIndex]
 			result.samples = append(result.samples, acceptedWorkerSample{
 				classIndex: classIndex,
 				sample: CollectedSample{
@@ -364,8 +534,8 @@ func collectWorker(
 				},
 			})
 			result.classAccepted[classIndex]++
+			remainingByClass[classIndex]--
 			remaining--
-			break
 		}
 		if result.spins%progressEvery == 0 || remaining == 0 {
 			report()
@@ -388,22 +558,21 @@ func partitionShare(total uint64, workers, worker int) uint64 {
 	return share
 }
 
-// partitionClassQuotas gives every worker either floor or ceil of each Class
-// quota. Remainders rotate across Classes instead of always accumulating on
-// worker zero. Consequently each worker's total requested load is exactly the
-// same partitionShare of the aggregate request, aligned with MaxSpins shares.
-func partitionClassQuotas(classes []ClassIntent, workers int) [][]uint64 {
+// partitionQuotas gives every worker either floor or ceil of each Class
+// deficit. Remainders rotate across Classes instead of always accumulating on
+// worker zero.
+func partitionQuotas(requested []uint64, workers int) [][]uint64 {
 	quotas := make([][]uint64, workers)
 	for worker := range workers {
-		quotas[worker] = make([]uint64, len(classes))
+		quotas[worker] = make([]uint64, len(requested))
 	}
 	remainderCursor := 0
-	for classIndex, class := range classes {
-		base := class.Collect.Samples / uint64(workers)
+	for classIndex, count := range requested {
+		base := count / uint64(workers)
 		for worker := range workers {
 			quotas[worker][classIndex] = base
 		}
-		remainder := int(class.Collect.Samples % uint64(workers))
+		remainder := int(count % uint64(workers))
 		for offset := range remainder {
 			worker := (remainderCursor + offset) % workers
 			quotas[worker][classIndex]++
@@ -411,6 +580,16 @@ func partitionClassQuotas(classes []ClassIntent, workers int) [][]uint64 {
 		remainderCursor = (remainderCursor + remainder) % workers
 	}
 	return quotas
+}
+
+// partitionClassQuotas retains the original helper contract for callers that
+// want to partition complete Class requests.
+func partitionClassQuotas(classes []ClassIntent, workers int) [][]uint64 {
+	requested := make([]uint64, len(classes))
+	for i, class := range classes {
+		requested[i] = class.Collect.Samples
+	}
+	return partitionQuotas(requested, workers)
 }
 
 func mergeWorkerProgress(spins []uint64, accepted [][]uint64, progress collectionWorkerProgress) {
@@ -444,18 +623,16 @@ func aggregateWorkerProgress(spins []uint64, accepted [][]uint64) (uint64, []uin
 // giving a UI enough information to maintain one independent progress bar per
 // Class. No slice in the event aliases Collector-owned sample storage.
 func collectionProgressEvent(collected CollectedProblem, requested, _ uint64) StageEvent {
-	accepted := make([]uint64, len(collected.Classes))
-	for i, class := range collected.Classes {
-		accepted[i] = uint64(len(class.Samples))
-	}
-	return collectionProgressCountsEvent(collected.BetMode, collected.Spins, classIntents(collected.Classes), accepted, requested)
+	return collectionProgressEventWithState(collected, requested, "progress")
 }
 
 func collectionProgressCountsEvent(betMode int, spins uint64, intents []ClassIntent, accepted []uint64, requested uint64) StageEvent {
 	classes := make([]ClassCollectionProgress, len(intents))
 	totalAccepted := uint64(0)
 	for i, class := range intents {
-		classes[i] = ClassCollectionProgress{Name: class.Name, Accepted: accepted[i], Requested: class.Collect.Samples}
+		classes[i] = ClassCollectionProgress{
+			Name: class.Name, FreshAccepted: accepted[i], Accepted: accepted[i], Requested: class.Collect.Samples,
+		}
 		totalAccepted += accepted[i]
 	}
 	return StageEvent{
@@ -463,6 +640,62 @@ func collectionProgressCountsEvent(betMode int, spins uint64, intents []ClassInt
 		Spins: spins, Accepted: totalAccepted, Requested: requested,
 		Classes: classes,
 	}
+}
+
+func collectionProgressEventWithState(collected CollectedProblem, requested uint64, state string) StageEvent {
+	classes := currentClassProgress(collected)
+	totalAccepted := uint64(0)
+	for _, class := range classes {
+		totalAccepted += class.Accepted
+	}
+	return StageEvent{
+		Stage: "collection-progress", BetMode: collected.BetMode, State: state,
+		Spins: collected.Spins, Accepted: totalAccepted, Requested: requested, Classes: classes,
+	}
+}
+
+func freshCollectionProgressEvent(collected CollectedProblem, spins uint64, fresh []uint64, requested uint64, state string) StageEvent {
+	classes := make([]ClassCollectionProgress, len(collected.Classes))
+	totalAccepted := uint64(0)
+	for i, class := range collected.Classes {
+		replay := uint64(0)
+		if i < len(collected.Evidence.Classes) {
+			replay = collected.Evidence.Classes[i].ReplayAccepted
+		}
+		freshAccepted := uint64(0)
+		if i < len(fresh) {
+			freshAccepted = fresh[i]
+		}
+		accepted := replay + freshAccepted
+		classes[i] = ClassCollectionProgress{
+			Name: class.Intent.Name, ReplayAccepted: replay, FreshAccepted: freshAccepted,
+			Accepted: accepted, Requested: class.Intent.Collect.Samples,
+		}
+		totalAccepted += accepted
+	}
+	return StageEvent{
+		Stage: "collection-progress", BetMode: collected.BetMode, State: state,
+		Spins: spins, Accepted: totalAccepted, Requested: requested, Classes: classes,
+	}
+}
+
+func currentClassProgress(collected CollectedProblem) []ClassCollectionProgress {
+	classes := make([]ClassCollectionProgress, len(collected.Classes))
+	for i, class := range collected.Classes {
+		evidence := CollectionClassEvidence{Name: class.Intent.Name, Requested: class.Intent.Collect.Samples}
+		if i < len(collected.Evidence.Classes) {
+			evidence = collected.Evidence.Classes[i]
+		} else {
+			evidence.FreshAccepted = uint64(len(class.Samples))
+			evidence.Accepted = evidence.FreshAccepted
+		}
+		classes[i] = ClassCollectionProgress{
+			Name: evidence.Name, ReplayAccepted: evidence.ReplayAccepted,
+			FreshAccepted: evidence.FreshAccepted, Accepted: evidence.Accepted,
+			Requested: evidence.Requested,
+		}
+	}
+	return classes
 }
 
 func classIntents(classes []CollectedClass) []ClassIntent {

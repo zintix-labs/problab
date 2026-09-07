@@ -97,16 +97,13 @@ func TestPrepareProblemRejectsDuplicateReplayIdentityWithinAtomicSupport(t *test
 	)
 	class.Collect.Samples = 2
 	sharedSnapshot := []byte{7, 8, 9}
-	collected := CollectedProblem{
-		BetUnit: 1,
-		Classes: []CollectedClass{{
-			Intent: class,
-			Samples: []CollectedSample{
-				{ClassID: class.Name, Win: 0.5, Snapshot: append([]byte(nil), sharedSnapshot...), Sequence: 11},
-				{ClassID: class.Name, Win: 1.5, Snapshot: append([]byte(nil), sharedSnapshot...), Sequence: 29},
-			},
-		}},
-	}
+	collected := prepareCollectedProblem([]CollectedClass{{
+		Intent: class,
+		Samples: []CollectedSample{
+			{ClassID: class.Name, Win: 0.5, Snapshot: append([]byte(nil), sharedSnapshot...), Sequence: 11},
+			{ClassID: class.Name, Win: 1.5, Snapshot: append([]byte(nil), sharedSnapshot...), Sequence: 29},
+		},
+	}})
 
 	prepared, diagnostics, err := PrepareProblem(prepareTestPlan(class), collected)
 	if err != nil {
@@ -183,16 +180,13 @@ func TestPrepareProblemIntentFalseEnforcesOnlyExplicitCollisionRisk(t *testing.T
 			},
 		},
 	}
-	collected := CollectedProblem{
-		BetUnit: 1,
-		Classes: []CollectedClass{{
-			Intent: class,
-			Samples: []CollectedSample{
-				{ClassID: class.Name, Win: 1, Snapshot: []byte{1}, Sequence: 0},
-				{ClassID: class.Name, Win: 3, Snapshot: []byte{2}, Sequence: 1},
-			},
-		}},
-	}
+	collected := prepareCollectedProblem([]CollectedClass{{
+		Intent: class,
+		Samples: []CollectedSample{
+			{ClassID: class.Name, Win: 1, Snapshot: []byte{1}, Sequence: 0},
+			{ClassID: class.Name, Win: 3, Snapshot: []byte{2}, Sequence: 1},
+		},
+	}})
 
 	_, diagnostics, err := PrepareProblem(prepareTestPlan(class), collected)
 	if err != nil {
@@ -314,10 +308,7 @@ func prepareTestPlan(classes ...ClassIntent) ResolvedPlan {
 // result, keeping success-path tests focused on their prepared mathematical data.
 func prepareTestProblem(t *testing.T, plan ResolvedPlan, classes []CollectedClass) PreparedProblem {
 	t.Helper()
-	prepared, diagnostics, err := PrepareProblem(plan, CollectedProblem{
-		BetUnit: 1,
-		Classes: classes,
-	})
+	prepared, diagnostics, err := PrepareProblem(plan, prepareCollectedProblem(classes))
 	if err != nil {
 		t.Fatalf("PrepareProblem returned operational error: %v", err)
 	}
@@ -325,6 +316,27 @@ func prepareTestProblem(t *testing.T, plan ResolvedPlan, classes []CollectedClas
 		t.Fatalf("PrepareProblem returned stopping diagnostics: %+v", diagnostics)
 	}
 	return prepared
+}
+
+func prepareCollectedProblem(classes []CollectedClass) CollectedProblem {
+	collected := CollectedProblem{
+		BetUnit: 1, Classes: classes,
+		Evidence: CollectionEvidence{Classes: make([]CollectionClassEvidence, len(classes))},
+	}
+	for classIndex, class := range classes {
+		accepted := uint64(len(class.Samples))
+		collected.Evidence.Classes[classIndex] = CollectionClassEvidence{
+			Name: class.Intent.Name, Requested: class.Intent.Collect.Samples,
+			FreshAccepted: accepted, Accepted: accepted,
+		}
+		collected.Evidence.FreshAccepted += accepted
+		collected.Spins += accepted
+		if collected.SnapshotLength == 0 && len(class.Samples) > 0 {
+			collected.SnapshotLength = len(class.Samples[0].Snapshot)
+		}
+	}
+	collected.Evidence.FreshSpins = collected.Spins
+	return collected
 }
 
 // prepareTestSequences extracts replay sequence identifiers to make deterministic

@@ -276,6 +276,15 @@ func validateRunPlan(path string, plan RunPlan, intents map[string]MathIntent) e
 	if plan.Collection.MaxSpins == 0 {
 		return invalid(path+".collection.max_spins", "must be greater than zero")
 	}
+	for i, configured := range plan.Collection.CollectedSeed {
+		sourcePath := fmt.Sprintf("%s.collection.collected_seed[%d]", path, i)
+		if strings.TrimSpace(configured) == "" {
+			return invalid(sourcePath, "must not be blank")
+		}
+		if strings.IndexByte(configured, 0) >= 0 {
+			return invalid(sourcePath, "must not contain NUL")
+		}
+	}
 	if plan.CandidateSelection.Evaluator != "none" {
 		return invalid(path+".candidate_selection.evaluator", "must be %q until a bounded outer evaluator is registered", "none")
 	}
@@ -680,6 +689,7 @@ func cloneConfig(config Config) Config {
 func cloneRunPlan(plan RunPlan) RunPlan {
 	cloned := plan
 	cloned.Target.BetModes = slices.Clone(plan.Target.BetModes)
+	cloned.Collection.CollectedSeed = slices.Clone(plan.Collection.CollectedSeed)
 	cloned.Output.Format = slices.Clone(plan.Output.Format)
 	return cloned
 }

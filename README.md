@@ -145,6 +145,62 @@ before returning a result:
 Run it with `go run ./cmd/opt` against `cmd/opt/opt_cfg.yaml`, or use the
 `optimizer/v2` package directly as a library.
 
+#### Replayable Collection Banks
+
+Expensive collection work can be reused without trusting historical payout or
+classification metadata. Add zero or more raw Core snapshot banks to a RunPlan
+in replay priority order:
+
+```yaml
+collection:
+  collected_seed:
+    - build/optimizer/collected/game_0/mode_0/seed_bank_1788772008.bin
+  workers: 4
+  batch_size: 500000
+  max_spins: 10000000000
+```
+
+For each configured bank, the optimizer streams its fixed-size snapshots,
+restores them into the current raw Machine, executes the current game and bet
+mode, and applies the current Tag and first-matching Class rules again. Relative
+paths are resolved from the command's startup working directory.
+
+- Replay sources are processed in declaration order. Exact snapshot bytes are
+  deduplicated across the sources that are read, and the first occurrence wins.
+  Fresh parallel collection keeps its existing PRNG-defined behavior and is not
+  deduplicated against replay or other workers.
+- Replay records do not consume `max_spins`. Accepted replay outcomes fill Class
+  quotas first; deterministic fresh workers receive only the remaining deficits.
+- `RunReport.Collection` records each source's terminal state and
+  accepted/duplicate/unmatched/rejected counters, plus the replay-versus-fresh
+  accepted count for every Class. Configured source paths and their order affect
+  the configuration hash; source bytes are evidenced separately by the saved
+  bank's SHA-256.
+- Missing or malformed banks produce warnings and are skipped. A runtime
+  incompatibility also warns and moves to the next source while retaining any
+  valid prefix already accepted. Once all Class quotas are full, later sources
+  are left unopened. None of these source states becomes configuration
+  infeasibility; fresh collection still determines whether the requested
+  support can be completed.
+- Once collection returns valid internal state, both complete and
+  `CollectionInsufficient` results are atomically persisted before dynamic
+  validation, LP construction, solving, materialization, or publication:
+
+  ```text
+  <output.directory>/collected/game_<gid>/mode_<mode>/seed_bank_<unix_timestamp>.bin
+  ```
+
+  The writer streams snapshots in canonical Class/sequence order and reports the
+  absolute path, SHA-256, snapshot length, seed count, byte size, and whether the
+  bank is partial through `RunReport.Collection`.
+- Problab does not create a `latest` pointer, manifest, directory index, or
+  descriptor sidecar for collection banks. Select a bank explicitly by copying
+  its timestamped path into `collected_seed` on a later Run. Collection banks are
+  reusable optimizer inputs, not publishable runtime artifacts.
+- In an interactive terminal, each replay progress row is refreshed in place.
+  Redirected stderr and CI logs remain append-only and contain no cursor-control
+  sequences.
+
 > Note: this module is still evolving and APIs/configs may change before v1.0.0.
 
 ### Optimal Artifact runtime

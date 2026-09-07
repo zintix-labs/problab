@@ -87,6 +87,9 @@ type PreparedGroup struct {
 // nil Go error; malformed internal collection values return an operational
 // error because they indicate a broken Collector or test adapter.
 func PrepareProblem(plan ResolvedPlan, collected CollectedProblem) (PreparedProblem, Diagnostics, error) {
+	if err := validateCollectionEvidence(collected); err != nil {
+		return PreparedProblem{}, nil, fmt.Errorf("validate collected problem evidence: %w", err)
+	}
 	prepared := PreparedProblem{
 		Plan: plan, Game: collected.Game, BetMode: collected.BetMode,
 		BetUnit: collected.BetUnit, Spins: collected.Spins,

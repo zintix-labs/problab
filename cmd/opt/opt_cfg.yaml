@@ -83,21 +83,51 @@ plans:
 
     # Execution policy. These values cannot alter or relax Designer hard rows.
     collection:
-      # Positive number of independent raw Machines. Class quotas and max_spins
-      # are statically partitioned by worker index. Workers do not race for a
-      # shared quota or borrow another worker's unused spin budget. The same seed
-      # and worker count therefore reproduce the same streams and merge order;
-      # changing workers changes the stream partition and expected sample set.
+      # Optional ordered raw Core snapshot banks. Every snapshot is replayed
+      # with the current game and selected mode, then tagged and classified
+      # again using the current Class declarations. No manifest or historical
+      # payout metadata is trusted. Missing, malformed, or incompatible sources
+      # are warned and skipped before fresh collection fills only the remaining
+      # Class quotas.
+      #
+      # Relative paths are resolved from cmd/opt's startup working directory.
+      # Exact snapshot identity is deduplicated across every listed replay bank;
+      # the first occurrence in list/record order wins. Fresh parallel
+      # collection intentionally keeps the current PRNG-defined behavior and is
+      # not deduplicated against replay or other workers. Replay records do not
+      # consume max_spins. Replay progress refreshes every batch_size processed
+      # records.
+      #
+      # The optimizer does not maintain or discover a "latest" bank. After a
+      # Run, manually copy the desired timestamped filename into this list for
+      # the next Run. Listing overlapping banks is safe because replay
+      # deduplicates them completely. A bank saves fresh work only when its
+      # unique snapshots are still accepted by the current mode, Tag rules,
+      # Class ranges, and remaining quotas. A stale or unrepresentative bank may
+      # fill little or none of the requested support; replaying it still consumes
+      # time, while fresh collection preserves correctness by filling deficits.
+      collected_seed:
+        # - build/optimizer/collected/game_2026/mode_0/seed_bank_1788754321.bin
+        - build/optimizer/collected/game_0/mode_0/seed_bank_1788772008.bin
+
+      # Positive number of independent fresh raw Machines. Remaining Class
+      # quotas and max_spins are statically partitioned by worker index. Workers
+      # do not race for a shared quota or borrow another worker's unused spin
+      # budget. The same seed and worker count reproduce the same fresh streams
+      # and merge order; changing workers changes the stream partition and
+      # expected sample set.
       workers: 4
 
-      # Positive aggregate progress-reporting cadence in produced spins. This
-      # does not create batches, change worker count, or change accepted results.
+      # Positive progress cadence: processed records during replay and produced
+      # spins during fresh collection. This does not create batches, change
+      # worker count, or change accepted results.
       batch_size: 500000
 
-      # Positive hard budget in attempted spins, not accepted samples. Collection
-      # stops with CollectionInsufficient if all Class quotas are not full when
-      # the statically partitioned worker budgets are exhausted. It never retries
-      # indefinitely or silently reduces a Class's requested sample count.
+      # Positive hard budget in fresh attempted spins, not replay records or
+      # accepted samples. Collection stops with CollectionInsufficient if all
+      # Class quotas are not full when the statically partitioned worker budgets
+      # are exhausted. It never retries indefinitely or silently reduces a
+      # Class's requested sample count.
       max_spins: 10000000000
 
     # Explicit outer-evaluation boundary. v2 currently emits one canonical LP

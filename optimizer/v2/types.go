@@ -128,18 +128,107 @@ type Target struct {
 	BetModes []int    `yaml:"bet_modes" json:"bet_modes"`
 }
 
-// CollectionOptions contains execution policy, not designer math intent.
+// CollectionOptions contains execution and reusable-support policy, not
+// Designer mathematical intent. CollectedSeed lists ordered raw snapshot banks
+// that are replayed through the current game before fresh collection begins.
 type CollectionOptions struct {
+	// CollectedSeed lists raw snapshot-bank paths in replay priority order.
+	// Relative paths are resolved from the process working directory captured by
+	// the Tuner. Source metadata is never trusted: every snapshot is restored,
+	// spun, tagged, and classified again with the current plan.
+	CollectedSeed []string `yaml:"collected_seed" json:"collected_seed"`
 	// Workers is the positive number of independent raw Machines. Class quotas
 	// and MaxSpins are statically partitioned by worker index, so a fixed Seed and
 	// Workers value is reproducible without scheduler-dependent shared counters.
 	Workers int `yaml:"workers" json:"workers"`
-	// BatchSize is the aggregate progress/reporting cadence. It does not control
-	// worker count or the deterministic quota partition.
+	// BatchSize is the processed-record cadence during replay and aggregate
+	// produced-spin cadence during fresh collection. It does not control worker
+	// count or the deterministic quota partition.
 	BatchSize uint64 `yaml:"batch_size" json:"batch_size"`
-	// MaxSpins is the hard upper bound on produced spins for a target run. It
-	// prevents an impossible or rare classification request from running forever.
+	// MaxSpins is the hard upper bound on fresh produced spins for a target run.
+	// Replay records are counted separately and never consume this budget.
 	MaxSpins uint64 `yaml:"max_spins" json:"max_spins"`
+}
+
+// CollectionReplaySourceState describes whether one configured raw bank was
+// consumed, deliberately left unopened, skipped before record processing, or
+// found incompatible with the current runtime while replaying a record.
+type CollectionReplaySourceState string
+
+const (
+	CollectionReplayUsed         CollectionReplaySourceState = "USED"
+	CollectionReplayNotOpened    CollectionReplaySourceState = "NOT_OPENED"
+	CollectionReplaySkipped      CollectionReplaySourceState = "SKIPPED"
+	CollectionReplayIncompatible CollectionReplaySourceState = "INCOMPATIBLE"
+)
+
+// CollectionReplayEndReason is the typed terminal reason for one replay
+// source. Quota completion is normal control flow, never an error or warning.
+type CollectionReplayEndReason string
+
+const (
+	CollectionReplayEndExhausted     CollectionReplayEndReason = "EXHAUSTED"
+	CollectionReplayEndQuotasFull    CollectionReplayEndReason = "QUOTAS_FULL"
+	CollectionReplayEndSourceSkipped CollectionReplayEndReason = "SOURCE_SKIPPED"
+	CollectionReplayEndIncompatible  CollectionReplayEndReason = "INCOMPATIBLE"
+)
+
+// CollectionReplaySourceReport records operational replay evidence. It does
+// not carry a mathematical diagnostic and cannot decide the Run status.
+type CollectionReplaySourceReport struct {
+	ConfiguredPath string                      `json:"configured_path"`
+	ResolvedPath   string                      `json:"resolved_path"`
+	State          CollectionReplaySourceState `json:"state"`
+	EndReason      CollectionReplayEndReason   `json:"end_reason"`
+	TotalRecords   uint64                      `json:"total_records"`
+	Records        uint64                      `json:"records"`
+	Accepted       uint64                      `json:"accepted"`
+	Duplicates     uint64                      `json:"duplicates"`
+	Unmatched      uint64                      `json:"unmatched"`
+	Rejected       uint64                      `json:"rejected"`
+	Warning        string                      `json:"warning,omitempty"`
+}
+
+// CollectionEvidence decomposes accepted support by replay versus fresh
+// collection while retaining an ordered report for every configured source.
+type CollectionEvidence struct {
+	ReplaySources    []CollectionReplaySourceReport `json:"replay_sources"`
+	Classes          []CollectionClassEvidence      `json:"classes"`
+	ReplayRecords    uint64                         `json:"replay_records"`
+	ReplayDuplicates uint64                         `json:"replay_duplicates"`
+	ReplayAccepted   uint64                         `json:"replay_accepted"`
+	FreshSpins       uint64                         `json:"fresh_spins"`
+	FreshAccepted    uint64                         `json:"fresh_accepted"`
+}
+
+// CollectionClassEvidence is the per-Class origin decomposition. Accepted is
+// always ReplayAccepted + FreshAccepted and equals the retained sample count.
+type CollectionClassEvidence struct {
+	Name           string `json:"name"`
+	Requested      uint64 `json:"requested"`
+	ReplayAccepted uint64 `json:"replay_accepted"`
+	FreshAccepted  uint64 `json:"fresh_accepted"`
+	Accepted       uint64 `json:"accepted"`
+}
+
+// CollectionBankReport identifies the durable raw snapshot bank written before
+// dynamic validation or optimization starts.
+type CollectionBankReport struct {
+	Path       string `json:"path"`
+	SHA256     string `json:"sha256"`
+	SeedLength int    `json:"seed_length"`
+	SeedCount  uint64 `json:"seed_count"`
+	Bytes      int64  `json:"bytes"`
+	Partial    bool   `json:"partial"`
+}
+
+// CollectionRunReport keeps collected support and persistence evidence alive
+// even when a later Prepare, model, solve, or verification stage fails.
+type CollectionRunReport struct {
+	Requested uint64               `json:"requested"`
+	Accepted  uint64               `json:"accepted"`
+	Evidence  CollectionEvidence   `json:"evidence"`
+	Bank      CollectionBankReport `json:"bank"`
 }
 
 // CandidateSelectionOptions makes the outer evaluation boundary explicit even
@@ -536,6 +625,7 @@ type RunReport struct {
 	Intent                IntentQualityReport       `json:"intent"`
 	Verification          VerificationReport        `json:"verification"`
 	Publication           *PublicationReport        `json:"publication,omitempty"`
+	Collection            *CollectionRunReport      `json:"collection,omitempty"`
 	ModelHash             string                    `json:"model_hash,omitempty"`
 	SolutionHash          string                    `json:"solution_hash,omitempty"`
 	ArtifactHash          string                    `json:"artifact_hash,omitempty"`

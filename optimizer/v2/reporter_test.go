@@ -83,7 +83,7 @@ func TestRunReportUsesMainGroupVisibilityEngineVersion(t *testing.T) {
 	if !reflect.DeepEqual(report.Engine.SemanticAxioms, []string{MainSemanticAxiomVersion}) {
 		t.Fatalf("semantic axioms=%v", report.Engine.SemanticAxioms)
 	}
-	if report.StableOrderingVersion != "class-declaration/worker-index/sample-acceptance-v2" {
+	if report.StableOrderingVersion != "replay-source/record-then-worker/local/class-serialization-v3" {
 		t.Fatalf("stable ordering version=%q", report.StableOrderingVersion)
 	}
 	provenance := solverProvenance(SolverEvidence{Objective: string(StageSelectCanonicalBucketProbabilities)})
@@ -128,11 +128,20 @@ func TestFinishStageTreatsStoppingDiagnosticAsFailure(t *testing.T) {
 // names by completion percentage or alphabetically.
 func TestCollectionProgressEventCopiesDeclarationOrderedQuotas(t *testing.T) {
 	collected := CollectedProblem{
-		BetMode: 2,
-		Spins:   17,
+		BetMode: 2, SnapshotLength: 1,
+		Spins: 17, Evidence: CollectionEvidence{
+			FreshSpins: 17, FreshAccepted: 3,
+			Classes: []CollectionClassEvidence{
+				{Name: "second-name", Requested: 2, FreshAccepted: 1, Accepted: 1},
+				{Name: "first-name", Requested: 3, FreshAccepted: 2, Accepted: 2},
+			},
+		},
 		Classes: []CollectedClass{
-			{Intent: ClassIntent{Name: "second-name", Collect: CollectIntent{Samples: 2}}, Samples: []CollectedSample{{}}},
-			{Intent: ClassIntent{Name: "first-name", Collect: CollectIntent{Samples: 3}}, Samples: []CollectedSample{{}, {}}},
+			{Intent: ClassIntent{Name: "second-name", Collect: CollectIntent{Samples: 2}}, Samples: []CollectedSample{{ClassID: "second-name", Snapshot: []byte{1}, Sequence: 0}}},
+			{Intent: ClassIntent{Name: "first-name", Collect: CollectIntent{Samples: 3}}, Samples: []CollectedSample{
+				{ClassID: "first-name", Snapshot: []byte{2}, Sequence: 1},
+				{ClassID: "first-name", Snapshot: []byte{3}, Sequence: 2},
+			}},
 		},
 	}
 	event := collectionProgressEvent(collected, 5, 2)

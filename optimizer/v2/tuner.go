@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/zintix-labs/problab"
@@ -31,31 +33,48 @@ import (
 
 const (
 	engineImplementationVersion = "intent-lp-v2.3.1"
-	stableOrderingVersion       = "class-declaration/worker-index/sample-acceptance-v2"
+	// Replay banks contribute in configured source/record order, fresh samples
+	// follow worker/local acceptance order, and persisted bytes serialize Classes
+	// in declaration order while preserving each Class's Sequence order.
+	stableOrderingVersion = "replay-source/record-then-worker/local/class-serialization-v3"
 )
 
 // StageEvent is the typed observation emitted at a pipeline boundary. It is
 // intentionally operational: timestamps and messages never enter model,
 // solution, or artifact hashes.
 type StageEvent struct {
-	Stage       string
-	Substage    OptimizationStageID
-	BetMode     int
-	State       string
-	Message     string
-	Objective   string
-	Metric      string
-	Probe       int
-	Lower       *float64
-	Upper       *float64
-	FixedValue  *float64
-	Status      string
-	Spins       uint64
-	Accepted    uint64
-	Requested   uint64
-	Classes     []ClassCollectionProgress
-	ExpectedRTP float64
-	Duration    time.Duration
+	Stage            string
+	Substage         OptimizationStageID
+	BetMode          int
+	State            string
+	Message          string
+	Objective        string
+	Metric           string
+	Probe            int
+	Lower            *float64
+	Upper            *float64
+	FixedValue       *float64
+	Status           string
+	Spins            uint64
+	Accepted         uint64
+	Requested        uint64
+	Classes          []ClassCollectionProgress
+	ExpectedRTP      float64
+	Duration         time.Duration
+	Path             string
+	SourceIndex      int
+	SourceCount      int
+	Records          uint64
+	TotalRecords     uint64
+	Duplicates       uint64
+	Unmatched        uint64
+	Rejected         uint64
+	SeedLength       int
+	SeedCount        uint64
+	Bytes            int64
+	SHA256           string
+	EndReason        CollectionReplayEndReason
+	RemainingSources int
 }
 
 // ClassCollectionProgress is one immutable snapshot of a Class quota. Reporter
@@ -63,9 +82,11 @@ type StageEvent struct {
 // collection-progress event, which lets a terminal redraw one stable row per
 // Class without inspecting Collector internals or changing collection order.
 type ClassCollectionProgress struct {
-	Name      string
-	Accepted  uint64
-	Requested uint64
+	Name           string
+	ReplayAccepted uint64
+	FreshAccepted  uint64
+	Accepted       uint64
+	Requested      uint64
 }
 
 // Reporter receives ordered pipeline events without coupling the optimizer to
@@ -99,12 +120,15 @@ type TunerOption func(*Tuner) error
 // compiled rows, solver witnesses, and candidate data are local to each Run so
 // repeated calls cannot leak state into one another.
 type Tuner struct {
-	config        Config
-	lab           *problab.Problab
-	collector     *Collector
-	engine        *IntentEngine
-	reporter      Reporter
-	writerFactory outputWriterFactory
+	config               Config
+	lab                  *problab.Problab
+	collector            *Collector
+	engine               *IntentEngine
+	reporter             Reporter
+	writerFactory        outputWriterFactory
+	workingDirectory     string
+	now                  func() time.Time
+	collectionBankWriter collectionBankWriter
 }
 
 // NewTuner constructs the v2 application facade used by cmd/opt. Configuration
@@ -117,12 +141,26 @@ func NewTuner(config Config, lab *problab.Problab, options ...TunerOption) (*Tun
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("capture optimizer v2 working directory: %w", err)
+	}
+	workingDirectory, err = filepath.Abs(workingDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("resolve optimizer v2 working directory: %w", err)
+	}
+	workingDirectory = filepath.Clean(workingDirectory)
+	collector := NewCollector(lab)
+	collector.WorkingDirectory = workingDirectory
 	tuner := &Tuner{
-		config:        cloneConfig(config),
-		lab:           lab,
-		collector:     NewCollector(lab),
-		engine:        NewIntentEngine(NewGonumSolver()),
-		writerFactory: newOutputPublisher,
+		config:               cloneConfig(config),
+		lab:                  lab,
+		collector:            collector,
+		engine:               NewIntentEngine(NewGonumSolver()),
+		writerFactory:        newOutputPublisher,
+		workingDirectory:     workingDirectory,
+		now:                  time.Now,
+		collectionBankWriter: collectionBankWriter{},
 	}
 	for i, option := range options {
 		if option == nil {
@@ -132,8 +170,11 @@ func NewTuner(config Config, lab *problab.Problab, options ...TunerOption) (*Tun
 			return nil, fmt.Errorf("optimizer v2 tuner option[%d]: %w", i, err)
 		}
 	}
-	if tuner.collector == nil || tuner.engine == nil || tuner.writerFactory == nil {
+	if tuner.collector == nil || tuner.engine == nil || tuner.writerFactory == nil || tuner.now == nil {
 		return nil, fmt.Errorf("optimizer v2 tuner has incomplete dependencies")
+	}
+	if tuner.collector.WorkingDirectory != tuner.workingDirectory {
+		return nil, fmt.Errorf("optimizer v2 tuner and collector working directories differ")
 	}
 	return tuner, nil
 }
@@ -340,14 +381,58 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) 
 	return RunResult{Status: StatusOptimal, Report: report, ArtifactPaths: paths}, nil
 }
 
-// collectStage invokes the single-owner Collector and records only operational
-// duration/event metadata around its immutable output.
+// collectStage persists the complete or partial raw Collection Bank before any
+// dynamic support, model, solve, materialization, verification, or publication
+// gate can discard the expensive collection result.
 func (t *Tuner) collectStage(ctx context.Context, plan ResolvedPlan, betMode int, report *RunReport) (CollectedProblem, Diagnostics, error) {
 	stage := fmt.Sprintf("collect[mode=%d]", betMode)
 	started := t.startStage(stage, betMode)
 	collected, diagnostics, err := t.collector.Collect(ctx, plan, betMode)
-	t.finishStage(report, stage, betMode, started, err, diagnostics)
-	return collected, diagnostics, err
+	if err != nil || collected.SnapshotLength <= 0 {
+		t.finishStage(report, stage, betMode, started, err, diagnostics)
+		return collected, diagnostics, err
+	}
+	if t.now == nil {
+		err := fmt.Errorf("optimizer v2 tuner collection clock is nil")
+		t.finishStage(report, stage, betMode, started, err, nil)
+		return CollectedProblem{}, nil, err
+	}
+	savedAtUnix := t.now().Unix()
+	path, err := collectionBankPath(t.workingDirectory, plan, betMode, savedAtUnix)
+	if err != nil {
+		t.finishStage(report, stage, betMode, started, err, nil)
+		return CollectedProblem{}, nil, err
+	}
+	bank, err := t.collectionBankWriter.Write(ctx, path, collected, diagnostics.StopsRun())
+	if err != nil {
+		wrapped := fmt.Errorf("save optimizer v2 collection bank for mode %d: %w", betMode, err)
+		t.finishStage(report, stage, betMode, started, wrapped, nil)
+		return CollectedProblem{}, nil, wrapped
+	}
+	collectionReport, err := buildCollectionRunReport(collected, bank)
+	if err != nil {
+		wrapped := fmt.Errorf("build optimizer v2 collection report for mode %d: %w", betMode, err)
+		t.finishStage(report, stage, betMode, started, wrapped, nil)
+		return CollectedProblem{}, nil, wrapped
+	}
+	report.Collection = &collectionReport
+	if t.reporter != nil {
+		t.reporter.Report(StageEvent{
+			Stage: "collection-bank", State: "completed", BetMode: betMode, Path: bank.Path,
+			SeedLength: bank.SeedLength, SeedCount: bank.SeedCount, Bytes: bank.Bytes, SHA256: bank.SHA256,
+		})
+	}
+	descriptorPath, descriptorErr := writeCollectionDescriptor(ctx, plan, collected, bank)
+	if t.reporter != nil && descriptorErr != nil {
+		t.reporter.Report(StageEvent{
+			Stage: "collection-descriptor", State: "warning", BetMode: betMode,
+			Path: descriptorPath, Message: descriptorErr.Error(),
+		})
+	} else if t.reporter != nil && descriptorPath != "" {
+		t.reporter.Report(StageEvent{Stage: "collection-descriptor", State: "completed", BetMode: betMode, Path: descriptorPath})
+	}
+	t.finishStage(report, stage, betMode, started, nil, diagnostics)
+	return collected, diagnostics, nil
 }
 
 // prepareStage derives empirical bucket statistics and prechecks without

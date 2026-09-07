@@ -175,6 +175,85 @@ func TestLoadConfigAcceptsParallelCollectionWorkers(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAcceptsOrderedCollectedSeedPaths(t *testing.T) {
+	raw := strings.Replace(
+		validConfigYAML,
+		"    collection:\n      workers: 1",
+		"    collection:\n      collected_seed: [relative/one.bin, /absolute/two.bin]\n      workers: 1",
+		1,
+	)
+	config, err := ParseConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("ParseConfig() error = %v", err)
+	}
+	want := []string{"relative/one.bin", "/absolute/two.bin"}
+	if !slices.Equal(config.Plans[0].Collection.CollectedSeed, want) {
+		t.Fatalf("collected_seed=%v want=%v", config.Plans[0].Collection.CollectedSeed, want)
+	}
+}
+
+func TestLoadConfigAllowsOmittedOrEmptyCollectedSeed(t *testing.T) {
+	if _, err := ParseConfig([]byte(validConfigYAML)); err != nil {
+		t.Fatalf("omitted collected_seed: %v", err)
+	}
+	raw := strings.Replace(validConfigYAML, "    collection:\n      workers: 1", "    collection:\n      collected_seed: []\n      workers: 1", 1)
+	if _, err := ParseConfig([]byte(raw)); err != nil {
+		t.Fatalf("empty collected_seed: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsBlankCollectedSeedEntry(t *testing.T) {
+	for _, entry := range []string{`""`, `"   "`} {
+		raw := strings.Replace(validConfigYAML, "    collection:\n      workers: 1", "    collection:\n      collected_seed: ["+entry+"]\n      workers: 1", 1)
+		_, err := ParseConfig([]byte(raw))
+		if err == nil || !strings.Contains(err.Error(), "plans[0].collection.collected_seed[0]") || !strings.Contains(err.Error(), "must not be blank") {
+			t.Fatalf("entry %s error=%v", entry, err)
+		}
+	}
+}
+
+func TestConfigRejectsNULCollectedSeedEntry(t *testing.T) {
+	config, err := ParseConfig([]byte(validConfigYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Plans[0].Collection.CollectedSeed = []string{"bank\x00name.bin"}
+	err = config.Validate()
+	if err == nil || !strings.Contains(err.Error(), "plans[0].collection.collected_seed[0]") || !strings.Contains(err.Error(), "must not contain NUL") {
+		t.Fatalf("NUL path error=%v", err)
+	}
+}
+
+func TestResolvePlanDeepCopiesCollectedSeedAndHashIncludesOrder(t *testing.T) {
+	raw := strings.Replace(validConfigYAML, "    collection:\n      workers: 1", "    collection:\n      collected_seed: [one.bin, two.bin]\n      workers: 1", 1)
+	config, err := ParseConfig([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := config.ResolvePlan("demo-high-win-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Plans[0].Collection.CollectedSeed[0] = "mutated.bin"
+	if first.Plan.Collection.CollectedSeed[0] != "one.bin" {
+		t.Fatal("resolved collected_seed aliases Config")
+	}
+	second := first
+	second.Plan = cloneRunPlan(first.Plan)
+	second.Plan.Collection.CollectedSeed[0], second.Plan.Collection.CollectedSeed[1] = second.Plan.Collection.CollectedSeed[1], second.Plan.Collection.CollectedSeed[0]
+	firstHash, err := hashCanonicalJSON(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := hashCanonicalJSON(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash == secondHash {
+		t.Fatal("collected_seed order did not affect the canonical config hash")
+	}
+}
+
 func TestLoadConfigAcceptsBothOutputFormatsInDeclarationOrder(t *testing.T) {
 	raw := strings.Replace(
 		validConfigYAML,

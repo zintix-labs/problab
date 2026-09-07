@@ -15,8 +15,11 @@
 package v2
 
 import (
+	"bytes"
 	"context"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/zintix-labs/problab/demo"
@@ -89,6 +92,7 @@ func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
 	options.ProfileBisectionIterations = 12
 	options.OtherVisibilityBisectionIterations = 12
 	options.MainGroupInternalVisibilityBisectionIterations = 12
+	outputDirectory := t.TempDir()
 	config := Config{
 		Version: ConfigVersion,
 		Plans: []RunPlan{{
@@ -97,7 +101,7 @@ func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
 			Collection:         collection,
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
 			Output: OutputOptions{
-				Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: t.TempDir(),
+				Format: []OutputFormat{OutputOptimalGacha, OutputOptimalArtifactV1}, Directory: outputDirectory,
 			},
 		}},
 		Intents:       map[string]MathIntent{"complete-pipeline": intent},
@@ -123,6 +127,34 @@ func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
 	}
 	if len(result.ArtifactPaths) == 0 || result.Report.ModelHash == "" || result.Report.SolutionHash == "" || result.Report.ArtifactHash == "" {
 		t.Fatalf("complete run did not preserve artifact/hash evidence: paths=%v report=%+v", result.ArtifactPaths, result.Report)
+	}
+	if result.Report.Collection == nil {
+		t.Fatal("complete run did not preserve Collection Bank evidence")
+	}
+	collectionReport := result.Report.Collection
+	collectionBytes, err := os.ReadFile(collectionReport.Bank.Path)
+	if err != nil {
+		t.Fatalf("read Collection Bank: %v", err)
+	}
+	if !filepath.IsAbs(collectionReport.Bank.Path) || collectionReport.Bank.SeedCount != samples || collectionReport.Bank.Bytes != int64(len(collectionBytes)) {
+		t.Fatalf("Collection Bank report=%+v", collectionReport.Bank)
+	}
+	seedBanks := 0
+	for _, path := range result.ArtifactPaths {
+		if filepath.Base(path) != "seed_bank_0.bin" {
+			continue
+		}
+		seedBanks++
+		artifactBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read artifact seed bank %q: %v", path, err)
+		}
+		if !bytes.Equal(artifactBytes, collectionBytes) {
+			t.Fatalf("artifact seed bank %q differs from Collection Bank", path)
+		}
+	}
+	if seedBanks != 2 {
+		t.Fatalf("found %d artifact seed banks, want gacha and artifact_v1; paths=%v", seedBanks, result.ArtifactPaths)
 	}
 	wantStages := []OptimizationStageID{
 		StageProveHardFeasibility,
