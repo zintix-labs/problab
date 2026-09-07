@@ -626,22 +626,6 @@ func collectionProgressEvent(collected CollectedProblem, requested, _ uint64) St
 	return collectionProgressEventWithState(collected, requested, "progress")
 }
 
-func collectionProgressCountsEvent(betMode int, spins uint64, intents []ClassIntent, accepted []uint64, requested uint64) StageEvent {
-	classes := make([]ClassCollectionProgress, len(intents))
-	totalAccepted := uint64(0)
-	for i, class := range intents {
-		classes[i] = ClassCollectionProgress{
-			Name: class.Name, FreshAccepted: accepted[i], Accepted: accepted[i], Requested: class.Collect.Samples,
-		}
-		totalAccepted += accepted[i]
-	}
-	return StageEvent{
-		Stage: "collection-progress", BetMode: betMode, State: "progress",
-		Spins: spins, Accepted: totalAccepted, Requested: requested,
-		Classes: classes,
-	}
-}
-
 func collectionProgressEventWithState(collected CollectedProblem, requested uint64, state string) StageEvent {
 	classes := currentClassProgress(collected)
 	totalAccepted := uint64(0)
@@ -696,14 +680,6 @@ func currentClassProgress(collected CollectedProblem) []ClassCollectionProgress 
 		}
 	}
 	return classes
-}
-
-func classIntents(classes []CollectedClass) []ClassIntent {
-	intents := make([]ClassIntent, len(classes))
-	for i, class := range classes {
-		intents[i] = class.Intent
-	}
-	return intents
 }
 
 // optimizerBetUnit resolves a zero-based mode against the frozen catalog. It
