@@ -10,7 +10,7 @@
 # Ownership is deliberately separated:
 #   - plans: routing, collection, candidate, and publication policy;
 #   - intents: the Designer-owned mathematical contract;
-#   - engine_options: bounded numerical controls owned by engineering.
+#   - engine_options: bounded numerical controls and reporting thresholds.
 #
 # Every parsed value participates in the resolved configuration hash. Runtime
 # durations and progress events do not. Changing a seed, budget, tolerance, or
@@ -128,7 +128,7 @@ plans:
       # fill little or none of the requested support; replaying it still consumes
       # time, while fresh collection preserves correctness by filling deficits.
       collected_seed:
-        - build/optimizer/collected/game_0/mode_0/seed_bank_1788825331_s4.bin
+        - build/optimizer/collected/game_0/mode_0/seed_bank_1788868410_s4.bin
         
 
       # Positive number of independent fresh raw Machines. Remaining Class
@@ -559,10 +559,16 @@ intents:
 # =============================================================================
 #
 # Every field is required, finite/bounded as documented, reported, and included
-# in the configuration hash. These are numerical safety and resolution controls;
+# in the configuration hash. These are numerical controls and report thresholds;
 # they must never be changed automatically after an infeasible result to make a
 # Designer contract appear feasible.
 engine_options:
+  # Reporting-only collision threshold, strictly between 0 and 1. Each Bucket's
+  # CSV draws_at_collision_probability estimates the whole-game draw count at
+  # which a repeated seed in that Bucket reaches this birthday/Poisson probability.
+  # This does not change design.risk.collision.max or optimization constraints.
+  distribution_collision_probability: 0.3
+
   # Positive tolerance for scaled replay of original semantic rows after a
   # backend solve. This is the final defense against an “optimal” backend result
   # whose returned vector violates the authored model beyond accepted error.

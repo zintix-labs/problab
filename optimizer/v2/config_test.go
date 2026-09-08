@@ -93,6 +93,7 @@ intents:
               max: 0.30
 
 engine_options:
+  distribution_collision_probability: 0.25
   feasibility_tolerance: 1.0e-9
   optimality_tolerance: 1.0e-9
   quantile_epsilon: 1.0e-9
@@ -275,6 +276,49 @@ func TestLoadConfigRejectsScalarOutputFormat(t *testing.T) {
 	raw := strings.Replace(validConfigYAML, "format: [optimal_artifact_v1]", "format: optimal_artifact_v1", 1)
 	if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
 		t.Fatalf("scalar output format error=%v", err)
+	}
+}
+
+func TestDistributionCollisionProbabilityConfiguration(t *testing.T) {
+	const setting = "  distribution_collision_probability: 0.25\n"
+	for _, value := range []string{"", "0", "1", "-0.1", "1.1", ".nan", ".inf", "-.inf"} {
+		t.Run("invalid_"+value, func(t *testing.T) {
+			replacement := ""
+			if value != "" {
+				replacement = "  distribution_collision_probability: " + value + "\n"
+			}
+			raw := strings.Replace(validConfigYAML, setting, replacement, 1)
+			if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), "engine_options.distribution_collision_probability") {
+				t.Fatalf("invalid probability %q error = %v", value, err)
+			}
+		})
+	}
+	if got := DefaultEngineOptions().DistributionCollisionProbability; got != 0.25 {
+		t.Fatalf("default collision probability = %g", got)
+	}
+	raw := strings.Replace(validConfigYAML, setting, "  distribution_collision_probability: 0.5\n", 1)
+	config, err := ParseConfig([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := config.ResolvePlan("demo-high-win-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.EngineOptions.DistributionCollisionProbability != 0.5 {
+		t.Fatalf("resolved collision probability = %g", resolved.EngineOptions.DistributionCollisionProbability)
+	}
+	configuredHash, err := hashCanonicalJSON(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.EngineOptions.DistributionCollisionProbability = 0.25
+	defaultHash, err := hashCanonicalJSON(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuredHash == defaultHash {
+		t.Fatal("distribution collision probability did not affect config identity")
 	}
 }
 

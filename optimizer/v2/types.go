@@ -50,6 +50,9 @@ const (
 	// DefaultMainGroupInternalVisibilityBisectionIterations bounds the neutral
 	// refinement that protects supported sibling buckets inside Main Groups.
 	DefaultMainGroupInternalVisibilityBisectionIterations = 60
+	// DefaultDistributionCollisionProbability is the reporting-only threshold
+	// used to estimate draws until a Bucket's first repeated seed.
+	DefaultDistributionCollisionProbability = 0.25
 )
 
 // OptimizationStageID is the stable machine identity of a product-facing
@@ -419,10 +422,14 @@ type CollisionIntent struct {
 	Max float64 `yaml:"max" json:"max"`
 }
 
-// EngineOptions controls numerical tolerances and bounded search work. These
-// values must never relax or rewrite MathIntent; every effective value is copied
+// EngineOptions controls numerical tolerances, bounded search work, and report
+// thresholds. These values must never relax or rewrite MathIntent; every value is copied
 // into ResolvedPlan and therefore available to provenance reports.
 type EngineOptions struct {
+	// DistributionCollisionProbability is the birthday/Poisson collision
+	// threshold used by the distribution report, strictly between zero and one.
+	// It does not change the designer's RiskIntent or optimization constraints.
+	DistributionCollisionProbability float64 `yaml:"distribution_collision_probability" json:"distribution_collision_probability"`
 	// FeasibilityTolerance is the maximum scaled violation accepted when the
 	// original semantic constraints are replayed after a backend solve.
 	FeasibilityTolerance float64 `yaml:"feasibility_tolerance" json:"feasibility_tolerance"`
@@ -709,9 +716,11 @@ type ClassDistributionReport struct {
 }
 
 // BucketProbabilityReport describes one configured atomic interval (or the
-// single empirical-uniform interval). Seed probabilities are unconditional
-// probabilities per game draw and use a min/max range because alias-table
-// approximation can introduce tiny, verified differences between outcomes.
+// single empirical-uniform interval). SeedProbability is the unconditional
+// Bucket probability divided by SeedCount; individual runtime marginals may
+// differ slightly due to verified alias rounding. Median (lower median) and
+// Mean describe the equally weighted sample payout multipliers, not interval
+// midpoints. Empty Buckets report zero for these sample statistics.
 // DrawsAtCollisionProbability is zero only when the Bucket has zero runtime
 // probability; otherwise it is the first whole draw count whose birthday/
 // Poisson approximation reaches the report's CollisionProbability.
@@ -723,8 +732,9 @@ type BucketProbabilityReport struct {
 	SeedCount                   int     `json:"seed_count"`
 	ConditionalProbability      float64 `json:"conditional_probability"`
 	UnconditionalProbability    float64 `json:"unconditional_probability"`
-	SeedProbabilityMin          float64 `json:"seed_probability_min"`
-	SeedProbabilityMax          float64 `json:"seed_probability_max"`
+	Median                      float64 `json:"median"`
+	Mean                        float64 `json:"mean"`
+	SeedProbability             float64 `json:"seed_probability"`
 	DrawsAtCollisionProbability float64 `json:"draws_at_collision_probability,omitempty"`
 }
 

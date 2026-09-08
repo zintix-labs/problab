@@ -686,9 +686,9 @@ func reportV2Outcome(output io.Writer, result optimizerv2.RunResult) {
 // generated mode as one CSV beneath directory, keeping the terminal clean while
 // still giving Designers the actual runtime distribution. Both conditional and
 // unconditional Bucket probabilities are emitted so a within-Class shape is
-// never confused with a whole-game hit rate, and the per-seed range is recorded
-// as runtime truth because a verified alias approximation can make individual
-// marginals differ by a tiny amount while preserving every semantic constraint.
+// never confused with a whole-game hit rate. Per-seed probability summarizes
+// the uniform allocation within each Bucket; median and mean describe its
+// empirical sample payout multipliers.
 // It returns the paths it wrote, in mode order.
 func writeModeDistributionCSVs(directory string, modes []optimizerv2.ModeRunReport) ([]string, error) {
 	written := make([]string, 0, len(modes))
@@ -723,13 +723,14 @@ func writeModeDistributionCSV(path string, report optimizerv2.BucketDistribution
 	writer := csv.NewWriter(file)
 	_ = writer.Write([]string{
 		"class",
-		"class_global_probability",
 		"bucket",
+		"class_global_probability",
 		"conditional_probability",
 		"unconditional_probability",
+		"median",
+		"mean",
 		"seed_count",
-		"seed_probability_min",
-		"seed_probability_max",
+		"seed_probability",
 		"collision_probability",
 		"draws_at_collision_probability",
 	})
@@ -739,13 +740,14 @@ func writeModeDistributionCSV(path string, report optimizerv2.BucketDistribution
 		for _, bucket := range class.Buckets {
 			_ = writer.Write([]string{
 				class.Class,
-				classProbability,
 				formatBucketInterval(bucket),
+				classProbability,
 				strconv.FormatFloat(bucket.ConditionalProbability, 'g', 9, 64),
 				strconv.FormatFloat(bucket.UnconditionalProbability, 'g', 9, 64),
+				strconv.FormatFloat(bucket.Median, 'g', 9, 64),
+				strconv.FormatFloat(bucket.Mean, 'g', 9, 64),
 				strconv.Itoa(bucket.SeedCount),
-				strconv.FormatFloat(bucket.SeedProbabilityMin, 'e', 9, 64),
-				strconv.FormatFloat(bucket.SeedProbabilityMax, 'e', 9, 64),
+				strconv.FormatFloat(bucket.SeedProbability, 'e', 9, 64),
 				collision,
 				formatCollisionDraws(bucket.DrawsAtCollisionProbability),
 			})

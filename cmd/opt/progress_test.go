@@ -410,7 +410,7 @@ func TestWriteModeDistributionCSVsWritesVerifiedMarginals(t *testing.T) {
 				Buckets: []optimizerv2.BucketProbabilityReport{{
 					Lower: 0, Upper: 1, SeedCount: 2,
 					ConditionalProbability: 0.5, UnconditionalProbability: 0.05,
-					SeedProbabilityMin: 0.02, SeedProbabilityMax: 0.03,
+					Median: 0.2, Mean: 0.4, SeedProbability: 0.025,
 					DrawsAtCollisionProbability: 24,
 				}},
 			}},
@@ -428,15 +428,10 @@ func TestWriteModeDistributionCSVsWritesVerifiedMarginals(t *testing.T) {
 		t.Fatalf("read distribution csv: %v", err)
 	}
 	got := string(raw)
-	for _, substring := range []string{
-		"class,class_global_probability,bucket,",
-		"draws_at_collision_probability",
-		"bg_min,0.1,\"[0, 1)\",0.5,0.05,2,",
-		"2.000000000e-02,3.000000000e-02,0.3,24",
-	} {
-		if !strings.Contains(got, substring) {
-			t.Fatalf("distribution csv = %q, want substring %q", got, substring)
-		}
+	wantCSV := "class,bucket,class_global_probability,conditional_probability,unconditional_probability,median,mean,seed_count,seed_probability,collision_probability,draws_at_collision_probability\n" +
+		"bg_min,\"[0, 1)\",0.1,0.5,0.05,0.2,0.4,2,2.500000000e-02,0.3,24\n"
+	if got != wantCSV {
+		t.Fatalf("distribution csv = %q, want %q", got, wantCSV)
 	}
 }
 

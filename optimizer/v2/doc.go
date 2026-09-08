@@ -20,8 +20,8 @@
 //     collection budget, and output directory.
 //   - MathIntent records the designer's hard mathematical requirements and
 //     group-level soft intent.
-//   - EngineOptions controls bounded numerical work without changing designer
-//     intent.
+//   - EngineOptions controls bounded numerical work and report thresholds
+//     without changing designer intent.
 //
 // Configuration is strict and versioned. LoadConfig rejects unknown YAML keys,
 // additional YAML documents, and semantic contradictions before collection.

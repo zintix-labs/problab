@@ -19,8 +19,6 @@ import (
 	"math"
 )
 
-const distributionCollisionProbability = 0.25
-
 // BuildBucketDistributionReport summarizes the verified runtime distribution,
 // not the pre-alias LP vector. This distinction matters for large alias tables:
 // their reconstruction can differ by a tiny accepted numerical amount, and an
@@ -29,9 +27,14 @@ const distributionCollisionProbability = 0.25
 // Bucket probability is exposed in both coordinate systems used by the model:
 // ConditionalProbability is within its Class, while UnconditionalProbability
 // is the chance of selecting the Bucket in one complete game draw. Per-seed
-// probabilities are unconditional marginals and therefore feed directly into
-// the collision calculation.
+// probability is the unconditional Bucket mass divided by its seed count,
+// summarizing the model's uniform allocation within a Bucket. Collision
+// calculations retain the actual runtime marginals, including alias rounding.
 func BuildBucketDistributionReport(compiled CompiledModel, mode MaterializedMode) (BucketDistributionReport, error) {
+	collisionProbability := compiled.Prepared.Plan.EngineOptions.DistributionCollisionProbability
+	if err := validateDistributionCollisionProbability(collisionProbability); err != nil {
+		return BucketDistributionReport{}, err
+	}
 	if len(mode.Samples) != len(mode.EffectiveProbabilities) {
 		return BucketDistributionReport{}, fmt.Errorf(
 			"sample/effective probability length mismatch: samples=%d probabilities=%d",
@@ -42,7 +45,7 @@ func BuildBucketDistributionReport(compiled CompiledModel, mode MaterializedMode
 
 	report := BucketDistributionReport{
 		BetMode:              mode.BetMode,
-		CollisionProbability: distributionCollisionProbability,
+		CollisionProbability: collisionProbability,
 		Classes:              make([]ClassDistributionReport, len(compiled.Prepared.Classes)),
 	}
 	classIndex := make(map[string]int, len(compiled.Prepared.Classes))
@@ -71,6 +74,10 @@ func BuildBucketDistributionReport(compiled CompiledModel, mode MaterializedMode
 				Upper:          upper,
 				UpperInclusive: upperInclusive,
 				SeedCount:      len(bucket.Samples),
+				Mean:           bucket.Mean,
+			}
+			if len(bucket.Samples) > 0 {
+				report.Classes[index].Buckets[bucketIndex].Median = empiricalLowerMedian(bucket.Samples)
 			}
 		}
 	}
@@ -96,14 +103,7 @@ func BuildBucketDistributionReport(compiled CompiledModel, mode MaterializedMode
 		if !isFinite(probability) || probability < 0 {
 			return BucketDistributionReport{}, fmt.Errorf("sample[%d] effective probability must be finite and nonnegative", sampleIndex)
 		}
-		bucket := &report.Classes[class].Buckets[sample.BucketIndex]
 		bucketTotals[class][sample.BucketIndex].Add(probability)
-		if seedSeen[class][sample.BucketIndex] == 0 || probability < bucket.SeedProbabilityMin {
-			bucket.SeedProbabilityMin = probability
-		}
-		if seedSeen[class][sample.BucketIndex] == 0 || probability > bucket.SeedProbabilityMax {
-			bucket.SeedProbabilityMax = probability
-		}
 		seedSeen[class][sample.BucketIndex]++
 		concentrations[class][sample.BucketIndex].Add(probability * probability)
 	}
@@ -124,9 +124,12 @@ func BuildBucketDistributionReport(compiled CompiledModel, mode MaterializedMode
 			if class.Probability > 0 {
 				bucket.ConditionalProbability = bucket.UnconditionalProbability / class.Probability
 			}
+			if bucket.SeedCount > 0 {
+				bucket.SeedProbability = bucket.UnconditionalProbability / float64(bucket.SeedCount)
+			}
 			bucket.DrawsAtCollisionProbability = drawsAtCollisionProbability(
 				concentrations[classIndex][bucketIndex].Value(),
-				distributionCollisionProbability,
+				collisionProbability,
 			)
 		}
 	}

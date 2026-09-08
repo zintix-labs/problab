@@ -45,11 +45,12 @@ func (e *ConfigError) Error() string {
 	return "optimizer v2 config " + e.Path + ": " + e.Problem
 }
 
-// DefaultEngineOptions returns the versioned numerical defaults described by
+// DefaultEngineOptions returns the versioned numerical and reporting defaults described by
 // the v2 contract. Loading does not silently apply these defaults: canonical
 // YAML should spell out every effective value so reviews and reports are clear.
 func DefaultEngineOptions() EngineOptions {
 	return EngineOptions{
+		DistributionCollisionProbability:               DefaultDistributionCollisionProbability,
 		FeasibilityTolerance:                           DefaultFeasibilityTolerance,
 		OptimalityTolerance:                            DefaultOptimalityTolerance,
 		QuantileEpsilon:                                DefaultQuantileEpsilon,
@@ -214,6 +215,9 @@ func (p ResolvedPlan) WithOverrides(overrides RunOverrides) (ResolvedPlan, error
 // controls. It intentionally accepts non-default positive values because an
 // audited developer configuration may trade runtime for resolution.
 func validateEngineOptions(options EngineOptions) error {
+	if err := validateDistributionCollisionProbability(options.DistributionCollisionProbability); err != nil {
+		return err
+	}
 	positive := []struct {
 		path  string
 		value float64
@@ -240,6 +244,13 @@ func validateEngineOptions(options EngineOptions) error {
 	}
 	if options.MainGroupInternalVisibilityBisectionIterations <= 0 {
 		return invalid("engine_options.main_group_internal_visibility_bisection_iterations", "must be greater than zero")
+	}
+	return nil
+}
+
+func validateDistributionCollisionProbability(probability float64) error {
+	if !finite(probability) || probability <= 0 || probability >= 1 {
+		return invalid("engine_options.distribution_collision_probability", "must be finite and strictly between zero and one")
 	}
 	return nil
 }
