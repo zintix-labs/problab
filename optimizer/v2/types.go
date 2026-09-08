@@ -176,17 +176,19 @@ const (
 // CollectionReplaySourceReport records operational replay evidence. It does
 // not carry a mathematical diagnostic and cannot decide the Run status.
 type CollectionReplaySourceReport struct {
-	ConfiguredPath string                      `json:"configured_path"`
-	ResolvedPath   string                      `json:"resolved_path"`
-	State          CollectionReplaySourceState `json:"state"`
-	EndReason      CollectionReplayEndReason   `json:"end_reason"`
-	TotalRecords   uint64                      `json:"total_records"`
-	Records        uint64                      `json:"records"`
-	Accepted       uint64                      `json:"accepted"`
-	Duplicates     uint64                      `json:"duplicates"`
-	Unmatched      uint64                      `json:"unmatched"`
-	Rejected       uint64                      `json:"rejected"`
-	Warning        string                      `json:"warning,omitempty"`
+	ConfiguredPath         string                      `json:"configured_path"`
+	ResolvedPath           string                      `json:"resolved_path"`
+	State                  CollectionReplaySourceState `json:"state"`
+	EndReason              CollectionReplayEndReason   `json:"end_reason"`
+	TotalRecords           uint64                      `json:"total_records"`
+	Records                uint64                      `json:"records"`
+	Accepted               uint64                      `json:"accepted"`
+	Duplicates             uint64                      `json:"duplicates"`
+	Unmatched              uint64                      `json:"unmatched"`
+	Rejected               uint64                      `json:"rejected"`
+	StreamCursor           uint64                      `json:"stream_cursor"`
+	StreamCursorRecognized bool                        `json:"stream_cursor_recognized"`
+	Warning                string                      `json:"warning,omitempty"`
 }
 
 // CollectionEvidence decomposes accepted support by replay versus fresh
@@ -211,24 +213,66 @@ type CollectionClassEvidence struct {
 	Accepted       uint64 `json:"accepted"`
 }
 
+// CollectionDuplicateOrigin records whether the first retained and later
+// duplicate occurrences came from replay or fresh collection. It is
+// provenance for investigation, not a claim about the collision's root cause.
+type CollectionDuplicateOrigin string
+
+const (
+	CollectionDuplicateReplayFresh  CollectionDuplicateOrigin = "REPLAY_FRESH"
+	CollectionDuplicateFreshFresh   CollectionDuplicateOrigin = "FRESH_FRESH"
+	CollectionDuplicateReplayReplay CollectionDuplicateOrigin = "REPLAY_REPLAY"
+)
+
+// CollectionDuplicateOriginReport is one deterministic origin subtotal.
+type CollectionDuplicateOriginReport struct {
+	Origin     CollectionDuplicateOrigin `json:"origin"`
+	Duplicates uint64                    `json:"duplicates"`
+}
+
+// CollectionClassDuplicateReport is the Class-local duplicate partition used
+// by JSON reports, diagnostics, and terminal output.
+type CollectionClassDuplicateReport struct {
+	Name          string                            `json:"name"`
+	Records       uint64                            `json:"records"`
+	UniqueRecords uint64                            `json:"unique_records"`
+	Duplicates    uint64                            `json:"duplicates"`
+	DuplicateRate float64                           `json:"duplicate_rate"`
+	Origins       []CollectionDuplicateOriginReport `json:"origins,omitempty"`
+}
+
+// CollectionDuplicateAudit summarizes the strict post-collection Class-local
+// identity audit. Records and UniqueRecords are populated even on a clean run.
+type CollectionDuplicateAudit struct {
+	Records       uint64                            `json:"records"`
+	UniqueRecords uint64                            `json:"unique_records"`
+	Duplicates    uint64                            `json:"duplicates"`
+	DuplicateRate float64                           `json:"duplicate_rate"`
+	Origins       []CollectionDuplicateOriginReport `json:"origins,omitempty"`
+	Classes       []CollectionClassDuplicateReport  `json:"classes,omitempty"`
+}
+
 // CollectionBankReport identifies the durable raw snapshot bank written before
 // dynamic validation or optimization starts.
 type CollectionBankReport struct {
-	Path       string `json:"path"`
-	SHA256     string `json:"sha256"`
-	SeedLength int    `json:"seed_length"`
-	SeedCount  uint64 `json:"seed_count"`
-	Bytes      int64  `json:"bytes"`
-	Partial    bool   `json:"partial"`
+	Path              string `json:"path"`
+	SHA256            string `json:"sha256"`
+	SeedLength        int    `json:"seed_length"`
+	SeedCount         uint64 `json:"seed_count"`
+	Bytes             int64  `json:"bytes"`
+	Partial           bool   `json:"partial"`
+	Distinct          bool   `json:"distinct"`
+	NextStreamOrdinal uint64 `json:"next_stream_ordinal"`
 }
 
 // CollectionRunReport keeps collected support and persistence evidence alive
 // even when a later Prepare, model, solve, or verification stage fails.
 type CollectionRunReport struct {
-	Requested uint64               `json:"requested"`
-	Accepted  uint64               `json:"accepted"`
-	Evidence  CollectionEvidence   `json:"evidence"`
-	Bank      CollectionBankReport `json:"bank"`
+	Requested      uint64                   `json:"requested"`
+	Accepted       uint64                   `json:"accepted"`
+	Evidence       CollectionEvidence       `json:"evidence"`
+	DuplicateAudit CollectionDuplicateAudit `json:"duplicate_audit"`
+	Bank           CollectionBankReport     `json:"bank"`
 }
 
 // CandidateSelectionOptions makes the outer evaluation boundary explicit even

@@ -93,10 +93,22 @@ plans:
       # Relative paths are resolved from cmd/opt's startup working directory.
       # Exact snapshot identity is deduplicated across every listed replay bank;
       # the first occurrence in list/record order wins. Fresh parallel
-      # collection intentionally keeps the current PRNG-defined behavior and is
-      # not deduplicated against replay or other workers. Replay records do not
-      # consume max_spins. Replay progress refreshes every batch_size processed
-      # records.
+      # collection is not deduplicated inline against replay or other workers.
+      # After collection, exact snapshot bytes are audited independently inside
+      # each Class. A same-Class duplicate writes only a Class-local deduplicated
+      # *.distinct.bin recovery bank and stops before Prepare; it is never
+      # silently repaired or refilled. Replay records do not consume max_spins.
+      # Replay progress refreshes every batch_size processed records.
+      #
+      # New banks use seed_bank_<unix>_s<next>.bin. The _sN value is the next
+      # unallocated logical worker-stream ordinal, not a direct DeriveSeed Index.
+      # A top-up starts at the maximum recognized _sN across ALL configured
+      # paths, even when a source is missing, incompatible, or left unopened.
+      # Starting fresh fan-out reserves exactly workers logical streams. This is
+      # best-effort collision avoidance; third-party DeriveSeed implementations
+      # can still collide, which is why the post-collection audit is mandatory.
+      # Legacy or renamed filenames without _sN remain replayable, but warn and
+      # contribute cursor 0.
       #
       # The optimizer does not maintain or discover a "latest" bank. After a
       # Run, manually copy the desired timestamped filename into this list for
@@ -107,15 +119,15 @@ plans:
       # fill little or none of the requested support; replaying it still consumes
       # time, while fresh collection preserves correctness by filling deficits.
       collected_seed:
-        # - build/optimizer/collected/game_2026/mode_0/seed_bank_1788754321.bin
-        - build/optimizer/collected/game_0/mode_0/seed_bank_1788772008.bin
+        - build/optimizer/collected/game_0/mode_0/seed_bank_1788825331_s4.bin
+        
 
       # Positive number of independent fresh raw Machines. Remaining Class
       # quotas and max_spins are statically partitioned by worker index. Workers
       # do not race for a shared quota or borrow another worker's unused spin
-      # budget. The same seed and worker count reproduce the same fresh streams
-      # and merge order; changing workers changes the stream partition and
-      # expected sample set.
+      # budget. The same seed, worker count, and replay filename cursor reproduce
+      # the same fresh streams and merge order; changing workers or the maximum
+      # configured _sN changes the stream partition and expected sample set.
       workers: 4
 
       # Positive progress cadence: processed records during replay and produced
@@ -313,18 +325,18 @@ intents:
         weight: 7880
         collect:
           samples: 55000
-          win_range: [10.0, 50.0]
+          win_range: [10.0001, 50.0]
           tags:
             matches: [bg]
             mismatches: []
         design:
           exp: 17.0
-          median: [10, 17]
+          median: [10.0001, 17]
           subjective:
             intent: true
             # [10,11), [11,15), [15,20), [20,30), [30,50]. A payout of
             # exactly 15.0 belongs to [15,20), not [11,15).
-            buckets: [10.0, 11.0, 15.0, 20.0, 30.0, 50.0]
+            buckets: [10.0001, 11.0, 15.0, 20.0, 30.0, 50.0]
             main_experience:
               groups:
                 - [11.0, 15.0]
@@ -340,16 +352,16 @@ intents:
         weight: 80
         collect:
           samples: 2000
-          win_range: [50.0, 500.0]
+          win_range: [50.0001, 500.0]
           tags:
             matches: [bg]
             mismatches: []
         design:
           exp: 100.0
-          median: [50.0, 100.0]
+          median: [50.0001, 100.0]
           subjective:
             intent: true
-            buckets: [50.0, 55.0, 80.0, 120.0, 180.0, 250.0, 350.0, 500.0]
+            buckets: [50.0001, 55.0, 80.0, 120.0, 180.0, 250.0, 350.0, 500.0]
             main_experience:
               groups:
                 - [55.0,80.0]
@@ -395,19 +407,19 @@ intents:
         weight: 720
         collect:
           samples: 50000
-          win_range: [25.0,50.0]
+          win_range: [25.0001,50.0]
           tags:
             matches: [fg]
             mismatches: []
         design:
           exp: 30.0
-          median: [25.0,30.0]
+          median: [25.0001,30.0]
           subjective:
             intent: true
-            buckets: [25.0, 28.0, 35.0,50.0]
+            buckets: [25.0001, 28.0, 35.0,50.0]
             main_experience:
               groups:
-                - [25.0,28.0]
+                - [25.0001,28.0]
               probability:
                 min: 0.60
                 max: 0.99
@@ -419,19 +431,19 @@ intents:
         weight: 1494
         collect:
           samples: 80000
-          win_range: [50.0,100.0]
+          win_range: [50.0001,100.0]
           tags:
             matches: [fg]
             mismatches: []
         design:
           exp: 60.0
-          median: [50.0,60.0]
+          median: [50.0001,60.0]
           subjective:
             intent: true
-            buckets: [50.0,60.0,75.0,100.0]
+            buckets: [50.0001,60.0,75.0,100.0]
             main_experience:
               groups:
-                - [50.0,60.0]
+                - [50.0001,60.0]
                 - [60.0,75.0]
               probability:
                 min: 0.6
@@ -443,16 +455,16 @@ intents:
         weight: 1300
         collect:
           samples: 60000
-          win_range: [100.0,300.0]
+          win_range: [100.0001,300.0]
           tags:
             matches: [fg]
             mismatches: []
         design:
           exp: 160.0
-          median: [100.0,160.0]
+          median: [100.0001,160.0]
           subjective:
             intent: true
-            buckets: [100.0,125.0,150.0,250.0,300.0]
+            buckets: [100.0001,125.0,150.0,250.0,300.0]
             main_experience:
               groups:
                 - [125,150]
@@ -466,19 +478,19 @@ intents:
         weight: 100
         collect:
           samples: 40000
-          win_range: [300.0,500.0]
+          win_range: [300.0001,500.0]
           tags:
             matches: [fg]
             mismatches: []
         design:
           exp: 330
-          median: [300.0,330.0]
+          median: [300.0001,330.0]
           subjective:
             intent: true
-            buckets: [300.0,330.0,360.0,420.0,500.0]
+            buckets: [300.0001,330.0,360.0,420.0,500.0]
             main_experience:
               groups:
-                - [300.0,330.0]
+                - [300.0001,330.0]
               probability:
                 min: 0.5
                 max: 0.85
@@ -489,19 +501,19 @@ intents:
         weight: 35
         collect:
           samples: 3000
-          win_range: [500.0,750.0]
+          win_range: [500.0001,750.0]
           tags:
             matches: [fg]
             mismatches: []
         design:
           exp: 520
-          median: [500.0,520.0]
+          median: [500.0001,520.0]
           subjective:
             intent: true
-            buckets: [500.0,525.0,540.0,600.0,750]
+            buckets: [500.0001,525.0,540.0,600.0,750]
             main_experience:
               groups:
-                - [500.0,525.0]
+                - [500.0001,525.0]
               probability:
                 min: 0.5
                 max: 0.99
@@ -515,19 +527,19 @@ intents:
         weight: 11
         collect:
           samples: 300
-          win_range: [750.0,1000.0]
+          win_range: [750.0001,1000.0]
           tags:
             matches: [fg]
             mismatches: []
         design:
           exp: 780
-          median: [750.0,780.0]
+          median: [750.0001,780.0]
           subjective:
             intent: true
-            buckets: [750.0,780.0,850.0,1000.0]
+            buckets: [750.0001,780.0,850.0,1000.0]
             main_experience:
               groups:
-                - [750.0,850.0]
+                - [750.0001,850.0]
               probability:
                 min: 0.4
                 max: 0.95

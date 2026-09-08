@@ -47,15 +47,15 @@ func TestResolveRunPathAndCollectionBankPath(t *testing.T) {
 	}
 
 	plan := ResolvedPlan{Plan: RunPlan{Target: Target{Game: 2026}, Output: OutputOptions{Directory: "build/optimizer"}}}
-	path, err := collectionBankPath(workingDirectory, plan, 2, 1788754321)
+	path, err := collectionBankPath(workingDirectory, plan, 2, 1788754321, 4, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.Join(workingDirectory, "build", "optimizer", "collected", "game_2026", "mode_2", "seed_bank_1788754321.bin")
+	wantPath := filepath.Join(workingDirectory, "build", "optimizer", "collected", "game_2026", "mode_2", "seed_bank_1788754321_s4.bin")
 	if path != wantPath {
 		t.Fatalf("collection bank path=%q want=%q", path, wantPath)
 	}
-	if _, err := collectionBankPath(workingDirectory, plan, 2, -1); err == nil {
+	if _, err := collectionBankPath(workingDirectory, plan, 2, -1, 4, false); err == nil {
 		t.Fatal("negative timestamp was accepted")
 	}
 }
@@ -105,7 +105,7 @@ func TestCollectionBankWriterUsesClassThenSequenceOrderAndDigest(t *testing.T) {
 			}},
 		},
 	}
-	report, err := (collectionBankWriter{}).Write(context.Background(), path, collected, false)
+	report, err := (collectionBankWriter{}).Write(context.Background(), path, collected, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestCollectionBankWriterUsesClassThenSequenceOrderAndDigest(t *testing.T) {
 	bad.Classes = append([]CollectedClass(nil), collected.Classes...)
 	bad.Classes[0].Samples = append([]CollectedSample(nil), collected.Classes[0].Samples...)
 	bad.Classes[0].Samples[1].Sequence = 2
-	if _, err := (collectionBankWriter{}).Write(context.Background(), filepath.Join(directory, "bad.bin"), bad, false); err == nil {
+	if _, err := (collectionBankWriter{}).Write(context.Background(), filepath.Join(directory, "bad.bin"), bad, false, false); err == nil {
 		t.Fatal("non-increasing Class Sequence was accepted")
 	}
 }
@@ -134,7 +134,7 @@ func TestCollectionBankWriterUsesClassThenSequenceOrderAndDigest(t *testing.T) {
 func TestCollectionBankWriterWritesZeroBytePartialAndPreservesExistingOnRenameFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "seed_bank_2.bin")
 	empty := CollectedProblem{SnapshotLength: 7}
-	report, err := (collectionBankWriter{}).Write(context.Background(), path, empty, true)
+	report, err := (collectionBankWriter{}).Write(context.Background(), path, empty, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestCollectionBankWriterWritesZeroBytePartialAndPreservesExistingOnRenameFa
 	if _, err := writer.Write(context.Background(), path, CollectedProblem{
 		SnapshotLength: 1,
 		Classes:        []CollectedClass{{Intent: ClassIntent{Name: "a"}, Samples: []CollectedSample{{ClassID: "a", Snapshot: []byte{9}}}}},
-	}, false); err == nil {
+	}, false, false); err == nil {
 		t.Fatal("rename failure was ignored")
 	}
 	got, err := os.ReadFile(path)
@@ -167,7 +167,7 @@ func TestCollectionBankWriterWritesZeroBytePartialAndPreservesExistingOnRenameFa
 		SnapshotLength: 1,
 		Classes:        []CollectedClass{{Intent: ClassIntent{Name: "a"}, Samples: []CollectedSample{{ClassID: "a", Snapshot: []byte{9}}}}},
 	}
-	if _, err := (collectionBankWriter{}).Write(context.Background(), path, replacement, false); err != nil {
+	if _, err := (collectionBankWriter{}).Write(context.Background(), path, replacement, false, false); err != nil {
 		t.Fatalf("atomic replacement: %v", err)
 	}
 	got, err = os.ReadFile(path)
@@ -199,7 +199,7 @@ func TestReplayDeduplicatesBankThenFreshCollectionFillsOnlyDeficit(t *testing.T)
 	}
 	directory := t.TempDir()
 	bankPath := filepath.Join(directory, "duplicate.bin")
-	if _, err := (collectionBankWriter{}).Write(context.Background(), bankPath, bankCollection, false); err != nil {
+	if _, err := (collectionBankWriter{}).Write(context.Background(), bankPath, bankCollection, false, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -238,7 +238,7 @@ func TestReplaySkipsMissingThenStopsOpeningSourcesWhenQuotasFill(t *testing.T) {
 		t.Fatalf("baseline collection diagnostics=%+v err=%v", diagnostics, err)
 	}
 	bankPath := filepath.Join(directory, "valid.bin")
-	if _, err := (collectionBankWriter{}).Write(context.Background(), bankPath, baseline, false); err != nil {
+	if _, err := (collectionBankWriter{}).Write(context.Background(), bankPath, baseline, false, false); err != nil {
 		t.Fatal(err)
 	}
 	plan := collectionFixturePlan(998877, 1, 1, 1, 1)
@@ -272,7 +272,7 @@ func TestReplaySkipsMissingThenStopsOpeningSourcesWhenQuotasFill(t *testing.T) {
 				t.Fatalf("remaining source event=%+v", event)
 			}
 		}
-		if event.Path == third.ResolvedPath && event.State != "info" {
+		if event.Stage == "collection-replay" && event.Path == third.ResolvedPath && event.State != "info" {
 			t.Fatalf("unopened source received lifecycle event: %+v", event)
 		}
 	}
@@ -325,7 +325,7 @@ func TestTunerSavesPartialCollectionBankBeforeCollectionInsufficient(t *testing.
 	if result.Report.Collection == nil || !result.Report.Collection.Bank.Partial || result.Report.Collection.Bank.SeedCount != 1 {
 		t.Fatalf("collection report=%+v", result.Report.Collection)
 	}
-	wantPath := filepath.Join(outputDirectory, "collected", "game_1", "mode_0", "seed_bank_1788754321.bin")
+	wantPath := filepath.Join(outputDirectory, "collected", "game_1", "mode_0", "seed_bank_1788754321_s1.bin")
 	if result.Report.Collection.Bank.Path != wantPath {
 		t.Fatalf("bank path=%q want=%q", result.Report.Collection.Bank.Path, wantPath)
 	}

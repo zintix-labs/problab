@@ -117,8 +117,14 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 	case "collection-replay":
 		r.reportCollectionReplay(event)
 		return
+	case "collection-replay-cursor":
+		r.reportCollectionReplayCursor(event)
+		return
 	case "collection-missing":
 		r.reportCollectionMissing(event)
+		return
+	case "collection-duplicates":
+		r.reportCollectionDuplicates(event)
 		return
 	case "collection-bank":
 		r.reportCollectionBank(event)
@@ -172,6 +178,21 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 		}
 		r.clearPending()
 	}
+}
+
+func (r *cliProgressReporter) reportCollectionReplayCursor(event optimizerv2.StageEvent) {
+	if event.State != "warning" || event.StreamCursorRecognized {
+		return
+	}
+	detail := event.Message
+	if detail == "" {
+		detail = "unrecognized filename cursor; using logical stream cursor 0 as a best-effort fallback"
+	}
+	_, _ = fmt.Fprintf(
+		r.output,
+		"  [Replay cursor] source %d/%d: %s\n                  %s\n",
+		event.SourceIndex, event.SourceCount, event.Path, detail,
+	)
 }
 
 // stageBody returns the in-flight sub-step text, falling back to a freshly built
@@ -363,14 +384,44 @@ func (r *cliProgressReporter) reportCollectionMissing(event optimizerv2.StageEve
 	}
 }
 
+func (r *cliProgressReporter) reportCollectionDuplicates(event optimizerv2.StageEvent) {
+	if event.State != "warning" || event.Duplicates == 0 {
+		return
+	}
+	origins := make(map[optimizerv2.CollectionDuplicateOrigin]uint64, len(event.DuplicateOrigins))
+	for _, origin := range event.DuplicateOrigins {
+		origins[origin.Origin] = origin.Duplicates
+	}
+	_, _ = fmt.Fprintf(
+		r.output,
+		"  [Duplicate] identities=%d/%d rate=%.6f%%\n              replay-fresh=%d fresh-fresh=%d replay-replay=%d\n",
+		event.Duplicates, event.Records, event.DuplicateRate*100,
+		origins[optimizerv2.CollectionDuplicateReplayFresh],
+		origins[optimizerv2.CollectionDuplicateFreshFresh],
+		origins[optimizerv2.CollectionDuplicateReplayReplay],
+	)
+	for _, class := range event.DuplicateClasses {
+		_, _ = fmt.Fprintf(
+			r.output,
+			"              class=%s duplicates=%d unique=%d/%d\n",
+			class.Name, class.Duplicates, class.UniqueRecords, class.Records,
+		)
+	}
+	_, _ = fmt.Fprintf(r.output, "              recovery target=%s\n", event.Path)
+}
+
 func (r *cliProgressReporter) reportCollectionBank(event optimizerv2.StageEvent) {
 	if event.State != "completed" {
 		return
 	}
+	label := "Save"
+	if event.Distinct {
+		label = "Save distinct"
+	}
 	_, _ = fmt.Fprintf(
 		r.output,
-		"  [Save] %s\n         seeds=%d bytes=%d sha256=%s\n",
-		event.Path, event.SeedCount, event.Bytes, event.SHA256,
+		"  [%s] %s\n         seeds=%d bytes=%d sha256=%s next_stream=%d\n",
+		label, event.Path, event.SeedCount, event.Bytes, event.SHA256, event.NextStreamOrdinal,
 	)
 }
 

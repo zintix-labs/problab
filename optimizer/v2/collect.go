@@ -49,13 +49,14 @@ type CollectedClass struct {
 // and bet mode. Spins records fresh produced spins, not replay records or
 // accepted outcomes.
 type CollectedProblem struct {
-	Game           spec.GID
-	BetMode        int
-	BetUnit        int
-	SnapshotLength int
-	Spins          uint64
-	Classes        []CollectedClass
-	Evidence       CollectionEvidence
+	Game              spec.GID
+	BetMode           int
+	BetUnit           int
+	SnapshotLength    int
+	Spins             uint64
+	NextStreamOrdinal uint64
+	Classes           []CollectedClass
+	Evidence          CollectionEvidence
 }
 
 type classPredicate struct {
@@ -183,6 +184,8 @@ func (c *Collector) Collect(
 	}
 
 	collected := newCollectedProblem(plan, betMode, betUnit, len(initialSnapshot))
+	cursors, startStreamOrdinal := parseConfiguredCollectionStreamCursors(plan.Plan.Collection.CollectedSeed)
+	collected.NextStreamOrdinal = startStreamOrdinal
 	deficits := make(collectionDeficits, len(plan.Intent.Classes))
 	requested := uint64(0)
 	for i, class := range plan.Intent.Classes {
@@ -196,7 +199,7 @@ func (c *Collector) Collect(
 	reports, err := replayCollectionBanks(
 		ctx, c, plan, betMode, replayMachine,
 		collectionRuntime{betUnit: betUnit, snapshotLen: len(initialSnapshot), tagger: tagger, predicates: predicates},
-		&collected, deficits, make(replayIdentitySet),
+		&collected, deficits, make(replayIdentitySet), cursors,
 	)
 	if err != nil {
 		return CollectedProblem{}, nil, err
@@ -229,26 +232,25 @@ func (c *Collector) Collect(
 	}
 
 	workers := plan.Plan.Collection.Workers
+	nextStreamOrdinal, err := checkedAddUint64(startStreamOrdinal, uint64(workers), "optimizer logical stream cursor")
+	if err != nil {
+		return CollectedProblem{}, nil, err
+	}
 	machines := make([]*problab.Machine, workers)
 	for worker := range workers {
-		// Match Simulator.SimMP: worker zero retains the original single-stream
-		// seed, while every additional worker receives the next deterministic
-		// sub-seed. This preserves workers=1 collection output.
-		seed := rootSeed
-		if worker > 0 {
-			seed, err = c.Lab.DeriveSeed(rootSeed, core.StreamID{
-				Domain: "optimizer/v2/worker",
-				Index:  uint64(worker - 1),
-			})
-			if err != nil {
-				return CollectedProblem{}, nil, fmt.Errorf("derive optimizer seed for worker %d: %w", worker, err)
-			}
+		ordinal := startStreamOrdinal + uint64(worker)
+		seed, seedErr := optimizerWorkerSeed(c.Lab, rootSeed, ordinal)
+		if seedErr != nil {
+			return CollectedProblem{}, nil, fmt.Errorf("derive optimizer seed for worker %d logical ordinal %d: %w", worker, ordinal, seedErr)
 		}
 		machines[worker], err = c.Lab.NewUnoptimizedMachineWithSeedBytes(plan.Plan.Target.Game, seed, true)
 		if err != nil {
 			return CollectedProblem{}, nil, fmt.Errorf("create raw optimizer machine for worker %d: %w", worker, err)
 		}
 	}
+	// Every configured worker now owns a valid machine. The fresh fan-out
+	// reserves the complete range even when a worker's local quota is zero.
+	collected.NextStreamOrdinal = nextStreamOrdinal
 
 	workerQuotas := partitionQuotas(deficits, workers)
 
@@ -373,6 +375,19 @@ func (c *Collector) Collect(
 		})
 	}
 	return collected, Diagnostics{diagnostic}, nil
+}
+
+func optimizerWorkerSeed(lab *problab.Problab, rootSeed []byte, ordinal uint64) ([]byte, error) {
+	if lab == nil {
+		return nil, fmt.Errorf("optimizer worker seed requires a Problab dependency")
+	}
+	if ordinal == 0 {
+		return append([]byte(nil), rootSeed...), nil
+	}
+	return lab.DeriveSeed(rootSeed, core.StreamID{
+		Domain: "optimizer/v2/worker",
+		Index:  ordinal - 1,
+	})
 }
 
 type acceptedWorkerSample struct {

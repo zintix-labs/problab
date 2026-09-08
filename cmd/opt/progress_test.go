@@ -89,7 +89,7 @@ func TestCLIProgressReporterShowsStagesAndClassMilestones(t *testing.T) {
 func TestCLIProgressReporterShowsReplayDeficitsFreshSummaryAndSavedBank(t *testing.T) {
 	var output bytes.Buffer
 	reporter := newCLIProgressReporter(&output)
-	path := "/absolute/output/collected/game_1/mode_0/seed_bank_1788754321.bin"
+	path := "/absolute/output/collected/game_1/mode_0/seed_bank_1788754321_s3.bin"
 	reporter.Report(optimizerv2.StageEvent{
 		Stage: "collection-replay", State: "started", BetMode: 0,
 		Path: "/absolute/input.bin", SourceIndex: 1, SourceCount: 3,
@@ -120,7 +120,7 @@ func TestCLIProgressReporterShowsReplayDeficitsFreshSummaryAndSavedBank(t *testi
 	})
 	reporter.Report(optimizerv2.StageEvent{
 		Stage: "collection-bank", State: "completed", BetMode: 0,
-		Path: path, SeedLength: 53, SeedCount: 3, Bytes: 159, SHA256: "abc123",
+		Path: path, SeedLength: 53, SeedCount: 3, Bytes: 159, SHA256: "abc123", NextStreamOrdinal: 3,
 	})
 	got := output.String()
 	for _, want := range []string{
@@ -132,6 +132,7 @@ func TestCLIProgressReporterShowsReplayDeficitsFreshSummaryAndSavedBank(t *testi
 		"fresh spins=7 accepted=1 total=3/3",
 		"[Save] " + path,
 		"seeds=3 bytes=159 sha256=abc123",
+		"next_stream=3",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("collection output=%q want substring %q", got, want)
@@ -141,6 +142,72 @@ func TestCLIProgressReporterShowsReplayDeficitsFreshSummaryAndSavedBank(t *testi
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("collection output contains %q: %q", unwanted, got)
 		}
+	}
+}
+
+func TestCLIProgressReporterShowsLegacyCursorAndDuplicateRecoveryLifecycle(t *testing.T) {
+	var output bytes.Buffer
+	reporter := newCLIProgressReporter(&output)
+	legacy := "/absolute/input/legacy_bank.bin"
+	recovery := "/absolute/output/seed_bank_500_s12.distinct.bin"
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-replay-cursor", State: "warning", BetMode: 0,
+		Path: legacy, SourceIndex: 1, SourceCount: 2,
+		Message: `configured collected_seed "banks/legacy_bank.bin" has no recognized _s<cursor> filename; using logical stream cursor 0 as a best-effort fallback`,
+	})
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-duplicates", State: "warning", BetMode: 0,
+		Path: recovery, Records: 100_000, Duplicates: 2, DuplicateRate: 0.00002,
+		Distinct: true, NextStreamOrdinal: 12,
+		DuplicateOrigins: []optimizerv2.CollectionDuplicateOriginReport{
+			{Origin: optimizerv2.CollectionDuplicateReplayFresh, Duplicates: 1},
+			{Origin: optimizerv2.CollectionDuplicateFreshFresh, Duplicates: 1},
+		},
+		DuplicateClasses: []optimizerv2.CollectionClassDuplicateReport{
+			{Name: "free_game", Records: 100_000, UniqueRecords: 99_998, Duplicates: 2, DuplicateRate: 0.00002},
+		},
+	})
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-bank", State: "completed", BetMode: 0,
+		Path: recovery, SeedLength: 53, SeedCount: 99_998, Bytes: 5_299_894,
+		SHA256: "def456", Distinct: true, NextStreamOrdinal: 12,
+	})
+
+	got := output.String()
+	for _, want := range []string{
+		"[Replay cursor] source 1/2: " + legacy,
+		`configured collected_seed "banks/legacy_bank.bin"`,
+		"using logical stream cursor 0 as a best-effort fallback",
+		"[Duplicate] identities=2/100000 rate=0.002000%",
+		"replay-fresh=1 fresh-fresh=1 replay-replay=0",
+		"class=free_game duplicates=2 unique=99998/100000",
+		"recovery target=" + recovery,
+		"[Save distinct] " + recovery,
+		"next_stream=12",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("duplicate recovery output=%q want substring=%q", got, want)
+		}
+	}
+	if strings.Contains(got, "will collide") || strings.Contains(got, "guaranteed collision") {
+		t.Fatalf("legacy warning overclaimed collision: %q", got)
+	}
+	if strings.Index(got, "[Duplicate]") > strings.Index(got, "[Save distinct]") {
+		t.Fatalf("save appeared before duplicate warning: %q", got)
+	}
+}
+
+func TestCLIProgressReporterDuplicateWarningDoesNotClaimSave(t *testing.T) {
+	var output bytes.Buffer
+	reporter := newCLIProgressReporter(&output)
+	reporter.Report(optimizerv2.StageEvent{
+		Stage: "collection-duplicates", State: "warning", BetMode: 0,
+		Path:    "/absolute/output/seed_bank_600_s2.distinct.bin",
+		Records: 2, Duplicates: 1, DuplicateRate: 0.5, Distinct: true,
+	})
+	got := output.String()
+	if !strings.Contains(got, "[Duplicate]") || !strings.Contains(got, "recovery target=") || strings.Contains(got, "[Save distinct]") {
+		t.Fatalf("pre-write duplicate warning=%q", got)
 	}
 }
 

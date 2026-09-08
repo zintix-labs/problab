@@ -189,7 +189,7 @@ Problab 提供一套 **以线性规划（LP）为核心的数学设计 Optimizer
 ```yaml
 collection:
   collected_seed:
-    - build/optimizer/collected/game_0/mode_0/seed_bank_1788772008.bin
+    - build/optimizer/collected/game_0/mode_0/seed_bank_1788772008_s4.bin
   workers: 4
   batch_size: 500000
   max_spins: 10000000000
@@ -201,27 +201,46 @@ Machine，再执行当前游戏与 bet mode，并重新套用当前 Tag 及首�
 
 - Replay source 按配置声明顺序处理。实际读取的来源之间会按完整 snapshot bytes
   去重，第一次出现者优先。Fresh 并行收集保留既有由 PRNG 定义的行为，不会与
-  replay 或其他 worker 相互去重。
+  replay 或其他 worker 在收集热路径中即时去重。
 - Replay records 不消耗 `max_spins`。Replay 接受的结果会先填入各 Class quota；
   确定性的 fresh workers 只负责剩余缺额。
+- `_sN` 记录下一个尚未配置的 logical worker-stream ordinal。没有 replay bank 时，
+  workers 使用 logical streams `0..workers-1`，保留 worker 0 使用 root seed、后续
+  worker 使用 `DeriveSeed(Index=worker-1)` 的既有映射。Top-up Run 会从所有已配置
+  路径中最大的可识别 `_sN` 开始；来源即使缺失、不相容或因 quota 已满而未开启，
+  其文件名 cursor 仍参与计算。Fresh fan-out 一旦启动，cursor 固定增加 workers 数量。
+- Stream cursor 只是 best-effort 的碰撞规避，不保证第三方 PRNG factory 一定产生
+  不同状态。Collection 完成后，Optimizer 会在每个 Class 内分别按完整 snapshot
+  bytes 稽核；没有重复才继续，发现同 Class duplicate 时只保存 Class-local 去重后的
+  `.distinct.bin` recovery bank，并在进入 Prepare 前停止。
 - `RunReport.Collection` 会记录每个来源的结束状态及
   accepted／duplicate／unmatched／rejected 计数，并按 Class 分解 replay 与 fresh
-  接受数量。来源路径及其声明顺序会影响 configuration hash；来源 bytes 则由保存后
-  bank 的 SHA-256 独立提供证据。
+  接受数量，同时记录文件名 cursor 是否可识别、duplicate audit 及保存 bank 的
+  cursor／variant。来源路径及其声明顺序会影响 configuration hash；来源 bytes 则由
+  保存后 bank 的 SHA-256 独立提供证据。
 - 缺失或格式错误的 bank 会产生 warning 并被跳过。若与当前 runtime 不兼容，系统
   会保留该来源中已接受的有效前缀、发出 warning，再继续处理下一个来源。所有 Class
   quota 填满后，剩余来源不会再开启。这些来源状态都不会被当成配置不可行；最终仍由
-  fresh collection 判断是否能补齐所需 support。
+  fresh collection 判断是否能补齐所需 support。没有可识别 `_sN` 的旧文件或改名文件
+  仍可 replay，但会发出 warning，并以 cursor `0` 参与 best-effort 分流。
 - Collection 返回有效内部状态后，无论完整或产生 `CollectionInsufficient`，都会在
   动态验证、建立 LP、求解、materialization 与发布之前先原子保存：
 
   ```text
-  <output.directory>/collected/game_<gid>/mode_<mode>/seed_bank_<unix_timestamp>.bin
+  <output.directory>/collected/game_<gid>/mode_<mode>/seed_bank_<unix_timestamp>_s<next>.bin
+  ```
+
+  若 collection 后的 audit 找到 duplicate，则只写以下 recovery artifact，并以
+  `DuplicateReplayIdentity` 停止 Run：
+
+  ```text
+  <output.directory>/collected/game_<gid>/mode_<mode>/seed_bank_<unix_timestamp>_s<next>.distinct.bin
   ```
 
   Writer 会按规范化的 Class／sequence 顺序串流写入 snapshot，并通过
   `RunReport.Collection` 回报绝对路径、SHA-256、snapshot 长度、seed 数量、byte
-  大小及是否为 partial bank。
+  大小，以及是否为 partial／distinct bank。Duplicate warning 会在 recovery 写入前
+  先显示 planned target；只有 atomic commit 成功后才会显示 `[Save distinct]`。
 - Problab 不会为 Collection Bank 建立 `latest` 指针、manifest、目录索引或
   descriptor sidecar。若要在后续 Run 重放，请明确把目标 timestamp 文件路径填入
   `collected_seed`。Collection Bank 是可复用的 Optimizer 输入，不是可直接发布的

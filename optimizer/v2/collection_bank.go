@@ -51,7 +51,76 @@ func resolveRunPath(workingDirectory, configured string) (string, error) {
 	return filepath.Clean(filepath.Join(workingDirectory, configured)), nil
 }
 
-func collectionBankPath(workingDirectory string, plan ResolvedPlan, betMode int, unixTimestamp int64) (string, error) {
+type parsedCollectionStreamCursor struct {
+	Cursor     uint64
+	Recognized bool
+	Distinct   bool
+}
+
+func parseCollectionBankStreamCursor(path string) parsedCollectionStreamCursor {
+	base := filepath.Base(path)
+	distinct := false
+	switch {
+	case strings.HasSuffix(base, ".distinct.bin"):
+		distinct = true
+		base = strings.TrimSuffix(base, ".distinct.bin")
+	case strings.HasSuffix(base, ".bin"):
+		base = strings.TrimSuffix(base, ".bin")
+	default:
+		return parsedCollectionStreamCursor{}
+	}
+	const prefix = "seed_bank_"
+	if !strings.HasPrefix(base, prefix) {
+		return parsedCollectionStreamCursor{}
+	}
+	payload := strings.TrimPrefix(base, prefix)
+	marker := strings.LastIndex(payload, "_s")
+	if marker <= 0 || marker+2 >= len(payload) {
+		return parsedCollectionStreamCursor{}
+	}
+	timestamp, cursorText := payload[:marker], payload[marker+2:]
+	if !decimalDigits(timestamp) || !decimalDigits(cursorText) {
+		return parsedCollectionStreamCursor{}
+	}
+	cursor, err := strconv.ParseUint(cursorText, 10, 64)
+	if err != nil {
+		return parsedCollectionStreamCursor{}
+	}
+	return parsedCollectionStreamCursor{Cursor: cursor, Recognized: true, Distinct: distinct}
+}
+
+func decimalDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, digit := range []byte(value) {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseConfiguredCollectionStreamCursors(paths []string) ([]parsedCollectionStreamCursor, uint64) {
+	parsed := make([]parsedCollectionStreamCursor, len(paths))
+	maximum := uint64(0)
+	for i, path := range paths {
+		parsed[i] = parseCollectionBankStreamCursor(path)
+		if parsed[i].Recognized && parsed[i].Cursor > maximum {
+			maximum = parsed[i].Cursor
+		}
+	}
+	return parsed, maximum
+}
+
+func collectionBankPath(
+	workingDirectory string,
+	plan ResolvedPlan,
+	betMode int,
+	unixTimestamp int64,
+	nextStreamOrdinal uint64,
+	distinct bool,
+) (string, error) {
 	if betMode < 0 {
 		return "", fmt.Errorf("collection bank path: bet mode must be non-negative")
 	}
@@ -62,12 +131,16 @@ func collectionBankPath(workingDirectory string, plan ResolvedPlan, betMode int,
 	if err != nil {
 		return "", fmt.Errorf("collection bank path: %w", err)
 	}
+	suffix := ".bin"
+	if distinct {
+		suffix = ".distinct.bin"
+	}
 	return filepath.Clean(filepath.Join(
 		outputRoot,
 		"collected",
 		"game_"+strconv.FormatUint(uint64(plan.Plan.Target.Game), 10),
 		"mode_"+strconv.Itoa(betMode),
-		"seed_bank_"+strconv.FormatInt(unixTimestamp, 10)+".bin",
+		"seed_bank_"+strconv.FormatInt(unixTimestamp, 10)+"_s"+strconv.FormatUint(nextStreamOrdinal, 10)+suffix,
 	)), nil
 }
 
@@ -87,6 +160,193 @@ func (set replayIdentitySet) AddOwned(snapshot []byte) bool {
 	}
 	set[identity] = struct{}{}
 	return true
+}
+
+var collectionDuplicateOriginOrder = [...]CollectionDuplicateOrigin{
+	CollectionDuplicateReplayFresh,
+	CollectionDuplicateFreshFresh,
+	CollectionDuplicateReplayReplay,
+}
+
+func auditCollectedReplayIdentities(
+	ctx context.Context,
+	collected CollectedProblem,
+) (CollectionDuplicateAudit, CollectedProblem, error) {
+	if ctx == nil {
+		return CollectionDuplicateAudit{}, CollectedProblem{}, fmt.Errorf("audit collected replay identities: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return CollectionDuplicateAudit{}, CollectedProblem{}, err
+	}
+
+	recovery := collected
+	recovery.Classes = make([]CollectedClass, len(collected.Classes))
+	recovery.Evidence = cloneCollectionEvidence(collected.Evidence)
+	audit := CollectionDuplicateAudit{}
+	totalOrigins := make(map[CollectionDuplicateOrigin]uint64, len(collectionDuplicateOriginOrder))
+
+	for classIndex, class := range collected.Classes {
+		if err := ctx.Err(); err != nil {
+			return CollectionDuplicateAudit{}, CollectedProblem{}, err
+		}
+		recoveryClass := CollectedClass{
+			Intent:  cloneClassIntent(class.Intent),
+			Samples: make([]CollectedSample, 0, len(class.Samples)),
+		}
+		classReport := CollectionClassDuplicateReport{
+			Name:    class.Intent.Name,
+			Records: uint64(len(class.Samples)),
+		}
+		classOrigins := make(map[CollectionDuplicateOrigin]uint64, len(collectionDuplicateOriginOrder))
+		seen := make(map[string]uint64, len(class.Samples))
+		for _, sample := range class.Samples {
+			if err := ctx.Err(); err != nil {
+				return CollectionDuplicateAudit{}, CollectedProblem{}, err
+			}
+			identity := string(sample.Snapshot)
+			firstSequence, duplicate := seen[identity]
+			if !duplicate {
+				seen[identity] = sample.Sequence
+				recoveryClass.Samples = append(recoveryClass.Samples, sample)
+				continue
+			}
+			origin, err := collectionDuplicateOrigin(firstSequence, sample.Sequence, collected.Evidence.ReplayAccepted)
+			if err != nil {
+				return CollectionDuplicateAudit{}, CollectedProblem{}, fmt.Errorf("audit class %q: %w", class.Intent.Name, err)
+			}
+			classReport.Duplicates, err = checkedAddUint64(classReport.Duplicates, 1, "Class duplicate identities")
+			if err != nil {
+				return CollectionDuplicateAudit{}, CollectedProblem{}, err
+			}
+			classOrigins[origin], err = checkedAddUint64(classOrigins[origin], 1, "Class duplicate origin")
+			if err != nil {
+				return CollectionDuplicateAudit{}, CollectedProblem{}, err
+			}
+			totalOrigins[origin], err = checkedAddUint64(totalOrigins[origin], 1, "collection duplicate origin")
+			if err != nil {
+				return CollectionDuplicateAudit{}, CollectedProblem{}, err
+			}
+		}
+		recovery.Classes[classIndex] = recoveryClass
+		var err error
+		audit.Records, err = checkedAddUint64(audit.Records, classReport.Records, "collection duplicate audit records")
+		if err != nil {
+			return CollectionDuplicateAudit{}, CollectedProblem{}, err
+		}
+		audit.Duplicates, err = checkedAddUint64(audit.Duplicates, classReport.Duplicates, "collection duplicate audit duplicates")
+		if err != nil {
+			return CollectionDuplicateAudit{}, CollectedProblem{}, err
+		}
+		classReport.UniqueRecords = classReport.Records - classReport.Duplicates
+		classReport.DuplicateRate = duplicateRate(classReport.Duplicates, classReport.Records)
+		if classReport.Duplicates > 0 {
+			classReport.Origins = orderedDuplicateOriginReports(classOrigins)
+			audit.Classes = append(audit.Classes, classReport)
+		}
+	}
+
+	audit.UniqueRecords = audit.Records - audit.Duplicates
+	audit.DuplicateRate = duplicateRate(audit.Duplicates, audit.Records)
+	audit.Origins = orderedDuplicateOriginReports(totalOrigins)
+	return audit, recovery, nil
+}
+
+func collectionDuplicateOrigin(firstSequence, laterSequence, replayAccepted uint64) (CollectionDuplicateOrigin, error) {
+	switch {
+	case firstSequence < replayAccepted && laterSequence >= replayAccepted:
+		return CollectionDuplicateReplayFresh, nil
+	case firstSequence >= replayAccepted && laterSequence >= replayAccepted:
+		return CollectionDuplicateFreshFresh, nil
+	case firstSequence < replayAccepted && laterSequence < replayAccepted:
+		return CollectionDuplicateReplayReplay, nil
+	default:
+		return "", fmt.Errorf("duplicate sequence provenance is reversed: first=%d later=%d replay_accepted=%d", firstSequence, laterSequence, replayAccepted)
+	}
+}
+
+func orderedDuplicateOriginReports(counts map[CollectionDuplicateOrigin]uint64) []CollectionDuplicateOriginReport {
+	reports := make([]CollectionDuplicateOriginReport, 0, len(collectionDuplicateOriginOrder))
+	for _, origin := range collectionDuplicateOriginOrder {
+		if count := counts[origin]; count > 0 {
+			reports = append(reports, CollectionDuplicateOriginReport{Origin: origin, Duplicates: count})
+		}
+	}
+	return reports
+}
+
+func duplicateRate(duplicates, records uint64) float64 {
+	if records == 0 {
+		return 0
+	}
+	return float64(duplicates) / float64(records)
+}
+
+func cloneCollectionDuplicateAudit(audit CollectionDuplicateAudit) CollectionDuplicateAudit {
+	cloned := audit
+	cloned.Origins = append([]CollectionDuplicateOriginReport(nil), audit.Origins...)
+	cloned.Classes = make([]CollectionClassDuplicateReport, len(audit.Classes))
+	for i, class := range audit.Classes {
+		cloned.Classes[i] = class
+		cloned.Classes[i].Origins = append([]CollectionDuplicateOriginReport(nil), class.Origins...)
+	}
+	return cloned
+}
+
+func collectionDuplicateDiagnostic(plan ResolvedPlan, audit CollectionDuplicateAudit, recoveryPath string) Diagnostic {
+	diagnostic := Diagnostic{
+		Code:   DiagnosticDuplicateReplayIdentity,
+		Status: StatusInfeasibleSupport,
+		Message: fmt.Sprintf(
+			"collection found %d duplicate replay identities among %d records; saved Class-local distinct recovery bank %q and stopped before Prepare without inline deduplication or quota refill",
+			audit.Duplicates, audit.Records, recoveryPath,
+		),
+		Representation: RepresentationAtomicBuckets,
+	}
+	classIndexes := make(map[string]int, len(plan.Intent.Classes))
+	for i, class := range plan.Intent.Classes {
+		classIndexes[class.Name] = i
+	}
+	for _, class := range audit.Classes {
+		originCounts := duplicateOriginCountMap(class.Origins)
+		investigations := make([]string, 0, 3)
+		if originCounts[CollectionDuplicateReplayFresh] > 0 {
+			investigations = append(investigations, "inspect legacy or renamed bank cursor provenance, version compatibility, and third-party seed derivation")
+		}
+		if originCounts[CollectionDuplicateFreshFresh] > 0 {
+			investigations = append(investigations, "inspect worker stream derivation, PRNG state collisions, and repeated states within a stream")
+		}
+		if originCounts[CollectionDuplicateReplayReplay] > 0 {
+			investigations = append(investigations, "internal replay-dedup invariant violation; changing the root seed alone is not a sufficient remedy")
+		}
+		index := classIndexes[class.Name]
+		sourcePath := fmt.Sprintf("intents.%s.classes[%d]", plan.Plan.Intent, index)
+		diagnostic.SourcePaths = append(diagnostic.SourcePaths, sourcePath)
+		diagnostic.Causes = append(diagnostic.Causes, Cause{
+			Summary: fmt.Sprintf(
+				"class %q has %d duplicate identities (%d unique of %d); provenance is investigative evidence only: %s",
+				class.Name, class.Duplicates, class.UniqueRecords, class.Records, strings.Join(investigations, "; "),
+			),
+			SourcePaths: []string{sourcePath},
+			Metrics: []NamedValue{
+				{Name: "records", Value: float64(class.Records), Unit: "samples"},
+				{Name: "unique_records", Value: float64(class.UniqueRecords), Unit: "samples"},
+				{Name: "duplicates", Value: float64(class.Duplicates), Unit: "samples"},
+				{Name: "duplicate_rate", Value: class.DuplicateRate},
+				{Name: "replay_fresh", Value: float64(originCounts[CollectionDuplicateReplayFresh]), Unit: "samples"},
+				{Name: "fresh_fresh", Value: float64(originCounts[CollectionDuplicateFreshFresh]), Unit: "samples"},
+				{Name: "replay_replay", Value: float64(originCounts[CollectionDuplicateReplayReplay]), Unit: "samples"},
+			},
+		})
+	}
+	return diagnostic
+}
+
+func duplicateOriginCountMap(reports []CollectionDuplicateOriginReport) map[CollectionDuplicateOrigin]uint64 {
+	counts := make(map[CollectionDuplicateOrigin]uint64, len(reports))
+	for _, report := range reports {
+		counts[report.Origin] = report.Duplicates
+	}
+	return counts
 }
 
 type replayRecordAction uint8
@@ -166,6 +426,7 @@ func replayCollectionBanks(
 	collected *CollectedProblem,
 	deficits collectionDeficits,
 	seen replayIdentitySet,
+	cursors []parsedCollectionStreamCursor,
 ) ([]CollectionReplaySourceReport, error) {
 	if collector == nil || collector.Lab == nil || replayMachine == nil || collected == nil {
 		return nil, fmt.Errorf("replay collection banks: incomplete runtime dependencies")
@@ -174,13 +435,27 @@ func replayCollectionBanks(
 		return nil, fmt.Errorf("replay collection banks: invalid collection state")
 	}
 	configured := plan.Plan.Collection.CollectedSeed
+	if len(cursors) != len(configured) {
+		return nil, fmt.Errorf("replay collection banks: %d cursor reports for %d configured sources", len(cursors), len(configured))
+	}
 	reports := make([]CollectionReplaySourceReport, len(configured))
 	for i, configuredPath := range configured {
 		resolved, err := resolveRunPath(collector.WorkingDirectory, configuredPath)
 		if err != nil {
 			return nil, fmt.Errorf("resolve collected_seed[%d]: %w", i, err)
 		}
-		reports[i] = CollectionReplaySourceReport{ConfiguredPath: configuredPath, ResolvedPath: resolved}
+		reports[i] = CollectionReplaySourceReport{
+			ConfiguredPath: configuredPath, ResolvedPath: resolved,
+			StreamCursor: cursors[i].Cursor, StreamCursorRecognized: cursors[i].Recognized,
+		}
+		if !cursors[i].Recognized {
+			reportReplayEvent(collector.Reporter, StageEvent{
+				Stage: "collection-replay-cursor", State: "warning", BetMode: betMode,
+				Path: resolved, SourceIndex: i + 1, SourceCount: len(configured),
+				StreamCursor: 0, StreamCursorRecognized: false,
+				Message: fmt.Sprintf("configured collected_seed %q has no recognized _s<cursor> filename; using logical stream cursor 0 as a best-effort fallback", configuredPath),
+			})
+		}
 	}
 	if len(reports) == 0 {
 		return reports, nil
@@ -452,7 +727,7 @@ type collectionBankWriter struct {
 	renamePath func(oldPath, newPath string) error
 }
 
-func (writer collectionBankWriter) Write(ctx context.Context, path string, collected CollectedProblem, partial bool) (CollectionBankReport, error) {
+func (writer collectionBankWriter) Write(ctx context.Context, path string, collected CollectedProblem, partial, distinct bool) (CollectionBankReport, error) {
 	if ctx == nil {
 		return CollectionBankReport{}, fmt.Errorf("write collection bank: context is nil")
 	}
@@ -541,7 +816,8 @@ func (writer collectionBankWriter) Write(ctx context.Context, path string, colle
 	}
 	return CollectionBankReport{
 		Path: path, SHA256: hex.EncodeToString(digest.Sum(nil)), SeedLength: collected.SnapshotLength,
-		SeedCount: seedCount, Bytes: expectedBytes, Partial: partial,
+		SeedCount: seedCount, Bytes: expectedBytes, Partial: partial, Distinct: distinct,
+		NextStreamOrdinal: collected.NextStreamOrdinal,
 	}, nil
 }
 
@@ -607,7 +883,11 @@ func writeCollectionDescriptor(_ context.Context, _ ResolvedPlan, _ CollectedPro
 	return "", nil
 }
 
-func buildCollectionRunReport(collected CollectedProblem, bank CollectionBankReport) (CollectionRunReport, error) {
+func buildCollectionRunReport(
+	collected CollectedProblem,
+	audit CollectionDuplicateAudit,
+	bank CollectionBankReport,
+) (CollectionRunReport, error) {
 	if err := validateCollectionEvidence(collected); err != nil {
 		return CollectionRunReport{}, err
 	}
@@ -627,10 +907,32 @@ func buildCollectionRunReport(collected CollectedProblem, bank CollectionBankRep
 			return CollectionRunReport{}, err
 		}
 	}
-	if bank.SeedLength != collected.SnapshotLength || bank.SeedCount != accepted {
+	if err := validateCollectionDuplicateAudit(collected, accepted, audit); err != nil {
+		return CollectionRunReport{}, err
+	}
+	parsedPath := parseCollectionBankStreamCursor(bank.Path)
+	if !parsedPath.Recognized || parsedPath.Cursor != collected.NextStreamOrdinal || parsedPath.Distinct != bank.Distinct {
+		return CollectionRunReport{}, fmt.Errorf(
+			"collection bank path cursor/variant does not match report: recognized=%t cursor=%d/%d distinct=%t/%t",
+			parsedPath.Recognized, parsedPath.Cursor, collected.NextStreamOrdinal, parsedPath.Distinct, bank.Distinct,
+		)
+	}
+	if bank.NextStreamOrdinal != collected.NextStreamOrdinal {
+		return CollectionRunReport{}, fmt.Errorf("collection bank next stream ordinal=%d want=%d", bank.NextStreamOrdinal, collected.NextStreamOrdinal)
+	}
+	expectedSeedCount := accepted
+	if bank.Distinct {
+		if audit.Duplicates == 0 || !bank.Partial {
+			return CollectionRunReport{}, fmt.Errorf("distinct collection bank requires duplicates and partial=true")
+		}
+		expectedSeedCount = audit.UniqueRecords
+	} else if audit.Duplicates != 0 {
+		return CollectionRunReport{}, fmt.Errorf("normal collection bank cannot report %d duplicates", audit.Duplicates)
+	}
+	if bank.SeedLength != collected.SnapshotLength || bank.SeedCount != expectedSeedCount {
 		return CollectionRunReport{}, fmt.Errorf(
 			"collection bank report does not match collected support: seed_length=%d/%d seed_count=%d/%d",
-			bank.SeedLength, collected.SnapshotLength, bank.SeedCount, accepted,
+			bank.SeedLength, collected.SnapshotLength, bank.SeedCount, expectedSeedCount,
 		)
 	}
 	if bank.SeedCount > uint64(math.MaxInt64)/uint64(bank.SeedLength) || bank.Bytes != int64(bank.SeedCount*uint64(bank.SeedLength)) {
@@ -638,8 +940,108 @@ func buildCollectionRunReport(collected CollectedProblem, bank CollectionBankRep
 	}
 	return CollectionRunReport{
 		Requested: requested, Accepted: accepted,
-		Evidence: cloneCollectionEvidence(collected.Evidence), Bank: bank,
+		Evidence:       cloneCollectionEvidence(collected.Evidence),
+		DuplicateAudit: cloneCollectionDuplicateAudit(audit), Bank: bank,
 	}, nil
+}
+
+func validateCollectionDuplicateAudit(collected CollectedProblem, accepted uint64, audit CollectionDuplicateAudit) error {
+	if audit.Records != accepted || audit.Duplicates > audit.Records || audit.UniqueRecords != audit.Records-audit.Duplicates {
+		return fmt.Errorf(
+			"collection duplicate audit totals are inconsistent: records=%d accepted=%d unique=%d duplicates=%d",
+			audit.Records, accepted, audit.UniqueRecords, audit.Duplicates,
+		)
+	}
+	if audit.DuplicateRate != duplicateRate(audit.Duplicates, audit.Records) {
+		return fmt.Errorf("collection duplicate audit rate is inconsistent")
+	}
+	if !validOrderedOriginPrefix(audit.Origins) {
+		return fmt.Errorf("collection duplicate audit origins are not in canonical order")
+	}
+	originTotal := uint64(0)
+	for _, origin := range audit.Origins {
+		var err error
+		originTotal, err = checkedAddUint64(originTotal, origin.Duplicates, "collection duplicate audit origin total")
+		if err != nil {
+			return err
+		}
+	}
+	if originTotal != audit.Duplicates {
+		return fmt.Errorf("collection duplicate audit origin total=%d want=%d", originTotal, audit.Duplicates)
+	}
+	classTotal := uint64(0)
+	classOriginTotals := make(map[CollectionDuplicateOrigin]uint64, len(collectionDuplicateOriginOrder))
+	lastClassIndex := -1
+	for _, class := range audit.Classes {
+		classIndex := -1
+		for i, collectedClass := range collected.Classes {
+			if collectedClass.Intent.Name == class.Name {
+				classIndex = i
+				break
+			}
+		}
+		if classIndex <= lastClassIndex || class.Duplicates == 0 || class.Duplicates > class.Records || class.UniqueRecords != class.Records-class.Duplicates || class.DuplicateRate != duplicateRate(class.Duplicates, class.Records) {
+			return fmt.Errorf("collection duplicate audit class %q is inconsistent or out of order", class.Name)
+		}
+		if class.Records != uint64(len(collected.Classes[classIndex].Samples)) {
+			return fmt.Errorf("collection duplicate audit class %q records=%d want=%d", class.Name, class.Records, len(collected.Classes[classIndex].Samples))
+		}
+		lastClassIndex = classIndex
+		classOrigins := uint64(0)
+		if !validOrderedOriginPrefix(class.Origins) {
+			return fmt.Errorf("collection duplicate audit class %q origins are not in canonical order", class.Name)
+		}
+		for _, origin := range class.Origins {
+			var err error
+			classOrigins, err = checkedAddUint64(classOrigins, origin.Duplicates, "Class duplicate audit origin total")
+			if err != nil {
+				return err
+			}
+			classOriginTotals[origin.Origin], err = checkedAddUint64(classOriginTotals[origin.Origin], origin.Duplicates, "aggregate Class duplicate origin total")
+			if err != nil {
+				return err
+			}
+		}
+		if classOrigins != class.Duplicates {
+			return fmt.Errorf("collection duplicate audit class %q origin total=%d want=%d", class.Name, classOrigins, class.Duplicates)
+		}
+		var err error
+		classTotal, err = checkedAddUint64(classTotal, class.Duplicates, "collection duplicate audit Class total")
+		if err != nil {
+			return err
+		}
+	}
+	if classTotal != audit.Duplicates {
+		return fmt.Errorf("collection duplicate audit Class total=%d want=%d", classTotal, audit.Duplicates)
+	}
+	auditOriginTotals := duplicateOriginCountMap(audit.Origins)
+	for _, origin := range collectionDuplicateOriginOrder {
+		if classOriginTotals[origin] != auditOriginTotals[origin] {
+			return fmt.Errorf("collection duplicate audit origin %s Class total=%d want=%d", origin, classOriginTotals[origin], auditOriginTotals[origin])
+		}
+	}
+	return nil
+}
+
+func validOrderedOriginPrefix(reports []CollectionDuplicateOriginReport) bool {
+	orderIndex := -1
+	for _, report := range reports {
+		if report.Duplicates == 0 {
+			return false
+		}
+		found := -1
+		for i, origin := range collectionDuplicateOriginOrder {
+			if report.Origin == origin {
+				found = i
+				break
+			}
+		}
+		if found <= orderIndex {
+			return false
+		}
+		orderIndex = found
+	}
+	return true
 }
 
 func cloneCollectionEvidence(evidence CollectionEvidence) CollectionEvidence {

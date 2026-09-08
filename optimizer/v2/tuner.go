@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	engineImplementationVersion = "intent-lp-v2.3.1"
+	engineImplementationVersion = "intent-lp-v2.4.0"
 	// Replay banks contribute in configured source/record order, fresh samples
 	// follow worker/local acceptance order, and persisted bytes serialize Classes
 	// in declaration order while preserving each Class's Sequence order.
@@ -43,38 +43,45 @@ const (
 // intentionally operational: timestamps and messages never enter model,
 // solution, or artifact hashes.
 type StageEvent struct {
-	Stage            string
-	Substage         OptimizationStageID
-	BetMode          int
-	State            string
-	Message          string
-	Objective        string
-	Metric           string
-	Probe            int
-	Lower            *float64
-	Upper            *float64
-	FixedValue       *float64
-	Status           string
-	Spins            uint64
-	Accepted         uint64
-	Requested        uint64
-	Classes          []ClassCollectionProgress
-	ExpectedRTP      float64
-	Duration         time.Duration
-	Path             string
-	SourceIndex      int
-	SourceCount      int
-	Records          uint64
-	TotalRecords     uint64
-	Duplicates       uint64
-	Unmatched        uint64
-	Rejected         uint64
-	SeedLength       int
-	SeedCount        uint64
-	Bytes            int64
-	SHA256           string
-	EndReason        CollectionReplayEndReason
-	RemainingSources int
+	Stage                  string
+	Substage               OptimizationStageID
+	BetMode                int
+	State                  string
+	Message                string
+	Objective              string
+	Metric                 string
+	Probe                  int
+	Lower                  *float64
+	Upper                  *float64
+	FixedValue             *float64
+	Status                 string
+	Spins                  uint64
+	Accepted               uint64
+	Requested              uint64
+	Classes                []ClassCollectionProgress
+	ExpectedRTP            float64
+	Duration               time.Duration
+	Path                   string
+	SourceIndex            int
+	SourceCount            int
+	Records                uint64
+	TotalRecords           uint64
+	Duplicates             uint64
+	Unmatched              uint64
+	Rejected               uint64
+	SeedLength             int
+	SeedCount              uint64
+	Bytes                  int64
+	SHA256                 string
+	EndReason              CollectionReplayEndReason
+	RemainingSources       int
+	StreamCursor           uint64
+	StreamCursorRecognized bool
+	Distinct               bool
+	NextStreamOrdinal      uint64
+	DuplicateRate          float64
+	DuplicateClasses       []CollectionClassDuplicateReport
+	DuplicateOrigins       []CollectionDuplicateOriginReport
 }
 
 // ClassCollectionProgress is one immutable snapshot of a Class quota. Reporter
@@ -392,26 +399,54 @@ func (t *Tuner) collectStage(ctx context.Context, plan ResolvedPlan, betMode int
 		t.finishStage(report, stage, betMode, started, err, diagnostics)
 		return collected, diagnostics, err
 	}
+	audit, recovery, err := auditCollectedReplayIdentities(ctx, collected)
+	if err != nil {
+		wrapped := fmt.Errorf("audit optimizer v2 collection identities for game %d mode %d: %w", plan.Plan.Target.Game, betMode, err)
+		t.finishStage(report, stage, betMode, started, wrapped, nil)
+		return CollectedProblem{}, nil, wrapped
+	}
 	if t.now == nil {
 		err := fmt.Errorf("optimizer v2 tuner collection clock is nil")
 		t.finishStage(report, stage, betMode, started, err, nil)
 		return CollectedProblem{}, nil, err
 	}
 	savedAtUnix := t.now().Unix()
-	path, err := collectionBankPath(t.workingDirectory, plan, betMode, savedAtUnix)
+	distinct := audit.Duplicates > 0
+	path, err := collectionBankPath(t.workingDirectory, plan, betMode, savedAtUnix, collected.NextStreamOrdinal, distinct)
 	if err != nil {
 		t.finishStage(report, stage, betMode, started, err, nil)
 		return CollectedProblem{}, nil, err
 	}
-	bank, err := t.collectionBankWriter.Write(ctx, path, collected, diagnostics.StopsRun())
+	if distinct && t.reporter != nil {
+		t.reporter.Report(StageEvent{
+			Stage: "collection-duplicates", State: "warning", BetMode: betMode,
+			Path: path, Records: audit.Records, Duplicates: audit.Duplicates,
+			DuplicateRate: audit.DuplicateRate, Distinct: true,
+			NextStreamOrdinal: collected.NextStreamOrdinal,
+			DuplicateClasses:  cloneCollectionClassDuplicateReports(audit.Classes),
+			DuplicateOrigins:  append([]CollectionDuplicateOriginReport(nil), audit.Origins...),
+			Message:           fmt.Sprintf("duplicate audit found %d duplicate identities; planned Class-local distinct recovery target %q", audit.Duplicates, path),
+		})
+	}
+	bankCollection := collected
+	if distinct {
+		bankCollection = recovery
+	}
+	bank, err := t.collectionBankWriter.Write(ctx, path, bankCollection, diagnostics.StopsRun() || distinct, distinct)
 	if err != nil {
-		wrapped := fmt.Errorf("save optimizer v2 collection bank for mode %d: %w", betMode, err)
+		wrapped := fmt.Errorf("save optimizer v2 collection bank for game %d mode %d at %q: %w", plan.Plan.Target.Game, betMode, path, err)
+		if distinct {
+			wrapped = fmt.Errorf("save optimizer v2 duplicate-recovery collection bank for game %d mode %d at %q with %d duplicates: %w", plan.Plan.Target.Game, betMode, path, audit.Duplicates, err)
+		}
 		t.finishStage(report, stage, betMode, started, wrapped, nil)
 		return CollectedProblem{}, nil, wrapped
 	}
-	collectionReport, err := buildCollectionRunReport(collected, bank)
+	collectionReport, err := buildCollectionRunReport(collected, audit, bank)
 	if err != nil {
 		wrapped := fmt.Errorf("build optimizer v2 collection report for mode %d: %w", betMode, err)
+		if distinct {
+			wrapped = fmt.Errorf("build optimizer v2 duplicate-recovery collection report for game %d mode %d at %q with %d duplicates after atomic commit: %w", plan.Plan.Target.Game, betMode, path, audit.Duplicates, err)
+		}
 		t.finishStage(report, stage, betMode, started, wrapped, nil)
 		return CollectedProblem{}, nil, wrapped
 	}
@@ -420,19 +455,33 @@ func (t *Tuner) collectStage(ctx context.Context, plan ResolvedPlan, betMode int
 		t.reporter.Report(StageEvent{
 			Stage: "collection-bank", State: "completed", BetMode: betMode, Path: bank.Path,
 			SeedLength: bank.SeedLength, SeedCount: bank.SeedCount, Bytes: bank.Bytes, SHA256: bank.SHA256,
+			Distinct: bank.Distinct, NextStreamOrdinal: bank.NextStreamOrdinal,
 		})
 	}
-	descriptorPath, descriptorErr := writeCollectionDescriptor(ctx, plan, collected, bank)
-	if t.reporter != nil && descriptorErr != nil {
-		t.reporter.Report(StageEvent{
-			Stage: "collection-descriptor", State: "warning", BetMode: betMode,
-			Path: descriptorPath, Message: descriptorErr.Error(),
-		})
-	} else if t.reporter != nil && descriptorPath != "" {
-		t.reporter.Report(StageEvent{Stage: "collection-descriptor", State: "completed", BetMode: betMode, Path: descriptorPath})
+	if distinct {
+		diagnostics = append(diagnostics, collectionDuplicateDiagnostic(plan, audit, path))
+	} else {
+		descriptorPath, descriptorErr := writeCollectionDescriptor(ctx, plan, collected, bank)
+		if t.reporter != nil && descriptorErr != nil {
+			t.reporter.Report(StageEvent{
+				Stage: "collection-descriptor", State: "warning", BetMode: betMode,
+				Path: descriptorPath, Message: descriptorErr.Error(),
+			})
+		} else if t.reporter != nil && descriptorPath != "" {
+			t.reporter.Report(StageEvent{Stage: "collection-descriptor", State: "completed", BetMode: betMode, Path: descriptorPath})
+		}
 	}
 	t.finishStage(report, stage, betMode, started, nil, diagnostics)
 	return collected, diagnostics, nil
+}
+
+func cloneCollectionClassDuplicateReports(reports []CollectionClassDuplicateReport) []CollectionClassDuplicateReport {
+	cloned := make([]CollectionClassDuplicateReport, len(reports))
+	for i, report := range reports {
+		cloned[i] = report
+		cloned[i].Origins = append([]CollectionDuplicateOriginReport(nil), report.Origins...)
+	}
+	return cloned
 }
 
 // prepareStage derives empirical bucket statistics and prechecks without
@@ -587,7 +636,7 @@ func (t *Tuner) finishStage(report *RunReport, stage string, betMode int, starte
 			state = "failed"
 		}
 		if stoppingCount > 1 {
-			message = fmt.Sprintf("detected %d independently localized hard-model conflicts; see the result list for required and achievable bounds", stoppingCount)
+			message = fmt.Sprintf("detected %d stopping diagnostics; see the result list for details", stoppingCount)
 		}
 	}
 	t.reporter.Report(StageEvent{Stage: stage, BetMode: betMode, State: state, Message: message, Duration: duration})
