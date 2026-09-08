@@ -106,10 +106,10 @@ type RunPlan struct {
 	Engine EngineName `yaml:"engine" json:"engine"`
 	// Intent is the key of the MathIntent entry in Config.Intents.
 	Intent string `yaml:"intent" json:"intent"`
-	// Seed initializes worker zero's collection PRNG stream and the deterministic
-	// sub-seed generator for additional workers. The exact value, including zero
-	// or a negative int64, is valid and reportable.
-	Seed int64 `yaml:"seed" json:"seed"`
+	// Seed supplies the root PRNG material as a legacy-compatible int64, exact
+	// UTF-8 bytes, or decoded hexadecimal bytes. Its zero value is int64(0);
+	// consumers use Bytes rather than interpreting the representation directly.
+	Seed SeedSpec `yaml:"seed" json:"seed"`
 	// Collection controls execution ownership and the finite spin budget.
 	Collection CollectionOptions `yaml:"collection" json:"collection"`
 	// CandidateSelection declares the bounded post-LP evaluator policy. v2
@@ -474,7 +474,8 @@ type RunRequest struct {
 type RunOverrides struct {
 	Game    *spec.GID `json:"game,omitempty"`
 	BetMode *int      `json:"bet_mode,omitempty"`
-	Seed    *int64    `json:"seed,omitempty"`
+	// Seed replaces the plan's complete root seed specification when non-nil.
+	Seed *SeedSpec `json:"seed,omitempty"`
 }
 
 // Status is the stable, machine-readable final classification of one run.

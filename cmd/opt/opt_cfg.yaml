@@ -76,9 +76,18 @@ plans:
     # Stable key of the Designer-owned MathIntent below.
     intent: demo-designer-intent
 
-    # int64 seed for worker 0 and the deterministic sub-seed generator used by
-    # later workers. This is provenance, not a quality-tuning knob. A different
-    # seed intentionally produces a different collection experiment.
+    # Root seed material for worker 0 and deterministic later-worker derivation.
+    # This remains one scalar and accepts exactly three forms:
+    #   seed: 4127483647          # legacy int64; byte/hash compatible
+    #   seed: "utf8:release-9"    # exact non-empty UTF-8 suffix bytes
+    #   seed: "hex:0011aaff"      # exact decoded bytes; output is lowercase
+    # Bare strings, empty material, malformed/odd hex, uppercase prefixes, and
+    # decoded material above 1024 bytes are rejected without guessing or
+    # fallback. The configured PRNG factory must accept the resulting bytes;
+    # PCG64 accepts only the canonical 8-byte int64 form, while default ChaCha20
+    # accepts variable-length material. This is provenance, not a quality knob.
+    # hex: is an initial root seed, NOT a Core snapshot and not a replay path;
+    # use collection.collected_seed below to replay snapshot banks.
     seed: 4127483647
 
     # Execution policy. These values cannot alter or relax Designer hard rows.

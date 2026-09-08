@@ -579,16 +579,16 @@ func TestResolvedPlanWithOverrides(t *testing.T) {
 	}
 	game := spec.GID(7)
 	mode := 3
-	seed := int64(-42)
+	seed := Int64Seed(-42)
 	overridden, err := base.WithOverrides(RunOverrides{Game: &game, BetMode: &mode, Seed: &seed})
 	if err != nil {
 		t.Fatalf("WithOverrides() error = %v", err)
 	}
 	if overridden.Plan.Target.Game != game || len(overridden.Plan.Target.BetModes) != 1 ||
-		overridden.Plan.Target.BetModes[0] != mode || overridden.Plan.Seed != seed {
+		overridden.Plan.Target.BetModes[0] != mode || overridden.Plan.Seed.String() != seed.String() {
 		t.Fatalf("WithOverrides() = %+v", overridden.Plan)
 	}
-	if base.Plan.Target.Game != 0 || base.Plan.Target.BetModes[0] != 0 || base.Plan.Seed != 4127483647 {
+	if base.Plan.Target.Game != 0 || base.Plan.Target.BetModes[0] != 0 || base.Plan.Seed.String() != "4127483647" {
 		t.Fatalf("WithOverrides() mutated base plan: %+v", base.Plan)
 	}
 

@@ -31,11 +31,11 @@ import (
 	"github.com/zintix-labs/problab/spec"
 )
 
-// TestCollectWorkersAreDeterministicAndPreserveWorkerZeroSeed locks the public
+// TestCollectRootSeedMatchesLegacyInt64Encoding locks the public
 // stream-partition contract: scheduling cannot affect a fixed Seed/Workers
 // pair, worker zero preserves the old sequential seed, and worker one starts at
 // Factory.DeriveSeed's first deterministic sub-seed.
-func TestCollectWorkersAreDeterministicAndPreserveWorkerZeroSeed(t *testing.T) {
+func TestCollectRootSeedMatchesLegacyInt64Encoding(t *testing.T) {
 	lab, err := demo.NewProbLab()
 	if err != nil {
 		t.Fatalf("construct demo Problab: %v", err)
@@ -81,7 +81,7 @@ func TestCollectWorkersAreDeterministicAndPreserveWorkerZeroSeed(t *testing.T) {
 	}
 
 	workerOneSeed, err := lab.DeriveSeed(core.EncodeInt64Seed(seed), core.StreamID{
-		Domain: "optimizer/v2/worker",
+		Domain: optimizerWorkerStreamDomain,
 		Index:  0,
 	})
 	if err != nil {
@@ -379,7 +379,7 @@ func collectionFixturePlan(seed int64, workers int, samples, maxSpins, batchSize
 	return ResolvedPlan{
 		Plan: RunPlan{
 			Target: Target{Game: spec.GID(1), BetModes: []int{0}},
-			Seed:   seed,
+			Seed:   Int64Seed(seed),
 			Collection: CollectionOptions{
 				Workers: workers, BatchSize: batchSize, MaxSpins: maxSpins,
 			},

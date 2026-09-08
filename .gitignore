@@ -66,6 +66,8 @@ out/
 bin/
 
 *.bin
+# for test
+!optimizer/v2/testdata/seed_bank_1700000000_s2.bin
 
 # ------------------------------
 # Logs / temp / runtime dumps

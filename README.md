@@ -120,132 +120,18 @@ sps : 19,010,181 spins/sec
 
 ### Built-in Optimizer (`optimizer/v2` + `cmd/opt`)
 
-Problab ships a **linear-programming-based math design optimizer**, wired into the
-CLI at `cmd/opt`. It is not a curve-fitting or generate-and-filter tool — it treats
-the designer's YAML as an explicit, typed intent contract and proves feasibility
-before returning a result:
+Configure the target, math intent, collection policy, and output directory in
+`cmd/opt/opt_cfg.yaml`, then run:
 
-- **Discrete, semantic modeling** — outcomes are grouped into `Class`es and
-  `atomic bucket`s with explicit `Main Group` / `Other` visibility, not an assumed
-  continuous or Gaussian shape.
-- **Hard vs. soft, by construction** — designer hard constraints (exact mean,
-  median range, CV range, Main total, collision-risk caps) must hold exactly, or
-  the run reports a typed `INFEASIBLE_*` status with a diagnosed cause; only
-  explicitly declared soft preferences (Main profile shape, bucket visibility)
-  are allowed to trade off, and how much is reported and locked, never silently
-  absorbed.
-- **No silent relaxation** — infeasible is infeasible: the optimizer never
-  auto-widens tolerances, retries with a different seed, or drops a constraint to
-  force a result.
-- **Real collected outcomes, not interval midpoints** — every LP coefficient
-  (mean, second moment, CDF) is computed from actual simulated spins collected
-  through the same execution path described above, then replayed and
-  re-verified at publication time.
-
-Run it with `go run ./cmd/opt` against `cmd/opt/opt_cfg.yaml`, or use the
-`optimizer/v2` package directly as a library.
-
-#### Replayable Collection Banks
-
-Expensive collection work can be reused without trusting historical payout or
-classification metadata. Add zero or more raw Core snapshot banks to a RunPlan
-in replay priority order:
-
-```yaml
-collection:
-  collected_seed:
-    - build/optimizer/collected/game_0/mode_0/seed_bank_1788772008_s4.bin
-  workers: 4
-  batch_size: 500000
-  max_spins: 10000000000
+```bash
+make opt
+# equivalent: go run ./cmd/opt
 ```
 
-For each configured bank, the optimizer streams its fixed-size snapshots,
-restores them into the current raw Machine, executes the current game and bet
-mode, and applies the current Tag and first-matching Class rules again. Relative
-paths are resolved from the command's startup working directory.
-
-- Replay sources are processed in declaration order. Exact snapshot bytes are
-  deduplicated across the sources that are read, and the first occurrence wins.
-  Fresh parallel collection keeps its existing PRNG-defined behavior and is not
-  deduplicated inline against replay or other workers.
-- Replay records do not consume `max_spins`. Accepted replay outcomes fill Class
-  quotas first; deterministic fresh workers receive only the remaining deficits.
-- `_sN` records the next unallocated logical worker-stream ordinal. With no
-  replay bank, workers use logical streams `0..workers-1`, preserving worker 0's
-  root seed and the existing `DeriveSeed(Index=worker-1)` mapping. A top-up Run
-  starts at the maximum recognized `_sN` across every configured path, including
-  missing, incompatible, or unopened sources, and advances by the configured
-  worker count whenever fresh fan-out starts.
-- Stream cursors are best-effort collision avoidance, not a uniqueness guarantee
-  for third-party PRNG factories. After collection, the optimizer audits exact
-  snapshot bytes independently inside each Class. A clean collection continues;
-  a same-Class duplicate stops before Prepare and saves only a Class-local
-  deduplicated recovery bank ending in `.distinct.bin`.
-- `RunReport.Collection` records each source's terminal state and
-  accepted/duplicate/unmatched/rejected counters, plus the replay-versus-fresh
-  accepted count for every Class, filename-cursor recognition, the duplicate
-  audit, and the saved bank's cursor/variant. Configured source paths and their
-  order affect the configuration hash; source bytes are evidenced separately by
-  the saved bank's SHA-256.
-- Missing or malformed banks produce warnings and are skipped. A runtime
-  incompatibility also warns and moves to the next source while retaining any
-  valid prefix already accepted. Once all Class quotas are full, later sources
-  are left unopened. None of these source states becomes configuration
-  infeasibility; fresh collection still determines whether the requested
-  support can be completed. Legacy or renamed filenames without a recognized
-  `_sN` remain replayable but warn and contribute cursor `0`.
-- Once collection returns valid internal state, both complete and
-  `CollectionInsufficient` results are atomically persisted before dynamic
-  validation, LP construction, solving, materialization, or publication:
-
-  ```text
-  <output.directory>/collected/game_<gid>/mode_<mode>/seed_bank_<unix_timestamp>_s<next>.bin
-  ```
-
-  If the post-collection audit finds duplicates, only this recovery artifact is
-  written and the Run stops with `DuplicateReplayIdentity`:
-
-  ```text
-  <output.directory>/collected/game_<gid>/mode_<mode>/seed_bank_<unix_timestamp>_s<next>.distinct.bin
-  ```
-
-  The writer streams snapshots in canonical Class/sequence order and reports the
-  absolute path, SHA-256, snapshot length, seed count, byte size, and whether the
-  bank is partial/distinct through `RunReport.Collection`. Duplicate warnings are
-  emitted before the recovery write and identify a planned target; a
-  `[Save distinct]` line is emitted only after the atomic commit succeeds.
-- Problab does not create a `latest` pointer, manifest, directory index, or
-  descriptor sidecar for collection banks. Select a bank explicitly by copying
-  its timestamped path into `collected_seed` on a later Run. Collection banks are
-  reusable optimizer inputs, not publishable runtime artifacts.
-- In an interactive terminal, each replay progress row is refreshed in place.
-  Redirected stderr and CI logs remain append-only and contain no cursor-control
-  sequences.
-
-> Note: this module is still evolving and APIs/configs may change before v1.0.0.
-
-### Optimal Artifact runtime
-
-An optimizer bundle is referenced by one manifest instead of separate mutable
-runtime objects:
-
-```yaml
-optimal_setting:
-  use_optimal: true
-  artifact: game_0/manifest.json
-```
-
-- `WithOptimalFS(fsys)` loads the bundle once into memory and is suitable for
-  embedded demos and portable tools.
-- `WithOptimalDir(root)` validates and read-only mmaps the binary probability,
-  alias, and seed-bank files on supported Unix platforms.
-- Every Machine, Simulator worker, and MachinePool created by the same Problab
-  instance shares the same immutable Artifact.
-- Stop runtimes first and call `Problab.Close()` at application shutdown.
-
-Legacy `gachas` and `seed_bank` configs remain readable for migration, but they
-use the memory backend and cannot receive the mmap benefit.
+The optimizer validates the configuration, solves and verifies the requested
+distribution, then writes the resulting artifacts to the configured
+`output.directory`. See the configuration comments and release notes for
+advanced options and compatibility details.
 
 ---
 

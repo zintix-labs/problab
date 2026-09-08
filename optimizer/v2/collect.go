@@ -26,6 +26,8 @@ import (
 	"github.com/zintix-labs/problab/spec"
 )
 
+const optimizerWorkerStreamDomain = "optimizer/v2/worker"
+
 // CollectedSample is one immutable replay atom accepted by the declaration-
 // ordered Class classifier. Win is normalized exactly once as TotalWin / Bet;
 // Snapshot is the Core state captured immediately before the raw game spin.
@@ -170,7 +172,7 @@ func (c *Collector) Collect(
 	if err != nil {
 		return CollectedProblem{}, Diagnostics{configDiagnostic(err.Error())}, nil
 	}
-	rootSeed := core.EncodeInt64Seed(plan.Plan.Seed)
+	rootSeed := plan.Plan.Seed.Bytes()
 	replayMachine, err := c.Lab.NewUnoptimizedMachineWithSeedBytes(plan.Plan.Target.Game, rootSeed, true)
 	if err != nil {
 		return CollectedProblem{}, nil, fmt.Errorf("create raw optimizer replay machine: %w", err)
@@ -241,11 +243,23 @@ func (c *Collector) Collect(
 		ordinal := startStreamOrdinal + uint64(worker)
 		seed, seedErr := optimizerWorkerSeed(c.Lab, rootSeed, ordinal)
 		if seedErr != nil {
-			return CollectedProblem{}, nil, fmt.Errorf("derive optimizer seed for worker %d logical ordinal %d: %w", worker, ordinal, seedErr)
+			return CollectedProblem{}, nil, fmt.Errorf(
+				"derive optimizer seed for worker %d logical ordinal %d (root seed kind=%s, %d bytes): %w",
+				worker, ordinal, plan.Plan.Seed.Kind(), plan.Plan.Seed.Len(), seedErr,
+			)
 		}
 		machines[worker], err = c.Lab.NewUnoptimizedMachineWithSeedBytes(plan.Plan.Target.Game, seed, true)
 		if err != nil {
-			return CollectedProblem{}, nil, fmt.Errorf("create raw optimizer machine for worker %d: %w", worker, err)
+			if ordinal == 0 {
+				return CollectedProblem{}, nil, fmt.Errorf(
+					"create raw optimizer machine for worker %d logical ordinal %d from root seed (kind=%s, %d bytes): %w",
+					worker, ordinal, plan.Plan.Seed.Kind(), plan.Plan.Seed.Len(), err,
+				)
+			}
+			return CollectedProblem{}, nil, fmt.Errorf(
+				"create raw optimizer machine for worker %d logical ordinal %d: PRNGFactory contract failure: derived seed (%d bytes) from root seed (kind=%s, %d bytes) was rejected: %w",
+				worker, ordinal, len(seed), plan.Plan.Seed.Kind(), plan.Plan.Seed.Len(), err,
+			)
 		}
 	}
 	// Every configured worker now owns a valid machine. The fresh fan-out
@@ -385,7 +399,7 @@ func optimizerWorkerSeed(lab *problab.Problab, rootSeed []byte, ordinal uint64) 
 		return append([]byte(nil), rootSeed...), nil
 	}
 	return lab.DeriveSeed(rootSeed, core.StreamID{
-		Domain: "optimizer/v2/worker",
+		Domain: optimizerWorkerStreamDomain,
 		Index:  ordinal - 1,
 	})
 }

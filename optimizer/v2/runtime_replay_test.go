@@ -91,7 +91,7 @@ func runtimeReplayCompiledFixture(seed int64, betUnit int) CompiledModel {
 	plan := ResolvedPlan{
 		Plan: RunPlan{
 			Target: Target{Game: spec.GID(1), BetModes: []int{0}},
-			Seed:   seed,
+			Seed:   Int64Seed(seed),
 		},
 		Intent: MathIntent{Classes: []ClassIntent{class}},
 	}

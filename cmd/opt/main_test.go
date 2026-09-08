@@ -46,7 +46,8 @@ func TestLoadV2ConfigUsesOnlyEmbeddedIntentPlans(t *testing.T) {
 			t.Fatalf("plan %q engine=%q, want %q", plan.ID, resolved.Plan.Engine, optimizerv2.EngineIntentLPV2)
 		}
 		if resolved.Plan.ID != plan.ID || resolved.Plan.Target.Game != plan.Target.Game ||
-			resolved.Plan.Target.BetModes[0] != plan.Target.BetModes[0] || resolved.Plan.Seed != plan.Seed {
+			resolved.Plan.Target.BetModes[0] != plan.Target.BetModes[0] ||
+			resolved.Plan.Seed.Kind() != plan.Seed.Kind() || !bytes.Equal(resolved.Plan.Seed.Bytes(), plan.Seed.Bytes()) {
 			t.Fatalf("plan %q was not used directly from embedded config: resolved=%+v source=%+v", plan.ID, resolved.Plan, plan)
 		}
 	}

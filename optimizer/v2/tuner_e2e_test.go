@@ -17,9 +17,11 @@ package v2
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zintix-labs/problab/demo"
@@ -32,18 +34,43 @@ import (
 // Tuner.Run with the same stream to collect, prepare, compile, solve every
 // semantic substage, materialize, runtime-replay, and publish Artifact v1.
 func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
+	result := runCompleteProductionPipeline(t, Int64Seed(4127483647), "complete-pipeline")
+	assertReportSeedJSON(t, result.Report, `"seed":4127483647`)
+	if result.Report.Engine.Version != "intent-lp-v2.5.0" {
+		t.Fatalf("engine version=%q", result.Report.Engine.Version)
+	}
+}
+
+func TestTunerRunWithUTF8SeedCompletesPipeline(t *testing.T) {
+	seed, err := UTF8Seed("autumn-build-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := runCompleteProductionPipeline(t, seed, "utf8-complete-pipeline")
+	assertReportSeedJSON(t, result.Report, `"seed":"utf8:autumn-build-7"`)
+}
+
+func TestTunerRunWithHexSeedCompletesPipeline(t *testing.T) {
+	seed, err := HexSeed("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := runCompleteProductionPipeline(t, seed, "hex-complete-pipeline")
+	assertReportSeedJSON(t, result.Report, `"seed":"hex:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"`)
+}
+
+func runCompleteProductionPipeline(t *testing.T, seed SeedSpec, planID string) RunResult {
+	t.Helper()
 	lab, err := demo.NewProbLab()
 	if err != nil {
 		t.Fatalf("construct demo Problab: %v", err)
 	}
 	defer func() { _ = lab.Close() }()
 
-	const (
-		seed    int64  = 4127483647
-		samples uint64 = 256
-	)
+	const samples uint64 = 256
 	collection := CollectionOptions{Workers: 2, BatchSize: 64, MaxSpins: samples}
-	fixture := collectionFixturePlan(seed, collection.Workers, samples, collection.MaxSpins, collection.BatchSize)
+	fixture := collectionFixturePlan(0, collection.Workers, samples, collection.MaxSpins, collection.BatchSize)
+	fixture.Plan.Seed = seed.clone()
 	collected, diagnostics, err := NewCollector(lab).Collect(context.Background(), fixture, 0)
 	if err != nil {
 		t.Fatalf("derive deterministic fixture support: %v", err)
@@ -96,15 +123,15 @@ func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
 	config := Config{
 		Version: ConfigVersion,
 		Plans: []RunPlan{{
-			ID: "complete-pipeline", Target: Target{Game: spec.GID(1), BetModes: []int{0}},
-			Engine: EngineIntentLPV2, Intent: "complete-pipeline", Seed: seed,
+			ID: planID, Target: Target{Game: spec.GID(1), BetModes: []int{0}},
+			Engine: EngineIntentLPV2, Intent: planID, Seed: seed.clone(),
 			Collection:         collection,
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
 			Output: OutputOptions{
 				Format: []OutputFormat{OutputOptimalGacha, OutputOptimalArtifactV1}, Directory: outputDirectory,
 			},
 		}},
-		Intents:       map[string]MathIntent{"complete-pipeline": intent},
+		Intents:       map[string]MathIntent{planID: intent},
 		EngineOptions: options,
 	}
 
@@ -112,7 +139,7 @@ func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct Tuner: %v", err)
 	}
-	result, err := tuner.Run(context.Background(), RunRequest{PlanID: "complete-pipeline"})
+	result, err := tuner.Run(context.Background(), RunRequest{PlanID: planID})
 	if err != nil {
 		t.Fatalf("Tuner.Run: %v", err)
 	}
@@ -170,5 +197,17 @@ func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
 		if got := result.Report.OptimizationStages[index].Stage; got != want {
 			t.Fatalf("optimization stage[%d]=%q want=%q", index, got, want)
 		}
+	}
+	return result
+}
+
+func assertReportSeedJSON(t *testing.T, report RunReport, wantFragment string) {
+	t.Helper()
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), wantFragment) {
+		t.Fatalf("report JSON lacks %s: %s", wantFragment, raw)
 	}
 }

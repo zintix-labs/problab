@@ -29,7 +29,6 @@ import (
 	"strings"
 
 	"github.com/zintix-labs/problab"
-	"github.com/zintix-labs/problab/sdk/core"
 )
 
 func resolveRunPath(workingDirectory, configured string) (string, error) {
@@ -626,7 +625,7 @@ func replayCollectionBanks(
 
 func newReplayMachine(collector *Collector, plan ResolvedPlan) (*problab.Machine, error) {
 	machine, err := collector.Lab.NewUnoptimizedMachineWithSeedBytes(
-		plan.Plan.Target.Game, core.EncodeInt64Seed(plan.Plan.Seed), true,
+		plan.Plan.Target.Game, plan.Plan.Seed.Bytes(), true,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("recreate raw optimizer replay machine: %w", err)

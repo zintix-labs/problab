@@ -293,7 +293,7 @@ func TestTunerSavesPartialCollectionBankBeforeCollectionInsufficient(t *testing.
 		Version: ConfigVersion,
 		Plans: []RunPlan{{
 			ID: "partial-bank", Target: Target{Game: 1, BetModes: []int{0}}, Engine: EngineIntentLPV2,
-			Intent: "partial-bank", Seed: 77,
+			Intent: "partial-bank", Seed: Int64Seed(77),
 			Collection:         CollectionOptions{Workers: 1, BatchSize: 1, MaxSpins: 1},
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
 			Output:             OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: outputDirectory},

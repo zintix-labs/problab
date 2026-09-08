@@ -280,7 +280,7 @@ func replayMaterializedSnapshots(
 	if err := validateMaterializedMode(mode); err != nil {
 		return MaterializedMode{}, textVerificationCheck(checkName, false, err.Error(), "every seed-bank entry restores and reproduces its modeled payout, Class predicate, and atomic bucket"), nil
 	}
-	machine, err := lab.NewUnoptimizedMachineWithSeed(compiled.Prepared.Game, compiled.Prepared.Plan.Plan.Seed, true)
+	machine, err := lab.NewUnoptimizedMachineWithSeedBytes(compiled.Prepared.Game, compiled.Prepared.Plan.Plan.Seed.Bytes(), true)
 	if err != nil {
 		return MaterializedMode{}, VerificationCheck{}, fmt.Errorf("construct raw runtime-replay machine: %w", err)
 	}

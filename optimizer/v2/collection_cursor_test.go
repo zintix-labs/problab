@@ -247,7 +247,7 @@ func TestCollectCursorZeroPreservesExistingWorkerSeedMapping(t *testing.T) {
 	if collected.NextStreamOrdinal != 4 {
 		t.Fatalf("next stream ordinal=%d want=4", collected.NextStreamOrdinal)
 	}
-	root := core.EncodeInt64Seed(plan.Plan.Seed)
+	root := plan.Plan.Seed.Bytes()
 	seed0, err := optimizerWorkerSeed(lab, root, 0)
 	if err != nil || !bytes.Equal(seed0, root) || &seed0[0] == &root[0] {
 		t.Fatalf("ordinal zero seed=%x root=%x err=%v", seed0, root, err)
@@ -507,7 +507,7 @@ func TestTunerRunStopsBeforePrepareOnDuplicateCollection(t *testing.T) {
 		Version: ConfigVersion,
 		Plans: []RunPlan{{
 			ID: "duplicate-gate", Target: Target{Game: 1, BetModes: []int{0}},
-			Engine: EngineIntentLPV2, Intent: "duplicate-gate", Seed: 24680,
+			Engine: EngineIntentLPV2, Intent: "duplicate-gate", Seed: Int64Seed(24680),
 			Collection:         CollectionOptions{Workers: 2, BatchSize: 1, MaxSpins: 2},
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
 			Output:             OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: output},

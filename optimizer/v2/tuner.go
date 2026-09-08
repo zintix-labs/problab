@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	engineImplementationVersion = "intent-lp-v2.4.0"
+	engineImplementationVersion = "intent-lp-v2.5.0"
 	// Replay banks contribute in configured source/record order, fresh samples
 	// follow worker/local acceptance order, and persisted bytes serialize Classes
 	// in declaration order while preserving each Class's Sequence order.
@@ -261,7 +261,7 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) 
 	// fail before the expensive collection begins.
 	staticStage := "static-validation"
 	staticStarted := t.startStage(staticStage, -1)
-	report := RunReport{Overrides: request.Overrides}
+	report := RunReport{Overrides: cloneRunOverrides(request.Overrides)}
 	resolved, err := t.config.ResolvePlan(request.PlanID)
 	if err != nil {
 		diagnostics := Diagnostics{configDiagnostic(err.Error())}
@@ -658,7 +658,7 @@ func materializationViolationDiagnostic() Diagnostic {
 // and CandidateReport never implies player-experience optimality.
 func newRunReport(plan ResolvedPlan, overrides RunOverrides) RunReport {
 	return RunReport{
-		Plan: plan, ExpectedRTP: plan.Intent.ExpectedRTP(), Overrides: overrides,
+		Plan: plan, ExpectedRTP: plan.Intent.ExpectedRTP(), Overrides: cloneRunOverrides(overrides),
 		Engine: EngineProvenance{
 			Name: EngineIntentLPV2, Version: engineImplementationVersion,
 			SemanticAxioms: []string{MainSemanticAxiomVersion},
@@ -672,6 +672,23 @@ func newRunReport(plan ResolvedPlan, overrides RunOverrides) RunReport {
 			PlayerExperienceOptimality: "NOT_CLAIMED",
 		},
 	}
+}
+
+func cloneRunOverrides(overrides RunOverrides) RunOverrides {
+	cloned := overrides
+	if overrides.Game != nil {
+		game := *overrides.Game
+		cloned.Game = &game
+	}
+	if overrides.BetMode != nil {
+		betMode := *overrides.BetMode
+		cloned.BetMode = &betMode
+	}
+	if overrides.Seed != nil {
+		seed := overrides.Seed.clone()
+		cloned.Seed = &seed
+	}
+	return cloned
 }
 
 // validateRuntimeTarget proves that one Run selects exactly one existing mode
@@ -699,6 +716,13 @@ func validateRuntimeTarget(lab *problab.Problab, plan ResolvedPlan) ([]int, Diag
 	}
 	if modes[0] < 0 || modes[0] >= len(betUnits) {
 		return nil, configDiagnostic(fmt.Sprintf("game %d has bet modes [0..%d]; plan requests mode %d", plan.Plan.Target.Game, len(betUnits)-1, modes[0])), nil
+	}
+	seed := plan.Plan.Seed.Bytes()
+	if _, err := lab.NewCoreWithSeedBytes(seed); err != nil {
+		return nil, configDiagnostic(fmt.Sprintf(
+			"plan %q seed (kind=%s, %d bytes) is not accepted by the configured PRNG factory: %v",
+			plan.Plan.ID, plan.Plan.Seed.Kind(), plan.Plan.Seed.Len(), err,
+		)), nil
 	}
 	return betUnits, Diagnostic{}, nil
 }
