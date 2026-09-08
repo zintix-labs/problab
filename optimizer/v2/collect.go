@@ -124,6 +124,15 @@ func NewCollector(lab *problab.Problab) *Collector {
 	return &Collector{Lab: lab}
 }
 
+// newOptimizerMachine creates the deterministic, unoptimized Machine shared by
+// collection and verification. Optimizer tags must receive the complete raw
+// SpinResult, including game-defined ExtendResult snapshots, so isSim is
+// deliberately false. Explicit seed material still keeps the Machine on the
+// deterministic RNG lifecycle; false selects full-result mode only.
+func newOptimizerMachine(lab *problab.Problab, gid spec.GID, seed []byte) (*problab.Machine, error) {
+	return lab.NewUnoptimizedMachineWithSeedBytes(gid, seed, false)
+}
+
 // Collect first replays configured raw snapshot banks through the current game,
 // mode, tags, and Class predicates. It then executes raw game logic only for
 // the remaining Class deficits until they are full or every worker's statically
@@ -173,7 +182,7 @@ func (c *Collector) Collect(
 		return CollectedProblem{}, Diagnostics{configDiagnostic(err.Error())}, nil
 	}
 	rootSeed := plan.Plan.Seed.Bytes()
-	replayMachine, err := c.Lab.NewUnoptimizedMachineWithSeedBytes(plan.Plan.Target.Game, rootSeed, true)
+	replayMachine, err := newOptimizerMachine(c.Lab, plan.Plan.Target.Game, rootSeed)
 	if err != nil {
 		return CollectedProblem{}, nil, fmt.Errorf("create raw optimizer replay machine: %w", err)
 	}
@@ -248,7 +257,7 @@ func (c *Collector) Collect(
 				worker, ordinal, plan.Plan.Seed.Kind(), plan.Plan.Seed.Len(), seedErr,
 			)
 		}
-		machines[worker], err = c.Lab.NewUnoptimizedMachineWithSeedBytes(plan.Plan.Target.Game, seed, true)
+		machines[worker], err = newOptimizerMachine(c.Lab, plan.Plan.Target.Game, seed)
 		if err != nil {
 			if ordinal == 0 {
 				return CollectedProblem{}, nil, fmt.Errorf(

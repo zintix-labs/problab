@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	engineImplementationVersion = "intent-lp-v2.5.0"
+	engineImplementationVersion = "intent-lp-v2.6.0"
 	// Replay banks contribute in configured source/record order, fresh samples
 	// follow worker/local acceptance order, and persisted bytes serialize Classes
 	// in declaration order while preserving each Class's Sequence order.

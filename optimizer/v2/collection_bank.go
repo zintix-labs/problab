@@ -624,9 +624,7 @@ func replayCollectionBanks(
 }
 
 func newReplayMachine(collector *Collector, plan ResolvedPlan) (*problab.Machine, error) {
-	machine, err := collector.Lab.NewUnoptimizedMachineWithSeedBytes(
-		plan.Plan.Target.Game, plan.Plan.Seed.Bytes(), true,
-	)
+	machine, err := newOptimizerMachine(collector.Lab, plan.Plan.Target.Game, plan.Plan.Seed.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("recreate raw optimizer replay machine: %w", err)
 	}

@@ -241,6 +241,52 @@ func TestCollectResolvesGameScopedCustomTag(t *testing.T) {
 	}
 }
 
+func TestCollectCustomTagCanInspectExtendResult(t *testing.T) {
+	lab, err := demo.NewProbLab()
+	if err != nil {
+		t.Fatalf("construct demo Problab: %v", err)
+	}
+	defer func() { _ = lab.Close() }()
+
+	const gid spec.GID = 1
+	hasExtend := func(result *buf.SpinResult) bool {
+		for _, mode := range result.GameModeList {
+			for _, act := range mode.ActResults {
+				if act.ExtendResult != nil {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	collector := NewCollector(lab)
+	collector.GameTags = map[spec.GID]map[string]legacyoptimizer.IsTag{
+		gid: {"has_extend": hasExtend},
+	}
+	plan := collectionFixturePlan(864209753, 1, 1, 10_000, 100)
+	plan.Plan.Target.Game = gid
+	plan.Intent.Classes[0].Collect.Tags.Matches = []string{"has_extend"}
+
+	collected, diagnostics, err := collector.Collect(context.Background(), plan, 0)
+	if err != nil || diagnostics.StopsRun() {
+		t.Fatalf("Collect: diagnostics=%+v err=%v", diagnostics, err)
+	}
+	if got := len(collected.Classes[0].Samples); got != 1 {
+		t.Fatalf("accepted samples=%d, want 1", got)
+	}
+
+	replay, err := newOptimizerMachine(lab, gid, Int64Seed(1).Bytes())
+	if err != nil {
+		t.Fatalf("construct replay machine: %v", err)
+	}
+	if err := replay.RestoreCore(collected.Classes[0].Samples[0].Snapshot); err != nil {
+		t.Fatalf("restore accepted sample: %v", err)
+	}
+	if result := replay.SpinInternal(0); result == nil || !hasExtend(result) {
+		t.Fatalf("accepted sample does not expose ExtendResult: %+v", result)
+	}
+}
+
 func TestCollectFailsClearlyOnUnknownTagName(t *testing.T) {
 	lab, err := demo.NewProbLab()
 	if err != nil {

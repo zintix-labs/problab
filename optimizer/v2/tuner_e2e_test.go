@@ -36,7 +36,7 @@ import (
 func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
 	result := runCompleteProductionPipeline(t, Int64Seed(4127483647), "complete-pipeline")
 	assertReportSeedJSON(t, result.Report, `"seed":4127483647`)
-	if result.Report.Engine.Version != "intent-lp-v2.5.0" {
+	if result.Report.Engine.Version != "intent-lp-v2.6.0" {
 		t.Fatalf("engine version=%q", result.Report.Engine.Version)
 	}
 }
