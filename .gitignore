@@ -181,5 +181,5 @@ scripts/bin/*
 # Generated demo Optimal artifacts may contain replayable PRNG snapshots.
 demo/optimal/
 
-# Design notes and change rationale are maintained locally.
-docs/
+# problab-docs/ is its own independent git repo
+problab-docs/
