@@ -146,6 +146,22 @@ func TestCLIProgressReporterShowsReplayDeficitsFreshSummaryAndSavedBank(t *testi
 	}
 }
 
+func TestCLICollectionDescriptorCompletedAndWarning(t *testing.T) {
+	var output bytes.Buffer
+	reporter := newCLIProgressReporter(&output)
+	reporter.Report(optimizerv2.StageEvent{Stage: "collection-descriptor", State: "completed", Path: "/tmp/catalog.parquet", Records: 42, Bytes: 1234, DatasetID: "sha256:abc", Duration: time.Second})
+	for _, want := range []string{"/tmp/catalog.parquet", "records=42", "bytes=1234", "dataset_id=sha256:abc", "(1s)"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("missing %q: %s", want, output.String())
+		}
+	}
+	output.Reset()
+	reporter.Report(optimizerv2.StageEvent{Stage: "collection-descriptor", State: "warning", Message: "write failed"})
+	if got := output.String(); got != "  [Descriptor] warning: write failed\n" {
+		t.Fatalf("warning=%q", got)
+	}
+}
+
 func TestCLIProgressReporterShowsLegacyCursorAndDuplicateRecoveryLifecycle(t *testing.T) {
 	var output bytes.Buffer
 	reporter := newCLIProgressReporter(&output)

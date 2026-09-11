@@ -74,6 +74,7 @@ type StageEvent struct {
 	SeedCount              uint64
 	Bytes                  int64
 	SHA256                 string
+	DatasetID              string
 	EndReason              CollectionReplayEndReason
 	RemainingSources       int
 	StreamCursor           uint64
@@ -128,15 +129,16 @@ type TunerOption func(*Tuner) error
 // compiled rows, solver witnesses, and candidate data are local to each Run so
 // repeated calls cannot leak state into one another.
 type Tuner struct {
-	config               Config
-	lab                  *problab.Problab
-	collector            *Collector
-	engine               *IntentEngine
-	reporter             Reporter
-	writerFactory        outputWriterFactory
-	workingDirectory     string
-	now                  func() time.Time
-	collectionBankWriter collectionBankWriter
+	config                       Config
+	lab                          *problab.Problab
+	collector                    *Collector
+	engine                       *IntentEngine
+	reporter                     Reporter
+	writerFactory                outputWriterFactory
+	workingDirectory             string
+	now                          func() time.Time
+	collectionBankWriter         collectionBankWriter
+	collectionDescriptorExporter collectionDescriptorExporter
 }
 
 // NewTuner constructs the v2 application facade used by cmd/opt. Configuration
@@ -461,16 +463,26 @@ func (t *Tuner) collectStage(ctx context.Context, plan ResolvedPlan, betMode int
 	}
 	if distinct {
 		diagnostics = append(diagnostics, collectionDuplicateDiagnostic(plan, audit, path))
-	} else {
-		descriptorPath, descriptorErr := writeCollectionDescriptor(ctx, plan, collected, bank)
-		if t.reporter != nil && descriptorErr != nil {
-			t.reporter.Report(StageEvent{
-				Stage: "collection-descriptor", State: "warning", BetMode: betMode,
-				Path: descriptorPath, Message: descriptorErr.Error(),
-			})
-		} else if t.reporter != nil && descriptorPath != "" {
-			t.reporter.Report(StageEvent{Stage: "collection-descriptor", State: "completed", BetMode: betMode, Path: descriptorPath})
+	}
+	// PRD 0005: persistence alone borrows the recovery view. Prepare continues
+	// to receive the original collected value; descriptor errors are advisory.
+	export := t.collectionDescriptorExporter
+	if export == nil {
+		export = (collectionDescriptorWriter{}).Write
+	}
+	descriptor, descriptorErr := export(ctx, bankCollection, bank)
+	if descriptorErr != nil {
+		descriptor.State, descriptor.Error = "WARNING", descriptorErr.Error()
+	}
+	report.Collection.Descriptor = &descriptor
+	if t.reporter != nil {
+		state := "completed"
+		if descriptorErr != nil {
+			state = "warning"
 		}
+		t.reporter.Report(StageEvent{Stage: "collection-descriptor", State: state, BetMode: betMode,
+			Path: descriptor.Path, Records: descriptor.Records, DatasetID: descriptor.DatasetID,
+			Bytes: descriptor.Bytes, Duration: descriptor.Duration, Message: descriptor.Error})
 	}
 	t.finishStage(report, stage, betMode, started, nil, diagnostics)
 	return collected, diagnostics, nil

@@ -107,6 +107,10 @@ func TestTunerClassWeightBasePreservesProportionalDistribution(t *testing.T) {
 }
 
 func runCompleteProductionPipeline(t *testing.T, seed SeedSpec, planID string, bases ...int) RunResult {
+	return runCompleteProductionPipelineWithExporter(t, seed, planID, nil, bases...)
+}
+
+func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, planID string, exporter collectionDescriptorExporter, bases ...int) RunResult {
 	t.Helper()
 	lab, err := demo.NewProbLab()
 	if err != nil {
@@ -191,6 +195,7 @@ func runCompleteProductionPipeline(t *testing.T, seed SeedSpec, planID string, b
 	if err != nil {
 		t.Fatalf("construct Tuner: %v", err)
 	}
+	tuner.collectionDescriptorExporter = exporter
 	result, err := tuner.Run(context.Background(), RunRequest{PlanID: planID})
 	if err != nil {
 		t.Fatalf("Tuner.Run: %v", err)

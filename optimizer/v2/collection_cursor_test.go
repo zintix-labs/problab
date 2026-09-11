@@ -492,9 +492,10 @@ func TestTunerDuplicateCollectionWritesOnlyDistinctBankAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "seed_bank_300_s2.distinct.bin" {
+	if len(entries) != 2 || entries[0].Name() != "seed_bank_300_s2.distinct.bin" || entries[1].Name() != "seed_bank_300_s2.distinct.parquet" {
 		t.Fatalf("collection bank entries=%v", entries)
 	}
+	assertDescriptorMatchesBank(t, *report.Collection)
 	assertDuplicateEventOrder(t, recorder.events, true)
 }
 

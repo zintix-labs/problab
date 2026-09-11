@@ -133,7 +133,7 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 		if event.State == "warning" {
 			_, _ = fmt.Fprintf(r.output, "  [Descriptor] warning: %s\n", event.Message)
 		} else if event.State == "completed" && event.Path != "" {
-			_, _ = fmt.Fprintf(r.output, "  [Descriptor] %s\n", event.Path)
+			_, _ = fmt.Fprintf(r.output, "  [Descriptor] %s records=%d bytes=%d dataset_id=%s (%s)\n", event.Path, event.Records, event.Bytes, event.DatasetID, formatStageDuration(event.Duration))
 		}
 		return
 	}

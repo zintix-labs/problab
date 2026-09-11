@@ -871,15 +871,6 @@ func visitCanonicalCollectionSamples(collected CollectedProblem, visit func(clas
 	return nil
 }
 
-// writeCollectionDescriptor is the reserved decoupling boundary between raw
-// Problab collection and future external optimization platforms. It is
-// intentionally a no-op: no placeholder or sidecar file is emitted. A future
-// descriptor can expose exact payout and seed-bank indexes without changing
-// the raw bank's Class/Sequence order or consulting the wall clock again.
-func writeCollectionDescriptor(_ context.Context, _ ResolvedPlan, _ CollectedProblem, _ CollectionBankReport) (string, error) {
-	return "", nil
-}
-
 func buildCollectionRunReport(
 	collected CollectedProblem,
 	audit CollectionDuplicateAudit,

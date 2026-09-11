@@ -1,5 +1,7 @@
 🌐 Language: En | [中文](README_ch.md)
 
+For version changes, see the [release notes](https://github.com/zintix-labs/problab/releases).
+
 ---
 
 # Problab
@@ -130,10 +132,7 @@ make opt
 
 The optimizer validates the configuration, solves and verifies the requested
 distribution, then writes the resulting artifacts to the configured
-`output.directory`. See the configuration comments and release notes for
-advanced options and compatibility details.
-
-`overall.class_weight_base` supports 100K–1B Class weight denominators; omission retains the 1M default.
+`output.directory`. See the configuration comments for advanced options.
 
 ---
 

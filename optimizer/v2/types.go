@@ -273,11 +273,12 @@ type CollectionBankReport struct {
 // CollectionRunReport keeps collected support and persistence evidence alive
 // even when a later Prepare, model, solve, or verification stage fails.
 type CollectionRunReport struct {
-	Requested      uint64                   `json:"requested"`
-	Accepted       uint64                   `json:"accepted"`
-	Evidence       CollectionEvidence       `json:"evidence"`
-	DuplicateAudit CollectionDuplicateAudit `json:"duplicate_audit"`
-	Bank           CollectionBankReport     `json:"bank"`
+	Requested      uint64                      `json:"requested"`
+	Accepted       uint64                      `json:"accepted"`
+	Evidence       CollectionEvidence          `json:"evidence"`
+	DuplicateAudit CollectionDuplicateAudit    `json:"duplicate_audit"`
+	Bank           CollectionBankReport        `json:"bank"`
+	Descriptor     *CollectionDescriptorReport `json:"descriptor,omitempty"`
 }
 
 // CandidateSelectionOptions makes the outer evaluation boundary explicit even
