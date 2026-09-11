@@ -36,7 +36,7 @@ import (
 func TestTunerRunExecutesTheCompleteProductionPipeline(t *testing.T) {
 	result := runCompleteProductionPipeline(t, Int64Seed(4127483647), "complete-pipeline")
 	assertReportSeedJSON(t, result.Report, `"seed":4127483647`)
-	if result.Report.Engine.Version != "intent-lp-v2.6.0" {
+	if result.Report.Engine.Version != "intent-lp-v2.7.0" {
 		t.Fatalf("engine version=%q", result.Report.Engine.Version)
 	}
 }
@@ -59,7 +59,54 @@ func TestTunerRunWithHexSeedCompletesPipeline(t *testing.T) {
 	assertReportSeedJSON(t, result.Report, `"seed":"hex:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"`)
 }
 
-func runCompleteProductionPipeline(t *testing.T, seed SeedSpec, planID string) RunResult {
+func TestTunerClassWeightBasePreservesProportionalDistribution(t *testing.T) {
+	legacy := runCompleteProductionPipeline(t, Int64Seed(4127483647), "base-compat")
+	for _, base := range []int{DefaultClassWeightBase, MaxClassWeightBase} {
+		result := runCompleteProductionPipeline(t, Int64Seed(4127483647), "base-compat", base)
+		if result.Report.SolutionHash != legacy.Report.SolutionHash || result.Report.ModelHash != legacy.Report.ModelHash || result.Report.Collection.Bank.SHA256 != legacy.Report.Collection.Bank.SHA256 {
+			t.Fatalf("base %d changed proportional model, collection, or runtime distribution", base)
+		}
+		if result.Report.Plan.Intent.Overall.EffectiveClassWeightBase() != base {
+			t.Fatalf("report lost base %d", base)
+		}
+	}
+	lab, err := demo.NewProbLab()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lab.Close()
+	plan := legacy.Report.Plan
+	base := ClassWeightDenominator(MaxClassWeightBase)
+	plan.Intent = cloneMathIntent(plan.Intent)
+	plan.Intent.Overall.ClassWeightBase = &base
+	plan.Intent.Classes[0].Weight = int(base)
+	plan.Plan.Collection.CollectedSeed = []string{legacy.Report.Collection.Bank.Path}
+	collector := NewCollector(lab)
+	collector.WorkingDirectory = t.TempDir()
+	replayed, diagnostics, err := collector.Collect(context.Background(), plan, 0)
+	if err != nil || diagnostics.StopsRun() {
+		t.Fatalf("replay: %v %v", diagnostics, err)
+	}
+	if replayed.Evidence.FreshSpins != 0 || replayed.Evidence.ReplayAccepted != legacy.Report.Collection.Accepted {
+		t.Fatalf("legacy bank not fully reused: %+v", replayed.Evidence)
+	}
+	var snapshots []byte
+	if err := visitCanonicalCollectionSamples(replayed, func(_, _ int, sample CollectedSample) error {
+		snapshots = append(snapshots, sample.Snapshot...)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(legacy.Report.Collection.Bank.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(snapshots, want) {
+		t.Fatal("base change altered replayed snapshot order")
+	}
+}
+
+func runCompleteProductionPipeline(t *testing.T, seed SeedSpec, planID string, bases ...int) RunResult {
 	t.Helper()
 	lab, err := demo.NewProbLab()
 	if err != nil {
@@ -116,6 +163,11 @@ func runCompleteProductionPipeline(t *testing.T, seed SeedSpec, planID string) R
 		}},
 	}
 	options := DefaultEngineOptions()
+	if len(bases) > 0 {
+		base := ClassWeightDenominator(bases[0])
+		intent.Overall.ClassWeightBase = &base
+		intent.Classes[0].Weight = int(base)
+	}
 	options.ProfileBisectionIterations = 12
 	options.OtherVisibilityBisectionIterations = 12
 	options.MainGroupInternalVisibilityBisectionIterations = 12

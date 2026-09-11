@@ -143,9 +143,9 @@ func TestRunReportConfigHashIsStableForInt64Seed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Includes the explicit distribution reporting threshold. Integer seed
-	// encoding remains unchanged; adding an engine option changes config identity.
-	const golden = "dc5c224a375bca25d930a1ac4983eb681efe64c4ade3c244a76f79829f2d4313"
+	// Includes the resolved Class weight denominator. Integer seed encoding
+	// remains unchanged; the explicit effective base changes config identity.
+	const golden = "d1c7b80b410da3c3733c63702cc019c9a7f525922003f67973167b1304c62280"
 	if got != golden {
 		t.Fatalf("ConfigHash=%s want golden %s", got, golden)
 	}

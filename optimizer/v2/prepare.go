@@ -127,7 +127,7 @@ func PrepareProblem(plan ResolvedPlan, collected CollectedProblem) (PreparedProb
 func prepareClass(plan ResolvedPlan, classIndex int, intent ClassIntent, samples []CollectedSample) (PreparedClass, Diagnostic, error) {
 	class := PreparedClass{
 		ID: intent.Name, Index: classIndex, Weight: intent.Weight,
-		Probability:  float64(intent.Weight) / ClassWeightBase,
+		Probability:  float64(intent.Weight) / float64(plan.Intent.Overall.EffectiveClassWeightBase()),
 		CollectRange: intent.Collect.WinRange,
 		Design:       intent.Design, Intent: intent.Design.Subjective.Enabled(),
 	}

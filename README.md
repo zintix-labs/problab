@@ -133,6 +133,8 @@ distribution, then writes the resulting artifacts to the configured
 `output.directory`. See the configuration comments and release notes for
 advanced options and compatibility details.
 
+`overall.class_weight_base` supports 100K–1B Class weight denominators; omission retains the 1M default.
+
 ---
 
 ## Typical Use Cases

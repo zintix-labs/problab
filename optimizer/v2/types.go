@@ -26,10 +26,12 @@ const (
 	// fields their Go zero values, or a new binary from guessing old semantics.
 	ConfigVersion = 2
 
-	// ClassWeightBase is the fixed denominator used to convert a class Weight
-	// into its unconditional probability. It is intentionally a system constant
-	// rather than a designer-configurable normalization base.
-	ClassWeightBase = 1_000_000
+	MinClassWeightBase     = 100_000
+	DefaultClassWeightBase = 1_000_000
+	MaxClassWeightBase     = 1_000_000_000
+	// ClassWeightBase retains the legacy default for Go callers. Calculations
+	// must use OverallIntent.EffectiveClassWeightBase instead.
+	ClassWeightBase = DefaultClassWeightBase
 
 	// DefaultFeasibilityTolerance bounds original-row constraint replay error.
 	DefaultFeasibilityTolerance = 1e-9
@@ -317,8 +319,24 @@ type MathIntent struct {
 // not already implied by Class contracts. RTP is deliberately absent: fixed
 // Class weights and exact Class Exp values derive it without another input.
 type OverallIntent struct {
-	CV NumericRange `yaml:"cv" json:"cv"`
+	// ClassWeightBase is the common integer denominator of Class weights.
+	// Nil uses the legacy 1M default; explicit values must be within 100K–1B.
+	// Resolved plans always contain an explicit, independently owned value.
+	ClassWeightBase *ClassWeightDenominator `yaml:"class_weight_base,omitempty" json:"class_weight_base"`
+	CV              NumericRange            `yaml:"cv" json:"cv"`
 }
+
+// EffectiveClassWeightBase returns the configured denominator or legacy default.
+func (o OverallIntent) EffectiveClassWeightBase() int {
+	if o.ClassWeightBase == nil {
+		return DefaultClassWeightBase
+	}
+	return int(*o.ClassWeightBase)
+}
+
+// ClassWeightDenominator is an integer-only YAML scalar. Range validation is
+// performed with the rest of MathIntent; JSON reports encode it as a number.
+type ClassWeightDenominator int
 
 // NumericRange is a finite inclusive [Min, Max] range encoded as a YAML map.
 // It is used where named endpoints make the unit and hard-bound role explicit.

@@ -36,6 +36,19 @@ type ConfigError struct {
 	Problem string
 }
 
+// UnmarshalYAML prevents yaml.v3's ordinary float-to-int truncation for bases.
+func (b *ClassWeightDenominator) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {
+		return fmt.Errorf("overall.class_weight_base: must be an integer YAML scalar")
+	}
+	var value int
+	if err := node.Decode(&value); err != nil {
+		return fmt.Errorf("overall.class_weight_base: %w", err)
+	}
+	*b = ClassWeightDenominator(value)
+	return nil
+}
+
 // Error renders a stable path-first validation message suitable for a CLI and
 // for conversion into an INFEASIBLE_CONFIG/ConfigInvalid diagnostic.
 func (e *ConfigError) Error() string {
@@ -176,10 +189,13 @@ func (c Config) ResolvePlan(id string) (ResolvedPlan, error) {
 		if plan.ID != id {
 			continue
 		}
+		intent := cloneMathIntent(c.Intents[plan.Intent])
+		base := ClassWeightDenominator(intent.Overall.EffectiveClassWeightBase())
+		intent.Overall.ClassWeightBase = &base
 		return ResolvedPlan{
 			Version:       c.Version,
 			Plan:          cloneRunPlan(plan),
-			Intent:        cloneMathIntent(c.Intents[plan.Intent]),
+			Intent:        intent,
 			EngineOptions: c.EngineOptions,
 		}, nil
 	}
@@ -333,6 +349,10 @@ func validateRunPlan(path string, plan RunPlan, intents map[string]MathIntent) e
 // on collected empirical support. Expected RTP is derived here from Class
 // weights and exact Exp values rather than compared with a duplicate input.
 func validateMathIntent(path string, intent MathIntent) error {
+	base := intent.Overall.EffectiveClassWeightBase()
+	if base < MinClassWeightBase || base > MaxClassWeightBase {
+		return invalid(path+".overall.class_weight_base", "must be between %d and %d, got %d", MinClassWeightBase, MaxClassWeightBase, base)
+	}
 	if err := validateNumericRange(path+".overall.cv", intent.Overall.CV, true); err != nil {
 		return err
 	}
@@ -356,13 +376,14 @@ func validateMathIntent(path string, intent MathIntent) error {
 			return invalid(classPath+".collect.samples", "makes total requested samples overflow uint64")
 		}
 		totalSamples += class.Collect.Samples
-		totalWeight += class.Weight
-		if totalWeight > ClassWeightBase {
-			return invalid(classPath+".weight", "makes cumulative class weight exceed %d", ClassWeightBase)
+		// Subtract before adding so even malformed large weights cannot overflow.
+		if class.Weight > base-totalWeight {
+			return invalid(classPath+".weight", "makes cumulative class weight exceed class_weight_base %d", base)
 		}
+		totalWeight += class.Weight
 	}
-	if totalWeight != ClassWeightBase {
-		return invalid(path+".classes", "weights must sum to %d, got %d", ClassWeightBase, totalWeight)
+	if totalWeight != base {
+		return invalid(path+".classes", "weights must sum to %d (overall.class_weight_base), got %d", base, totalWeight)
 	}
 	expectedRTP := intent.ExpectedRTP()
 	if !finite(expectedRTP) || expectedRTP <= 0 {
@@ -378,7 +399,7 @@ func validateMathIntent(path string, intent MathIntent) error {
 func (intent MathIntent) ExpectedRTP() float64 {
 	var total compensatedSum
 	for _, class := range intent.Classes {
-		total.Add(float64(class.Weight) * class.Design.Exp / float64(ClassWeightBase))
+		total.Add(float64(class.Weight) * class.Design.Exp / float64(intent.Overall.EffectiveClassWeightBase()))
 	}
 	return total.Value()
 }
@@ -450,9 +471,6 @@ func validateClassIntent(path string, class ClassIntent) error {
 	}
 	if class.Weight <= 0 {
 		return invalid(path+".weight", "must be a positive integer")
-	}
-	if class.Weight > ClassWeightBase {
-		return invalid(path+".weight", "must not exceed the fixed ClassWeightBase %d", ClassWeightBase)
 	}
 	if class.Collect.Samples == 0 {
 		return invalid(path+".collect.samples", "must be greater than zero")
@@ -710,6 +728,10 @@ func cloneRunPlan(plan RunPlan) RunPlan {
 // so a ResolvedPlan cannot alias Config or another resolved tuning session.
 func cloneMathIntent(intent MathIntent) MathIntent {
 	cloned := intent
+	if intent.Overall.ClassWeightBase != nil {
+		base := *intent.Overall.ClassWeightBase
+		cloned.Overall.ClassWeightBase = &base
+	}
 	cloned.Classes = make([]ClassIntent, len(intent.Classes))
 	for i, class := range intent.Classes {
 		cloned.Classes[i] = cloneClassIntent(class)

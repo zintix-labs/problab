@@ -89,7 +89,7 @@ func TestSolveStageBridgesOrderedSemanticSubstagesAndKeepsParentDuration(t *test
 
 func TestRunReportUsesMainGroupVisibilityEngineVersion(t *testing.T) {
 	report := newRunReport(ResolvedPlan{}, RunOverrides{})
-	if report.Engine.Version != "intent-lp-v2.6.0" {
+	if report.Engine.Version != "intent-lp-v2.7.0" {
 		t.Fatalf("engine version=%q", report.Engine.Version)
 	}
 	if !reflect.DeepEqual(report.Engine.SemanticAxioms, []string{MainSemanticAxiomVersion}) {

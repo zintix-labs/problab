@@ -171,6 +171,8 @@ make opt
 Optimizer 会验证配置、求解并验证目标分布，再把结果写入 plan 指定的
 `output.directory`。进阶选项与相容性细节请参考配置注释及 release notes。
 
+`overall.class_weight_base` 支持 10 万至 10 亿的 Class 权重分母；省略时保持原有的 100 万。
+
 ---
 
 ## 快速开始
