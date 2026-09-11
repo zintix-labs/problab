@@ -18,6 +18,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,6 +305,63 @@ func TestCLIProgressReporterNumbersTopLevelStageAndKeepsHeader(t *testing.T) {
 	for _, test := range stages {
 		if got, ok := cliPipelineStep(test.stage); !ok || got != test.want {
 			t.Fatalf("cliPipelineStep(%q)=(%d, %t), want (%d, true)", test.stage, got, ok, test.want)
+		}
+	}
+}
+
+func TestCLIProgressReporterCanonicalBucketProgress(t *testing.T) {
+	for _, interactive := range []bool{true, false} {
+		for _, state := range []string{"completed", "failed"} {
+			name := state + "/redirected"
+			if interactive {
+				name = state + "/interactive"
+			}
+			t.Run(name, func(t *testing.T) {
+				var output bytes.Buffer
+				reporter := newCLIProgressReporter(&output)
+				reporter.interactive = interactive
+				reporter.substepIndex = 4
+				event := optimizerv2.StageEvent{
+					Stage: "solve[mode=0]", Substage: optimizerv2.StageSelectCanonicalBucketProbabilities,
+					BetMode: 0, State: "started",
+				}
+				reporter.Report(event)
+				body := "  step 5 Selecting canonical bucket probabilities (mode 0) ... "
+				want := ""
+				if interactive {
+					want = body
+				}
+				for _, count := range []int{1, 37, 80} {
+					event.State, event.Probe, event.Total = "progress", count, 80
+					reporter.Report(event)
+					if interactive {
+						want += fmt.Sprintf("\r\x1b[2K%s%d/80", body, count)
+					}
+					if got := output.String(); got != want {
+						t.Fatalf("progress output=%q want=%q", got, want)
+					}
+				}
+				event.State = state
+				event.Duration = 263300 * time.Millisecond
+				if state == "failed" {
+					event.Message = "solver stopped"
+				}
+				reporter.Report(event)
+				if interactive {
+					want += "\r\x1b[2K"
+				}
+				if state == "completed" {
+					want += body + "success (4m23.3s)\n"
+				} else {
+					want += body + "failed: solver stopped\n"
+				}
+				if got := output.String(); got != want {
+					t.Fatalf("terminal output=%q want=%q", got, want)
+				}
+				if reporter.pendingInline || reporter.pendingBody != "" {
+					t.Fatal("terminal event left pending progress")
+				}
+			})
 		}
 	}
 }

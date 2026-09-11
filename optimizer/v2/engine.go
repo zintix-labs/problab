@@ -545,7 +545,7 @@ func (e *IntentEngine) selectCanonicalBucketProbabilities(
 			return LinearProblem{}, SolveResult{}, report, internalEngineFailure(err.Error(), result.Evidence), nil
 		}
 		current = result
-		stage.tick(report.Solves, solveStatusName(result.Status))
+		stage.tick(report.Solves, len(compiled.Primary), solveStatusName(result.Status))
 	}
 	stage.finish("completed", report.Solves, nil, nil, nil, solveStatusName(current.Status), "")
 	return problem, current, report, EngineSolution{}, nil
@@ -628,13 +628,13 @@ func (s *optimizationStageLifecycle) progress(probe int, lower, upper float64, f
 	})
 }
 
-func (s *optimizationStageLifecycle) tick(probe int, status string) {
+func (s *optimizationStageLifecycle) tick(probe, total int, status string) {
 	if s == nil || s.observer == nil || s.terminal {
 		return
 	}
 	s.observer(OptimizationStageEvent{
 		Stage: s.stage, State: "progress", Objective: s.objective, Metric: s.metric,
-		Probe: probe, Status: status, Duration: time.Since(s.started),
+		Probe: probe, Total: total, Status: status, Duration: time.Since(s.started),
 	})
 }
 

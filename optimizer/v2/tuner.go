@@ -51,6 +51,7 @@ type StageEvent struct {
 	Objective              string
 	Metric                 string
 	Probe                  int
+	Total                  int
 	Lower                  *float64
 	Upper                  *float64
 	FixedValue             *float64
@@ -515,7 +516,7 @@ func (t *Tuner) solveStage(ctx context.Context, compiled CompiledModel, betMode 
 			t.reporter.Report(StageEvent{
 				Stage: stage, Substage: event.Stage, BetMode: betMode,
 				State: event.State, Message: event.Message,
-				Objective: event.Objective, Metric: event.Metric, Probe: event.Probe,
+				Objective: event.Objective, Metric: event.Metric, Probe: event.Probe, Total: event.Total,
 				Lower: cloneFloatPointer(event.Lower), Upper: cloneFloatPointer(event.Upper),
 				FixedValue: cloneFloatPointer(event.FixedValue), Status: event.Status,
 				Duration: event.Duration,

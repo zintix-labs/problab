@@ -44,6 +44,18 @@ func TestSolveStageBridgesOrderedSemanticSubstagesAndKeepsParentDuration(t *test
 		t.Fatalf("solution=%+v", solution)
 	}
 	solver.assertConsumed()
+	canonicalProgress := 0
+	for _, event := range recorder.events {
+		if event.Substage == StageSelectCanonicalBucketProbabilities && event.State == "progress" {
+			canonicalProgress++
+			if event.Probe != 1 || event.Total != 1 {
+				t.Fatalf("canonical progress lost completed/total counts: %+v", event)
+			}
+		}
+	}
+	if canonicalProgress != 1 {
+		t.Fatalf("canonical progress events=%d want=1", canonicalProgress)
+	}
 	if len(report.Stages) != 1 || report.Stages[0].Stage != "solve[mode=3]" {
 		t.Fatalf("parent stages=%+v", report.Stages)
 	}

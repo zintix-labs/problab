@@ -825,6 +825,7 @@ type OptimizationStageEvent struct {
 	Objective  string
 	Metric     string
 	Probe      int
+	Total      int // Total work items for counted progress; zero when unspecified.
 	Lower      *float64
 	Upper      *float64
 	FixedValue *float64

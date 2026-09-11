@@ -237,11 +237,9 @@ func (r *cliProgressReporter) clearReplayProgress() {
 }
 
 // reportOptimizationSubstage renders the semantic optimizer sub-steps of the
-// solve stage as indented "  step N <label> ..." lines. Probe events are
-// deliberately silent on every destination: carriage-return redraws are
-// expanded into many physical lines by some otherwise-interactive terminals and
-// log capture layers. On an interactive terminal the "..." is replaced in place
-// by "success (<dur>)"; a redirected stderr prints that final line directly.
+// solve stage as indented "  step N <label> ..." lines. Interactive terminals
+// redraw canonical bucket progress in place; other probes remain silent.
+// Redirected output prints only terminal results without carriage returns.
 func (r *cliProgressReporter) reportOptimizationSubstage(event optimizerv2.StageEvent) {
 	label := cliOptimizationStageLabel(event.Substage)
 	mode := cliModeSuffix(event.BetMode)
@@ -255,6 +253,11 @@ func (r *cliProgressReporter) reportOptimizationSubstage(event optimizerv2.Stage
 			r.pendingInline = true
 		}
 	case "progress":
+		if r.interactive && event.Substage == optimizerv2.StageSelectCanonicalBucketProbabilities && event.Total > 0 {
+			body := r.stageBody(fmt.Sprintf("step %d %s%s", r.substepIndex, label, mode))
+			_, _ = fmt.Fprintf(r.output, "\r\x1b[2K  %s ... %d/%d", body, event.Probe, event.Total)
+			r.pendingInline = true
+		}
 		return
 	case "completed", "skipped":
 		outcome := "success"
