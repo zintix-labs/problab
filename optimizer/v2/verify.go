@@ -185,6 +185,14 @@ func replayArtifactDistribution(compiled CompiledModel, mode MaterializedMode) (
 		return artifactReplay{}, fmt.Sprintf("alias outcome count=%d sample count=%d", len(effective), len(mode.Samples))
 	}
 
+	return replayPointDistribution(compiled, mode.Samples, effective)
+}
+
+// replayPointDistribution is shared by native alias marginals and RGS point probabilities.
+func replayPointDistribution(compiled CompiledModel, samples []MaterializedSample, effective []float64) (artifactReplay, string) {
+	if len(samples) != len(effective) {
+		return artifactReplay{}, "sample/probability length mismatch"
+	}
 	replay := artifactReplay{
 		effective:         effective,
 		classTotals:       make([]float64, len(compiled.Prepared.Classes)),
@@ -198,7 +206,7 @@ func replayArtifactDistribution(compiled CompiledModel, mode MaterializedMode) (
 		classByID[class.ID] = classIndex
 		replay.bucketConditional[classIndex] = make([]float64, len(class.Buckets))
 	}
-	for sampleIndex, sample := range mode.Samples {
+	for sampleIndex, sample := range samples {
 		classIndex, exists := classByID[sample.ClassID]
 		if !exists {
 			return artifactReplay{}, fmt.Sprintf("sample[%d] has unknown class id %q", sampleIndex, sample.ClassID)
@@ -407,7 +415,6 @@ func cloneMaterializedMode(mode MaterializedMode) MaterializedMode {
 // original named hard rows are replayed, and unconditional Class totals, mean,
 // second moment, and CV bounds are checked again from per-sample payouts.
 func VerifyMaterialized(compiled CompiledModel, solution EngineSolution, mode MaterializedMode) VerificationReport {
-	tolerance := verificationTolerance(compiled)
 	checks := make([]VerificationCheck, 0)
 
 	structureErr := validateMaterializedMode(mode)
@@ -426,8 +433,14 @@ func VerifyMaterialized(compiled CompiledModel, solution EngineSolution, mode Ma
 		"valid marginal probabilities reconstructed from alias thresholds and aliases",
 	))
 
-	expected, expansionErr := ExpandSolution(compiled, solution, mode.BetMode, mode.BetUnit)
-	alignmentPass, alignmentActual := verifyExpandedAlignment(expected, expansionErr, mode, replay.effective, tolerance)
+	return verifyPointSemantics(compiled, solution, mode.Samples, mode.BetMode, mode.BetUnit, replay, replayFailure, checks)
+}
+
+// verifyPointSemantics never inspects an AliasTable or a native seed bank.
+func verifyPointSemantics(compiled CompiledModel, solution EngineSolution, samples []MaterializedSample, betMode, betUnit int, replay artifactReplay, replayFailure string, checks []VerificationCheck) VerificationReport {
+	tolerance := verificationTolerance(compiled)
+	expected, expansionErr := ExpandSolution(compiled, solution, betMode, betUnit)
+	alignmentPass, alignmentActual := verifyExpandedAlignment(expected, expansionErr, samples, replay.effective, tolerance)
 	checks = append(checks, textVerificationCheck(
 		"artifact.model_sample_alignment",
 		alignmentPass,
@@ -517,18 +530,18 @@ func VerifyMaterialized(compiled CompiledModel, solution EngineSolution, mode Ma
 // verifyExpandedAlignment ensures the alias outcome positions still correspond
 // to the Class/Sequence ordering and replay atoms used to derive probabilities.
 // It compares reconstructed marginals, not alias-column threshold values.
-func verifyExpandedAlignment(expected []MaterializedSample, expansionErr error, mode MaterializedMode, effective []float64, tolerance float64) (bool, string) {
+func verifyExpandedAlignment(expected []MaterializedSample, expansionErr error, samples []MaterializedSample, effective []float64, tolerance float64) (bool, string) {
 	if expansionErr != nil {
 		return false, expansionErr.Error()
 	}
-	if len(expected) != len(mode.Samples) || len(effective) != len(mode.Samples) {
-		return false, fmt.Sprintf("expected=%d samples=%d marginals=%d", len(expected), len(mode.Samples), len(effective))
+	if len(expected) != len(samples) || len(effective) != len(samples) {
+		return false, fmt.Sprintf("expected=%d samples=%d marginals=%d", len(expected), len(samples), len(effective))
 	}
 	maxDifference := 0.0
 	maxIndex := -1
 	var absoluteDifferenceSum compensatedSum
 	for i := range expected {
-		actual := mode.Samples[i]
+		actual := samples[i]
 		if actual.ClassID != expected[i].ClassID || actual.BucketIndex != expected[i].BucketIndex || actual.Win != expected[i].Win || !equalBytes(actual.Snapshot, expected[i].Snapshot) {
 			return false, fmt.Sprintf("sample[%d] replay identity or semantic metadata mismatch", i)
 		}

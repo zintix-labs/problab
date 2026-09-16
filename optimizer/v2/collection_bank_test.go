@@ -336,7 +336,7 @@ func TestTunerSavesPartialCollectionBankBeforeCollectionInsufficient(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].Name() != filepath.Base(wantPath) || entries[1].Name() != strings.TrimSuffix(filepath.Base(wantPath), ".bin")+".parquet" {
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(wantPath) {
 		t.Fatalf("Collection Bank directory contains latest/manifest/temp sidecars: %v", entries)
 	}
 	assertDescriptorMatchesBank(t, *result.Report.Collection)

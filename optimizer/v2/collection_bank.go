@@ -526,7 +526,7 @@ func replayCollectionBanks(
 					return replayRecordContinue, &replaySourceIncompatibleError{record: recordIndex, cause: fmt.Errorf("restore Core snapshot: %w", restoreErr)}
 				}
 				spin := currentMachine.SpinInternal(betMode)
-				if spin == nil || spin.Bet <= 0 {
+				if spin == nil || spin.Bet <= 0 || spin.Bet != runtime.betUnit || spin.TotalWin < 0 {
 					report.Rejected++
 					reportReplayProgress(collector.Reporter, plan, betMode, sourceIndex, report, *collected)
 					return replayRecordContinue, &replaySourceIncompatibleError{record: recordIndex, cause: fmt.Errorf("invalid replay spin result")}
@@ -545,10 +545,8 @@ func replayCollectionBanks(
 				if nextSequence == math.MaxUint64 {
 					return replayRecordContinue, &replayCollectionOperationalError{cause: fmt.Errorf("replay collection Sequence overflow")}
 				}
-				collected.Classes[classIndex].Samples = append(collected.Classes[classIndex].Samples, CollectedSample{
-					ClassID: plan.Intent.Classes[classIndex].Name,
-					Win:     win, Snapshot: append([]byte(nil), snapshot...), Sequence: nextSequence,
-				})
+				collected.Classes[classIndex].Samples = append(collected.Classes[classIndex].Samples,
+					acceptedCollectionSample(plan.Intent.Classes[classIndex].Name, win, spin.TotalWin, snapshot, nextSequence))
 				nextSequence++
 				deficits[classIndex]--
 				report.Accepted++

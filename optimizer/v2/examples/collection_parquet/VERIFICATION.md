@@ -1,76 +1,125 @@
-# Export-only verification — 2026-09-11
+# Verification record — 2026-09-16
 
-Environment: Go 1.25.2, macOS arm64 / Apple M3; parquet-go v0.32.0;
-Python 3.14.7 with PyArrow 23.0.1. The commands below run from the repository root.
-Use a writable `GOCACHE` if the default cache is restricted.
+This record covers the seven-column content-only catalog and both fixed-ZSTD
+RGS routes. It replaces the earlier DatasetID/import-contract verification notes.
+
+## Reproduction
+
+Full acceptance (requires an existing Python environment; enables rather than
+silently skipping interoperability and memory checks):
 
 ```sh
-go test ./...
-go test -race ./optimizer/v2 ./cmd/opt
-golangci-lint run ./optimizer/v2/... ./cmd/opt/...
-git diff --check
-
-# This explicitly enables the independently implemented Python hash verifier.
-PROBLAB_PARQUET_PYTHON=/path/to/python go test ./optimizer/v2 \
-  -run 'TestDescriptorPythonInteroperability|TestDatasetIDGolden' -count=1 -v
-
-PROBLAB_PARQUET_MEMORY=1 go test ./optimizer/v2 \
-  -run TestCollectionDescriptorMemoryProfile -count=1 -v
-go test ./optimizer/v2 -run '^$' -bench BenchmarkCollectionDescriptor -benchtime=1x -count=1
+PROBLAB_PARQUET_PYTHON=/path/to/python sh optimizer/v2/examples/collection_parquet/verify.sh
 ```
 
-All passed. Python verification covers normal, partial, distinct and empty
-catalogs with the bank removed. It also re-encodes with PyArrow, no compression
-and one row per group, then verifies the unchanged Dataset ID. The literal Go
-golden was framed independently with Python `struct.pack`; it includes a GID of
-2^64-1. Signed zero, the smallest positive float64, repeated payouts and Unicode
-Class names retain their exact values.
+Individual checks:
 
-Create, data write, footer write, file sync, close, rename, directory sync and
-cancellation failures are injected. Tests check bank preservation, temporary
-cleanup, existing-catalog preservation before rename, and visible-but-unconfirmed
-durability after rename. Warning reports survive without a CLI reporter; failure
-events do not falsely announce completion. Prepare support failure and duplicate
-stops retain their catalogs and do not send a recovery collection to the LP.
+```sh
+gofmt -l dto optimizer/v2 cmd/opt
+go test ./... -count=1
+go test -race ./dto ./optimizer/v2/... ./cmd/opt
+go vet ./...
+golangci-lint run ./dto/... ./optimizer/v2/... ./cmd/opt/...
+PROBLAB_PARQUET_PYTHON=/path/to/python go test ./optimizer/v2 -run 'PythonInteroperability|LegacyCatalogReader' -count=1 -v
+PROBLAB_PARQUET_MEMORY=1 PROBLAB_RGS_MEMORY=1 go test ./optimizer/v2 -run 'MemoryProfile' -count=1 -v
+```
 
-Full demo runs with the real exporter, a no-op exporter and a failing exporter
-produce identical bank bytes and model/solution/artifact hashes. No collection
-hot-path, Prepare, LP, PRNG or artifact algorithm was changed. Input/exported
-ordering and the complete original collection are checked for mutation.
+Python verification uses PyArrow 25.0.1, pandas 3.0.5 and zstandard 0.25.0
+in an isolated temporary environment. Both Parquet families are read directly
+with pandas' PyArrow dtype backend, without manually decompressing Parquet.
+JSONL is decompressed incrementally and paired by record_index. Legacy files
+are identified as missing exact win/bet, not silently upgraded.
 
-## Synthetic resource audit
+## Regression baseline
 
-These are single-run smoke measurements, not production throughput promises.
-The fixture has one Class, repeated names and 100 repeating payout values, and
-therefore compresses well. Bank creation/source allocation is outside timing.
+Before production edits, a fixed seed 4127483647 demo run captured both native
+formats. `TestRGSNativePreChangeBaseline` asserts the model/solution/collection
+hashes and SHA256 of manifest, mode descriptor, gacha, seed, probability and
+alias files. The baseline test passes after implementation.
 
-| Rows | Export time | Parquet bytes | Cumulative allocated bytes |
-| ---: | ---: | ---: | ---: |
-| 100,000 | 20.69 ms | 138,678 | 23,198,432 |
-| 2,000,000 | 188.22 ms | 2,159,999 | 23,336,712 |
+`TestRGSNativeFilesMatchMixedOutput` additionally compares every native file
+byte-for-byte between A-only and A+B+C, independently of report hashes.
 
-Allocation totals are **not peak heap**. A separate instrumented test collects
-garbage and samples live heap at file writes; its execution time is not used for
-the throughput figures above.
+Collection SHA256:
+`f12afcc525d4d4b5c29970d3710e62f5674175a8b80e49bbb3ade8244d3b3ade`.
 
-| Rows | Source sample payload | Row batch bound | Row groups | Footer wire bytes | Decoded footer logical payload | Sampled extra live heap |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100,000 | 5,700,000 | 327,680 | 2 | 1,575 | 6,665 | 40,889,976 |
-| 2,000,000 | 114,000,000 | 327,680 | 31 | 12,889 | 81,024 | 21,988,600 |
+The engine report version intentionally changes to intent-lp-v2.8.0.
+Config schema version, stable ordering and native formats do not change.
+The main repository contains an English demo YAML only; no unrelated commercial
+repository or Chinese YAML was changed.
 
-The batch bound counts row structs (strings borrow existing immutable backing
-storage); codec/page buffers are additional and included in sampled overhead.
-Footer logical payload is measured separately from a decoded metadata structure,
-excluding allocator padding, spare capacity and shared-backing effects; it is not
-an exact attribution of writer heap. Sampling is not a continuous RSS maximum.
-Codec pools and warm/cold allocation explain why the smaller run can show more
-overhead. Tests verify every row group is at most 65,536 rows. Necessary footer
-metadata may grow with group count; all row data must not accumulate in memory.
+## Streaming measurements
 
-## Scope
+Local arm64 test fixture; measurements are not performance guarantees.
 
-Only collection catalog export is implemented. External probability import,
-RTP/alias validation for external results and publication remain separate work.
-Exporter warnings are advisory; shared-context cancellation can still stop the
-original pipeline. Bank and catalog are individually atomic, not a two-file
-transaction.
+| Output fixture | Rows | Measured output heap | File bytes |
+| --- | ---: | ---: | ---: |
+| Collection Parquet | 100,000 | 42,660,104 additional live bytes | 141,796 |
+| Collection Parquet | 2,000,000 | 23,737,920 additional live bytes | 2,226,095 |
+| RGS JSONL.zst | 100,000 | 21,158,272 total sampled live bytes | 145 |
+| RGS JSONL.zst | 1,000,000 | 21,164,352 total sampled live bytes | 1,195 |
+
+Parquet measurements subtract the source collection; RGS numbers are total live
+heap and are **not** comparable directly to that column. RGS repeats one valid
+demo snapshot and uses a tiny converter, intentionally isolating bounded writer
+memory. Its compression ratio is not representative of a commercial result bank.
+Elapsed RGS fixture time was approximately 0.47 s / 4.66 s respectively.
+Buffers, ZSTD windows and Parquet footer metadata account for bounded overhead.
+
+On this 64-bit build CollectedSample is 64 bytes, previously 56: preserving the
+raw TotalWin adds 8 bytes per sample (about 400 MB for 50 million samples),
+excluding slice backing storage and snapshots. No full DTO/JSON array is retained.
+
+### Full IdentityConverter pipeline (review follow-up)
+
+`TestRGSIdentityPipelineMemoryProfile` runs real collection through the default
+IdentityConverter, without injecting a synthetic row iterator or tiny converter.
+Every decompressed JSONL row is checked for start/after replay state. The demo
+source contains distinct collected snapshots; measurements remain demo-specific.
+
+| Collected records | Raw JSONL bytes | ZSTD bytes | Additional sampled live heap | Run + streamed readback |
+| ---: | ---: | ---: | ---: | ---: |
+| 10,000 | 9,784,677 | 739,535 | 20,766,976 | 0.23 s |
+| 100,000 | 98,069,199 | 7,392,937 | 20,780,480 | 2.10 s |
+
+Baseline is measured after two GC cycles at RGS start (retiring previous pool
+caches); sampled heap is measured periodically during compressed writes with GC.
+This excludes the live source baseline, not all runtime overhead, and is not peak
+RSS or a bound for arbitrarily large individual game results. The test asserts a
+128 MiB extra-live-heap guard for this fixture only.
+
+## Boundaries verified
+
+- Complete collection only: partial/distinct retain recovery banks and stop.
+- Collected-only skips LP; optimized-only skips native alias publication.
+- Mixed order is collected, LP, optimized, native, irrespective of YAML order.
+- Every family converts each record once and publishes atomically.
+- Converter errors, invalid JSON, cancellation, file/rename failures preserve
+  earlier committed output; post-rename sync failure reports visible paths.
+- Optimized probabilities are normalized once and independently checked against
+  the hard model; native verification still uses effective alias marginals.
+- IdentityConverter is byte-identical to json.Marshal(dto.SpinResult), including
+  Extend/checkpoint/start/after state. Custom payload semantics are not certified.
+- No external probability importer, standalone bank converter, CDF or new loader.
+
+The memory audits and Python tests are opt-in; an ordinary test run skipping them
+must not be described as rerunning those checks.
+
+## Review follow-up verification
+
+The full acceptance entry was executed successfully, including formatting,
+all-package tests, race, vet, lint, actual Python interoperability and all memory
+profiles. Both Go and Python now physically rewrite reversed Parquet rows and
+join results by record_index. B has a real multi-Class integration fixture plus
+empty/sparse, unknown and ambiguous Class adapter coverage.
+
+Permanent regressions also cover nil CLI writers, failed/staging-failed export
+directory cleanup, operational Restore/Snapshot error chains, definite replay
+mismatches, and B-only versus mixed-family publication failure states. The two
+temporary audit files were renamed into permanent tests without discarding their
+failure scenarios.
+
+Intentional report changes include distribution.source and false Verification.Pass
+when collection stops before verification. B-only diagnostic CSVs use
+distribution_points_mode_<mode>.csv; native diagnostic CSV names and bytes remain
+unchanged. No LP algorithm or native artifact format was changed by these fixes.

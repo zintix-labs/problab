@@ -31,20 +31,27 @@ import (
 // summarizing the model's uniform allocation within a Bucket. Collision
 // calculations retain the actual runtime marginals, including alias rounding.
 func BuildBucketDistributionReport(compiled CompiledModel, mode MaterializedMode) (BucketDistributionReport, error) {
+	report, err := buildPointDistributionReport(compiled, mode.BetMode, mode.Samples, mode.EffectiveProbabilities)
+	report.Source = DistributionSourceAliasMarginals
+	return report, err
+}
+
+func buildPointDistributionReport(compiled CompiledModel, betMode int, samples []MaterializedSample, probabilities []float64) (BucketDistributionReport, error) {
 	collisionProbability := compiled.Prepared.Plan.EngineOptions.DistributionCollisionProbability
 	if err := validateDistributionCollisionProbability(collisionProbability); err != nil {
 		return BucketDistributionReport{}, err
 	}
-	if len(mode.Samples) != len(mode.EffectiveProbabilities) {
+	if len(samples) != len(probabilities) {
 		return BucketDistributionReport{}, fmt.Errorf(
 			"sample/effective probability length mismatch: samples=%d probabilities=%d",
-			len(mode.Samples),
-			len(mode.EffectiveProbabilities),
+			len(samples),
+			len(probabilities),
 		)
 	}
 
 	report := BucketDistributionReport{
-		BetMode:              mode.BetMode,
+		Source:               DistributionSourcePointProbabilities,
+		BetMode:              betMode,
 		CollisionProbability: collisionProbability,
 		Classes:              make([]ClassDistributionReport, len(compiled.Prepared.Classes)),
 	}
@@ -86,7 +93,7 @@ func BuildBucketDistributionReport(compiled CompiledModel, mode MaterializedMode
 	for class := range seedSeen {
 		seedSeen[class] = make([]int, len(compiled.Prepared.Classes[class].Buckets))
 	}
-	for sampleIndex, sample := range mode.Samples {
+	for sampleIndex, sample := range samples {
 		class, exists := classIndex[sample.ClassID]
 		if !exists {
 			return BucketDistributionReport{}, fmt.Errorf("sample[%d] references unknown class %q", sampleIndex, sample.ClassID)
@@ -99,7 +106,7 @@ func BuildBucketDistributionReport(compiled CompiledModel, mode MaterializedMode
 				sample.BucketIndex,
 			)
 		}
-		probability := mode.EffectiveProbabilities[sampleIndex]
+		probability := probabilities[sampleIndex]
 		if !isFinite(probability) || probability < 0 {
 			return BucketDistributionReport{}, fmt.Errorf("sample[%d] effective probability must be finite and nonnegative", sampleIndex)
 		}

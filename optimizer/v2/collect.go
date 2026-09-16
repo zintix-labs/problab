@@ -32,10 +32,18 @@ const optimizerWorkerStreamDomain = "optimizer/v2/worker"
 // ordered Class classifier. Win is normalized exactly once as TotalWin / Bet;
 // Snapshot is the Core state captured immediately before the raw game spin.
 type CollectedSample struct {
+	// TotalWin preserves the original integer payout; Win remains the LP multiplier.
+	TotalWin int64
 	ClassID  string
 	Win      float64
 	Snapshot []byte
 	Sequence uint64
+}
+
+// acceptedCollectionSample copies the raw integer before any representation
+// conversion. Both fresh and replay acceptance use this same boundary.
+func acceptedCollectionSample(classID string, win float64, totalWin int, snapshot []byte, sequence uint64) CollectedSample {
+	return CollectedSample{ClassID: classID, Win: win, TotalWin: int64(totalWin), Snapshot: append([]byte(nil), snapshot...), Sequence: sequence}
 }
 
 // CollectedClass retains the source ClassIntent next to its accepted replay
@@ -552,7 +560,7 @@ func collectWorker(
 			return result
 		}
 		spin := machine.SpinInternal(betMode)
-		if spin == nil || spin.Bet <= 0 {
+		if spin == nil || spin.Bet <= 0 || spin.Bet != machine.BetUnits[betMode] || spin.TotalWin < 0 {
 			result.err = fmt.Errorf("raw machine for worker %d returned an invalid spin result at local sequence %d", worker, result.spins)
 			return result
 		}
@@ -566,10 +574,7 @@ func collectWorker(
 			class := classes[classIndex]
 			result.samples = append(result.samples, acceptedWorkerSample{
 				classIndex: classIndex,
-				sample: CollectedSample{
-					ClassID: class.Name, Win: win,
-					Snapshot: append([]byte(nil), snapshot...),
-				},
+				sample:     acceptedCollectionSample(class.Name, win, spin.TotalWin, snapshot, 0),
 			})
 			result.classAccepted[classIndex]++
 			remainingByClass[classIndex]--

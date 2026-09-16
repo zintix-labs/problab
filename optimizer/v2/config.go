@@ -324,13 +324,15 @@ func validateRunPlan(path string, plan RunPlan, intents map[string]MathIntent) e
 	seenOutputFormats := make(map[OutputFormat]struct{}, len(plan.Output.Format))
 	for i, format := range plan.Output.Format {
 		switch format {
-		case OutputOptimalArtifactV1, OutputOptimalGacha:
+		case OutputOptimalArtifactV1, OutputOptimalGacha, OutputRGSOptimized, OutputRGSCollected:
 		default:
 			return invalid(
 				fmt.Sprintf("%s.output.format[%d]", path, i),
-				"must be %q or %q, got %q",
+				"must be %q, %q, %q or %q, got %q",
 				OutputOptimalArtifactV1,
 				OutputOptimalGacha,
+				OutputRGSOptimized,
+				OutputRGSCollected,
 				format,
 			)
 		}

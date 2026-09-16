@@ -159,11 +159,17 @@ plans:
       # Must be exactly 1 while evaluator is `none`.
       max_candidates: 1
 
-    # Both formats are materialized from the same verified AliasTableF64 and
-    # seed bank. Adding a format does not rerun or change the LP.
+    # Native formats share the verified AliasTableF64 and seed bank.
+    # RGS formats use point probabilities (optimized) or no LP (collected).
     output:
       # optimal_gacha: legacy gacha_<mode>.json.zst + seed_bank_<mode>.bin.
       # optimal_artifact_v1: manifest + prob/aliases/seed-bank binary bundle.
+      # rgs-collected: complete collection catalog + results.jsonl.zst; skips LP.
+      # rgs-optimized: LP point distribution.parquet + results.jsonl.zst.
+      # Both RGS formats always use ZSTD (internal compression for Parquet).
+      # Mixed output runs collected first, then LP, optimized, and native.
+      # Default DTO JSON includes PRNG state; inject WithResultConverter to
+      # remove sensitive data and encode your platform's result schema.
       # The list must be non-empty, contain no duplicates, and use known formats.
       format:
         - optimal_gacha

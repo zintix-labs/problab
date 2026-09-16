@@ -170,8 +170,9 @@ make opt
 # 等同于：go run ./cmd/opt
 ```
 
-Optimizer 会验证配置、求解并验证目标分布，再把结果写入 plan 指定的
-`output.directory`。进阶选项请参考配置注释。
+Optimizer 会验证配置并收集结果；选择 `rgs-collected` 时直接导出收集库，
+其他模式则求解并验证目标分布后导出。结果写入 `output.directory`，
+输出选项请参考配置注释。
 
 ---
 

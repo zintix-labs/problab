@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,19 +28,19 @@ import (
 )
 
 func descriptorFixture() CollectedProblem {
-	c := CollectedProblem{Game: spec.GID(^uint(0)), BetUnit: 100, SnapshotLength: 1}
+	c := CollectedProblem{Game: spec.GID(^uint(0)), BetUnit: 1000, SnapshotLength: 1}
 	for i, name := range []string{"first 測試", "empty", "last"} {
 		c.Classes = append(c.Classes, CollectedClass{Intent: ClassIntent{Name: name,
 			Collect: CollectIntent{Samples: 10, WinRange: ClosedInterval{0, 100}, Tags: TagFilters{Matches: []string{"tag"}}}}})
 		var wins []float64
 		if i == 0 {
-			wins = []float64{99, math.Copysign(0, -1), .125, math.SmallestNonzeroFloat64}
+			wins = []float64{99, math.Copysign(0, -1), .125, 0.001}
 		}
 		if i == 2 {
 			wins = []float64{5, 5}
 		}
 		for j, win := range wins {
-			c.Classes[i].Samples = append(c.Classes[i].Samples, CollectedSample{ClassID: name, Win: win, Snapshot: []byte{byte(i*10 + j + 1)}, Sequence: uint64(j*7 + 2)})
+			c.Classes[i].Samples = append(c.Classes[i].Samples, CollectedSample{ClassID: name, Win: win, TotalWin: int64(win * float64(c.BetUnit)), Snapshot: []byte{byte(i*10 + j + 1)}, Sequence: uint64(j*7 + 2)})
 		}
 	}
 	c.Evidence = CollectionEvidence{
@@ -69,7 +68,7 @@ func saveDescriptorFixture(t *testing.T, c CollectedProblem, partial, distinct b
 	return bank
 }
 
-func readDescriptor(t *testing.T, path string) ([]collectionDescriptorRow, collectionDescriptorMetadata) {
+func readDescriptor(t *testing.T, path string) ([]collectionDescriptorRow, *parquet.File) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -80,58 +79,52 @@ func readDescriptor(t *testing.T, path string) ([]collectionDescriptorRow, colle
 		t.Fatal(err)
 	}
 	fields := file.Schema().Fields()
-	want := []string{"record_index", "class_id", "class_name", "win_multiplier"}
+	want := []string{"record_index", "class_id", "class_name", "probability", "win_multiplier", "win", "bet"}
 	if len(fields) != len(want) {
 		t.Fatal(file.Schema())
 	}
-	for i, field := range fields {
-		if field.Name() != want[i] || !field.Required() {
+	for i, f := range fields {
+		if f.Name() != want[i] || f.Optional() != (i == 3) {
 			t.Fatal(file.Schema())
 		}
 	}
-	if fields[0].Type().Kind() != parquet.Int64 || fields[1].Type().Kind() != parquet.Int32 || fields[2].Type().LogicalType().String() != "STRING" || fields[3].Type().Kind() != parquet.Double {
+	for _, i := range []int{0, 5, 6} {
+		if fields[i].Type().Kind() != parquet.Int64 {
+			t.Fatal(file.Schema())
+		}
+	}
+	if fields[1].Type().Kind() != parquet.Int32 || fields[2].Type().LogicalType().String() != "STRING" || fields[3].Type().Kind() != parquet.Double || fields[4].Type().Kind() != parquet.Double {
 		t.Fatal(file.Schema())
 	}
-	value, ok := file.Lookup(collectionDescriptorKey)
-	if !ok {
-		t.Fatal("missing application metadata")
-	}
-	var metadata collectionDescriptorMetadata
-	if err := json.Unmarshal([]byte(value), &metadata); err != nil {
-		t.Fatal(err)
+	if len(file.Metadata().KeyValueMetadata) != 0 {
+		t.Fatal("unexpected application metadata")
 	}
 	rows, err := parquet.Read[collectionDescriptorRow](bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return rows, metadata
+	return rows, file
 }
 
 func assertDescriptorMatchesBank(t *testing.T, report CollectionRunReport) {
 	t.Helper()
+	if report.Bank.Partial || report.Bank.Distinct {
+		if report.Descriptor != nil {
+			t.Fatal("incomplete collection exported")
+		}
+		return
+	}
 	d := report.Descriptor
 	if d == nil || d.State != "COMPLETED" || d.Error != "" {
 		t.Fatalf("descriptor=%+v", d)
 	}
-	rows, meta := readDescriptor(t, d.Path)
-	if uint64(len(rows)) != report.Bank.SeedCount || d.Records != report.Bank.SeedCount || meta.BankSHA256 != report.Bank.SHA256 || meta.Distinct != report.Bank.Distinct || meta.Partial != report.Bank.Partial || meta.DatasetID != d.DatasetID {
-		t.Fatalf("descriptor/bank mismatch: %+v %+v", meta, report.Bank)
+	rows, _ := readDescriptor(t, d.Path)
+	if uint64(len(rows)) != report.Bank.SeedCount || d.Records != report.Bank.SeedCount {
+		t.Fatal("descriptor/bank count mismatch")
 	}
-	if len(meta.Classes) != len(report.Evidence.Classes) {
-		t.Fatal("Class metadata missing")
-	}
-	for i, class := range meta.Classes {
-		if class.Requested != report.Evidence.Classes[i].Requested {
-			t.Fatalf("Class %d original quota changed: %+v", i, class)
-		}
-		var retained uint64
-		for _, row := range rows {
-			if row.ClassID == int32(i) {
-				retained++
-			}
-		}
-		if class.Retained != retained {
-			t.Fatalf("Class %d retained=%d rows=%d", i, class.Retained, retained)
+	for i, r := range rows {
+		if r.RecordIndex != int64(i) || r.Probability != nil || r.Win < 0 || r.Bet <= 0 {
+			t.Fatalf("invalid row %+v", r)
 		}
 	}
 }
@@ -147,10 +140,7 @@ func TestCollectionDescriptorSchemaOrderFloatBitsAndImmutability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, m := readDescriptor(t, d.Path)
-	if m.Game != fmt.Sprint(uint64(c.Game)) || len(m.Classes) != 3 || m.Classes[1].Retained != 0 || m.Classes[0].Tags.Mismatches == nil {
-		t.Fatalf("metadata=%+v", m)
-	}
+	rows, _ := readDescriptor(t, d.Path)
 	index := 0
 	_ = visitCanonicalCollectionSamples(c, func(ci, _ int, s CollectedSample) error {
 		row := rows[index]
@@ -180,82 +170,9 @@ func TestCollectionDescriptorZeroRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, m := readDescriptor(t, d.Path)
-	if len(rows) != 0 || len(m.Classes) != 3 || m.RecordCount != 0 {
-		t.Fatalf("metadata=%+v rows=%v", m, rows)
-	}
-}
-
-func TestDatasetIDGolden(t *testing.T) {
-	if strconv.IntSize != 64 {
-		t.Skip("golden exercises uint64 GID on a 64-bit platform")
-	}
-	c := descriptorFixture()
-	bank := saveDescriptorFixture(t, c, true, false)
-	d, err := (collectionDescriptorWriter{}).Write(context.Background(), c, bank)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Independently framed with Python struct.pack from the explicit fixture:
-	// bank bytes 01 02 03 04 15 16, GID=2^64-1, flags=(true,false).
-	const want = "sha256:e7cb652f76918ffd01c5667f2ea2d307a88539387a3305f37a02ee2f38c4ee2a"
-	if d.DatasetID != want {
-		t.Fatalf("Dataset ID=%s want=%s", d.DatasetID, want)
-	}
-}
-
-func TestDatasetIDScope(t *testing.T) {
-	base := descriptorFixture()
-	bank := saveDescriptorFixture(t, base, true, false)
-	write := func(c CollectedProblem, b CollectionBankReport) string {
-		t.Helper()
-		d, err := (collectionDescriptorWriter{}).Write(context.Background(), c, b)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return d.DatasetID
-	}
-	id := write(base, bank)
-	for _, test := range []struct {
-		name   string
-		change func(*CollectedProblem, *CollectionBankReport)
-		same   bool
-	}{
-		{"path", func(_ *CollectedProblem, b *CollectionBankReport) {
-			b.Path = filepath.Join(filepath.Dir(b.Path), "other.bin")
-		}, true},
-		{"timestamp", func(_ *CollectedProblem, b *CollectionBankReport) {
-			b.Path = filepath.Join(filepath.Dir(b.Path), "seed_bank_999999999_s4.bin")
-		}, true},
-		{"LP", func(c *CollectedProblem, _ *CollectionBankReport) {
-			c.Classes[0].Intent.Weight++
-			c.Classes[0].Intent.Design.Exp++
-		}, true},
-		{"sequence", func(c *CollectedProblem, _ *CollectionBankReport) {
-			for i := range c.Classes[0].Samples {
-				c.Classes[0].Samples[i].Sequence += 100
-			}
-		}, true},
-		{"win", func(c *CollectedProblem, _ *CollectionBankReport) { c.Classes[0].Samples[0].Win = 98 }, false},
-		{"predicate", func(c *CollectedProblem, _ *CollectionBankReport) {
-			c.Classes[0].Intent.Collect.Tags.Matches = []string{"another"}
-		}, false},
-		{"quota", func(c *CollectedProblem, _ *CollectionBankReport) { c.Classes[0].Intent.Collect.Samples++ }, false},
-		{"flags", func(_ *CollectedProblem, b *CollectionBankReport) { b.Distinct = true }, false},
-		{"digest", func(_ *CollectedProblem, b *CollectionBankReport) { b.SHA256 = strings.Repeat("0", 64) }, false},
-		{"game", func(c *CollectedProblem, _ *CollectionBankReport) { c.Game-- }, false},
-		{"Class-order", func(c *CollectedProblem, _ *CollectionBankReport) {
-			c.Classes[0], c.Classes[2] = c.Classes[2], c.Classes[0]
-		}, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			c := descriptorFixture()
-			b := bank
-			test.change(&c, &b)
-			if (write(c, b) == id) != test.same {
-				t.Fatal("unexpected Dataset ID equality")
-			}
-		})
+	rows, _ := readDescriptor(t, d.Path)
+	if len(rows) != 0 {
+		t.Fatal(rows)
 	}
 }
 
@@ -296,7 +213,7 @@ func TestDescriptorCancellation(t *testing.T) {
 			c := descriptorFixture()
 			c.Classes[0].Samples = make([]CollectedSample, 3*collectionDescriptorBatch)
 			for i := range c.Classes[0].Samples {
-				c.Classes[0].Samples[i] = CollectedSample{ClassID: c.Classes[0].Intent.Name, Win: float64(i % 100), Snapshot: []byte{byte(i)}, Sequence: uint64(i)}
+				c.Classes[0].Samples[i] = CollectedSample{ClassID: c.Classes[0].Intent.Name, Win: float64(i % 100), TotalWin: int64(i%100) * int64(c.BetUnit), Snapshot: []byte{byte(i)}, Sequence: uint64(i)}
 			}
 			bank := saveDescriptorFixture(t, c, true, false)
 			bankBytes, err := os.ReadFile(bank.Path)
@@ -316,7 +233,7 @@ func TestDescriptorCancellation(t *testing.T) {
 				return file, err
 			}}
 			d, err := writer.Write(ctx, c, bank)
-			if !errors.Is(err, context.Canceled) || d.State != "WARNING" || d.DatasetID != "" || !strings.Contains(err.Error(), "stream descriptor") {
+			if !errors.Is(err, context.Canceled) || d.State != "WARNING" || !strings.Contains(err.Error(), "stream descriptor") {
 				t.Fatalf("not an interrupted row stream: %+v %v", d, err)
 			}
 			if ctx.checks != test.checkpoint || ctx.checks <= collectionDescriptorBatch {
@@ -347,91 +264,24 @@ func TestDescriptorCancellation(t *testing.T) {
 	}
 }
 
-func TestCollectionDescriptorPartialAndDistinct(t *testing.T) {
-	for _, distinct := range []bool{false, true} {
-		t.Run(fmt.Sprint(distinct), func(t *testing.T) {
-			c := descriptorFixture()
-			if distinct {
-				c.Classes[0].Samples = c.Classes[0].Samples[:2]
-			} // Recovery retains original evidence and quotas.
-			bank := saveDescriptorFixture(t, c, true, distinct)
-			d, err := (collectionDescriptorWriter{}).Write(context.Background(), c, bank)
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, m := readDescriptor(t, d.Path)
-			for i, class := range c.Classes {
-				if m.Classes[i].Requested != class.Intent.Collect.Samples || m.Classes[i].Retained != uint64(len(class.Samples)) {
-					t.Fatalf("Class %d quota/retained changed: %+v", i, m.Classes[i])
-				}
-			}
-			if !m.Partial || m.Distinct != distinct {
-				t.Fatalf("flags=%+v", m)
-			}
-		})
-	}
-}
-
-func TestDatasetIDEncodingIndependent(t *testing.T) {
+func TestDescriptorEncodingIndependent(t *testing.T) {
 	c := descriptorFixture()
-	bank := saveDescriptorFixture(t, c, true, false)
+	bank := saveDescriptorFixture(t, c, false, false)
 	d, err := (collectionDescriptorWriter{}).Write(context.Background(), c, bank)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, m := readDescriptor(t, d.Path)
-	raw, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rows, _ := readDescriptor(t, d.Path)
 	path := filepath.Join(filepath.Dir(d.Path), "uncompressed.parquet")
-	if err := parquet.WriteFile(path, rows, parquet.Compression(&uncompressed.Codec{}), parquet.MaxRowsPerRowGroup(1), parquet.KeyValueMetadata(collectionDescriptorKey, string(raw))); err != nil {
+	if err := parquet.WriteFile(path, rows, parquet.Compression(&uncompressed.Codec{}), parquet.MaxRowsPerRowGroup(1)); err != nil {
 		t.Fatal(err)
 	}
-	// Filesystem time is not dataset provenance, either.
 	if err := os.Chtimes(path, time.Unix(1, 0), time.Unix(1, 0)); err != nil {
 		t.Fatal(err)
 	}
-	reencoded, metadata := readDescriptor(t, path)
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = file.Close() }()
-	info, err := file.Stat()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pf, err := parquet.OpenFile(file, info.Size())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pf.RowGroups()) != len(rows) {
-		t.Fatal("row group variation not exercised")
-	}
-	if pf.Metadata().RowGroups[0].Columns[0].MetaData.Codec != (&uncompressed.Codec{}).CompressionCodec() {
-		t.Fatal("compression variation not exercised")
-	}
-	originalBytes, err := os.ReadFile(d.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	newBytes, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(originalBytes, newBytes) {
-		t.Fatal("encoding did not change")
-	}
-	_, h, err := descriptorMetadata(context.Background(), c, bank)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, row := range reencoded {
-		hashDescriptorRow(h, row)
-	}
-	if got := "sha256:" + fmt.Sprintf("%x", h.Sum(nil)); got != d.DatasetID || metadata.DatasetID != got {
-		t.Fatalf("re-encoded ID=%s want=%s", got, d.DatasetID)
+	got, pf := readDescriptor(t, path)
+	if !reflect.DeepEqual(rows, got) || len(pf.RowGroups()) != len(rows) {
+		t.Fatal("encoding changed data")
 	}
 }
 
@@ -570,10 +420,7 @@ func TestDescriptorValidation(t *testing.T) {
 		{"nan", func(c *CollectedProblem, _ *CollectionBankReport) { c.Classes[0].Samples[0].Win = math.NaN() }},
 		{"inf", func(c *CollectedProblem, _ *CollectionBankReport) { c.Classes[0].Samples[0].Win = math.Inf(1) }},
 		{"negative", func(c *CollectedProblem, _ *CollectionBankReport) { c.Classes[0].Samples[0].Win = -1 }},
-		{"utf8", func(c *CollectedProblem, _ *CollectionBankReport) { c.Classes[1].Intent.Name = "\xff" }},
-		{"tag", func(c *CollectedProblem, _ *CollectionBankReport) {
-			c.Classes[1].Intent.Collect.Tags.Matches = []string{"\xff"}
-		}},
+		{"utf8", func(c *CollectedProblem, _ *CollectionBankReport) { c.Classes[0].Intent.Name = "\xff" }},
 		{"count", func(_ *CollectedProblem, b *CollectionBankReport) { b.SeedCount++ }},
 		{"overflow", func(_ *CollectedProblem, b *CollectionBankReport) { b.SeedCount = math.MaxUint64 }},
 		{"bytes", func(_ *CollectedProblem, b *CollectionBankReport) { b.Bytes++ }},
@@ -617,8 +464,8 @@ func TestDescriptorPythonInteroperability(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Python: %v\n%s", err, out)
 			}
-			if !bytes.Contains(out, []byte(d.DatasetID)) {
-				t.Fatalf("missing independently verified ID: %s", out)
+			if !bytes.Contains(out, []byte("records")) {
+				t.Fatalf("reader output: %s", out)
 			}
 			// Re-encode with another writer, no compression and one row/group.
 			// Dataset identity binds logical content, not a Parquet encoding.
@@ -769,7 +616,7 @@ func TestCollectionDescriptorMemoryProfile(t *testing.T) {
 			c.Classes[0].Intent.Collect.Samples = uint64(n)
 			c.Classes[0].Samples = make([]CollectedSample, n)
 			for i := range c.Classes[0].Samples {
-				c.Classes[0].Samples[i] = CollectedSample{ClassID: c.Classes[0].Intent.Name, Win: float64(i%100) / 3, Sequence: uint64(i), Snapshot: []byte{1}}
+				c.Classes[0].Samples[i] = CollectedSample{ClassID: c.Classes[0].Intent.Name, Win: float64(i % 100), TotalWin: int64(i%100) * int64(c.BetUnit), Sequence: uint64(i), Snapshot: []byte{1}}
 			}
 			bank := saveDescriptorFixture(t, c, false, false)
 			var measured *descriptorHeapFile
@@ -860,7 +707,7 @@ func BenchmarkCollectionDescriptor(b *testing.B) {
 			c.Classes[0].Intent.Collect.Samples = uint64(n)
 			c.Classes[0].Samples = make([]CollectedSample, n)
 			for i := range c.Classes[0].Samples {
-				c.Classes[0].Samples[i] = CollectedSample{ClassID: c.Classes[0].Intent.Name, Win: float64(i%100) / 3, Sequence: uint64(i), Snapshot: []byte{1}}
+				c.Classes[0].Samples[i] = CollectedSample{ClassID: c.Classes[0].Intent.Name, Win: float64(i % 100), TotalWin: int64(i%100) * int64(c.BetUnit), Sequence: uint64(i), Snapshot: []byte{1}}
 			}
 			bank, err := (collectionBankWriter{}).Write(context.Background(), filepath.Join(b.TempDir(), "benchmark.bin"), c, false, false)
 			if err != nil {

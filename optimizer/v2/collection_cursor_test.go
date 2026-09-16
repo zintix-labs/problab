@@ -492,7 +492,7 @@ func TestTunerDuplicateCollectionWritesOnlyDistinctBankAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].Name() != "seed_bank_300_s2.distinct.bin" || entries[1].Name() != "seed_bank_300_s2.distinct.parquet" {
+	if len(entries) != 1 || entries[0].Name() != "seed_bank_300_s2.distinct.bin" {
 		t.Fatalf("collection bank entries=%v", entries)
 	}
 	assertDescriptorMatchesBank(t, *report.Collection)
@@ -533,6 +533,9 @@ func TestTunerRunStopsBeforePrepareOnDuplicateCollection(t *testing.T) {
 	}
 	tuner.now = func() time.Time { return time.Unix(350, 0) }
 	result, err := tuner.Run(context.Background(), RunRequest{PlanID: "duplicate-gate"})
+	if result.Report.Verification.Pass {
+		t.Fatal("duplicate collection must not claim distribution verification passed")
+	}
 	if err != nil {
 		t.Fatalf("Tuner.Run operational error: %v", err)
 	}

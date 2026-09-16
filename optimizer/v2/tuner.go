@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -27,12 +28,13 @@ import (
 	"time"
 
 	"github.com/zintix-labs/problab"
+	"github.com/zintix-labs/problab/dto"
 	legacyoptimizer "github.com/zintix-labs/problab/optimizer"
 	"github.com/zintix-labs/problab/spec"
 )
 
 const (
-	engineImplementationVersion = "intent-lp-v2.7.0"
+	engineImplementationVersion = "intent-lp-v2.8.0"
 	// Replay banks contribute in configured source/record order, fresh samples
 	// follow worker/local acceptance order, and persisted bytes serialize Classes
 	// in declaration order while preserving each Class's Sequence order.
@@ -74,7 +76,6 @@ type StageEvent struct {
 	SeedCount              uint64
 	Bytes                  int64
 	SHA256                 string
-	DatasetID              string
 	EndReason              CollectionReplayEndReason
 	RemainingSources       int
 	StreamCursor           uint64
@@ -129,6 +130,9 @@ type TunerOption func(*Tuner) error
 // compiled rows, solver witnesses, and candidate data are local to each Run so
 // repeated calls cannot leak state into one another.
 type Tuner struct {
+	resultConverter              dto.ResultConverter
+	customConverter              bool
+	rgsIO                        rgsIO
 	config                       Config
 	lab                          *problab.Problab
 	collector                    *Collector
@@ -185,6 +189,9 @@ func NewTuner(config Config, lab *problab.Problab, options ...TunerOption) (*Tun
 	}
 	if tuner.collector.WorkingDirectory != tuner.workingDirectory {
 		return nil, fmt.Errorf("optimizer v2 tuner and collector working directories differ")
+	}
+	if tuner.resultConverter == nil {
+		tuner.resultConverter = dto.IdentityConverter
 	}
 	return tuner, nil
 }
@@ -248,7 +255,7 @@ func WithArtifactWriterFactory(factory ArtifactWriterFactory) TunerOption {
 // gates. Expected config/support/model/representation/artifact outcomes are
 // returned in RunResult with nil error. Go error is reserved for cancellation,
 // I/O/dependency failure, and broken application contracts.
-func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) {
+func (t *Tuner) Run(ctx context.Context, request RunRequest) (out RunResult, runErr error) {
 	if t == nil {
 		return RunResult{}, fmt.Errorf("optimizer v2 tuner is nil")
 	}
@@ -265,6 +272,20 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) 
 	staticStage := "static-validation"
 	staticStarted := t.startStage(staticStage, -1)
 	report := RunReport{Overrides: cloneRunOverrides(request.Overrides)}
+	defer func() {
+		if report.OptimizationState == "RUNNING" {
+			report.OptimizationState = "FAILED"
+		}
+		for i := range report.RGSExports {
+			if report.RGSExports[i].State == "PENDING" {
+				report.RGSExports[i].State = "SKIPPED"
+			}
+		}
+		out.Report = report
+		if runErr != nil {
+			out.Status = StatusInternalError
+		}
+	}()
 	resolved, err := t.config.ResolvePlan(request.PlanID)
 	if err != nil {
 		diagnostics := Diagnostics{configDiagnostic(err.Error())}
@@ -279,6 +300,14 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) 
 		return resultFromDiagnostics(report, diagnostics), nil
 	}
 	report = newRunReport(resolved, request.Overrides)
+	initializeRGSReports(&report, t.customConverter)
+	native := len(nativeOutputs(resolved.Plan.Output).Format) > 0
+	optimized := hasOutput(resolved, OutputRGSOptimized)
+	report.OptimizationState = "NOT_STARTED"
+	if !native && !optimized {
+		report.OptimizationState = "NOT_REQUESTED"
+	}
+	var exportRoot string
 	report.ConfigHash, err = hashCanonicalJSON(resolved)
 	if err != nil {
 		t.finishStage(&report, staticStage, -1, staticStarted, err, nil)
@@ -294,11 +323,18 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) 
 		t.finishStage(&report, staticStage, -1, staticStarted, nil, diagnostics)
 		return resultFromDiagnostics(report, diagnostics), nil
 	}
+	if len(report.RGSExports) > 0 {
+		if err = preflightRGSDirectory(resolved.Plan.Output.Directory); err != nil {
+			t.finishStage(&report, staticStage, -1, staticStarted, err, nil)
+			return RunResult{}, err
+		}
+	}
 	t.finishStage(&report, staticStage, -1, staticStarted, nil, nil)
 	if t.reporter != nil {
 		t.reporter.Report(StageEvent{
 			Stage: "expected-rtp", State: "info", BetMode: -1,
 			ExpectedRTP: resolved.Intent.ExpectedRTP(),
+			Message:     report.OptimizationState,
 		})
 	}
 
@@ -307,11 +343,29 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) 
 	// for one invocation to accidentally share collection or solver settings
 	// across modes that were intended to be optimized independently.
 	betMode := resolved.Plan.Target.BetModes[0]
-	report.Verification.Pass = true
+	report.Verification.Pass = false
 	collected, diagnostics, err := t.collectStage(ctx, resolved, betMode, &report)
 	if err != nil || diagnostics.StopsRun() {
 		return resultFromDiagnostics(report, diagnostics), err
 	}
+	if err = ctx.Err(); err != nil {
+		return RunResult{}, err
+	}
+	if hasOutput(resolved, OutputRGSCollected) {
+		r := rgsReport(&report, OutputRGSCollected)
+		r.Total = report.Collection.Bank.SeedCount
+		if err = t.exportRGS(ctx, resolved, betUnits[betMode], &exportRoot, r, collectedRGSRows(collected), nil); err != nil {
+			return RunResult{}, err
+		}
+	}
+	if !native && !optimized {
+		return RunResult{Status: StatusExported}, nil
+	}
+	if err = ctx.Err(); err != nil {
+		return RunResult{}, err
+	}
+	report.OptimizationState = "RUNNING"
+	report.Verification.Pass = true
 	prepared, diagnostics, err := t.prepareStage(resolved, collected, &report)
 	if err != nil || diagnostics.StopsRun() {
 		return resultFromDiagnostics(report, diagnostics), err
@@ -332,18 +386,70 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) 
 	if solution.Status != StatusOptimal {
 		return resultFromDiagnostics(report, solution.Diagnostics), nil
 	}
-	mode, verification, err := t.materializeAndVerifyStage(ctx, compiled, solution, betMode, betUnits[betMode], &report)
+	samples, err := ExpandSolution(compiled, solution, betMode, betUnits[betMode])
 	if err != nil {
 		return RunResult{}, err
 	}
-	if !verification.Pass {
-		diagnostic := materializationViolationDiagnostic()
-		report.Verification = verification
-		return resultFromDiagnostics(report, Diagnostics{diagnostic}), nil
+	var pointProbabilities []float64
+	var pointVerification VerificationReport
+	if optimized {
+		pointProbabilities, err = normalizeRGSProbabilities(samples, compiled.Prepared.Plan.EngineOptions.FeasibilityTolerance)
+		if err != nil {
+			report.Verification = finalizeVerification([]VerificationCheck{textVerificationCheck("rgs.point_probabilities", false, err.Error(), "valid normalized probabilities")})
+			return resultFromDiagnostics(report, Diagnostics{rgsPointViolationDiagnostic()}), nil
+		}
+		pointVerification = verifyRGSPoints(compiled, solution, samples, pointProbabilities)
+		if !pointVerification.Pass {
+			report.Verification = pointVerification
+			return resultFromDiagnostics(report, Diagnostics{rgsPointViolationDiagnostic()}), nil
+		}
+		rows, e := optimizedRGSRows(compiled, samples, pointProbabilities)
+		if e != nil {
+			return RunResult{}, e
+		}
+		r := rgsReport(&report, OutputRGSOptimized)
+		r.Total = uint64(len(samples))
+		if e = t.exportRGS(ctx, resolved, betUnits[betMode], &exportRoot, r, rows, func() VerificationReport {
+			// COMPLETED covers every requested representation's verification.
+			// Mixed A+B still owes native validation after B publication.
+			if !native {
+				report.OptimizationState = "COMPLETED"
+			}
+			return pointVerification
+		}); e != nil {
+			var invalid *rgsVerificationError
+			if errors.As(e, &invalid) {
+				report.Verification = invalid.report
+				r.Verification = &invalid.report
+				return resultFromDiagnostics(report, Diagnostics{rgsPointViolationDiagnostic()}), nil
+			}
+			return RunResult{}, e
+		}
 	}
-	modeHash := hashModeSolution(mode)
+	var mode MaterializedMode
+	verification := pointVerification
+	if native {
+		mode, verification, err = t.materializeSamplesAndVerifyStage(ctx, compiled, solution, betMode, betUnits[betMode], samples, &report)
+		if err != nil {
+			return RunResult{}, err
+		}
+		if !verification.Pass {
+			report.Verification = verification
+			return resultFromDiagnostics(report, Diagnostics{materializationViolationDiagnostic()}), nil
+		}
+	}
+	report.OptimizationState = "COMPLETED"
+	modeHash := ""
+	if native {
+		modeHash = hashModeSolution(mode)
+	}
 	intentReport := BuildIntentQualityReport(compiled, solution)
-	distribution, err := BuildBucketDistributionReport(compiled, mode)
+	var distribution BucketDistributionReport
+	if native {
+		distribution, err = BuildBucketDistributionReport(compiled, mode)
+	} else {
+		distribution, err = buildPointDistributionReport(compiled, betMode, samples, pointProbabilities)
+	}
 	if err != nil {
 		return RunResult{}, fmt.Errorf("build optimizer v2 bucket distribution report for mode %d: %w", betMode, err)
 	}
@@ -361,6 +467,9 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (RunResult, error) 
 	// evaluator:none yields one canonical candidate for this mode. Sibling modes
 	// are separate Runs and may intentionally use different plans or intents.
 	report.Candidates.Generated = 1
+	if !native {
+		return RunResult{Status: StatusOptimal}, nil
+	}
 	published, err := t.publishStage(ctx, resolved, betUnits, mode, &report)
 	if err != nil {
 		return RunResult{}, err
@@ -464,13 +573,23 @@ func (t *Tuner) collectStage(ctx context.Context, plan ResolvedPlan, betMode int
 	if distinct {
 		diagnostics = append(diagnostics, collectionDuplicateDiagnostic(plan, audit, path))
 	}
-	// PRD 0005: persistence alone borrows the recovery view. Prepare continues
-	// to receive the original collected value; descriptor errors are advisory.
+	// Recovery persistence is not a successful collection export.
+	if diagnostics.StopsRun() || bank.Partial || bank.Distinct || audit.Duplicates > 0 {
+		t.finishStage(report, stage, betMode, started, nil, diagnostics)
+		return collected, diagnostics, nil
+	}
+	for _, class := range collected.Classes {
+		if uint64(len(class.Samples)) != class.Intent.Collect.Samples {
+			err := fmt.Errorf("collection quota is incomplete")
+			t.finishStage(report, stage, betMode, started, err, diagnostics)
+			return collected, diagnostics, err
+		}
+	}
 	export := t.collectionDescriptorExporter
 	if export == nil {
 		export = (collectionDescriptorWriter{}).Write
 	}
-	descriptor, descriptorErr := export(ctx, bankCollection, bank)
+	descriptor, descriptorErr := export(ctx, collected, bank)
 	if descriptorErr != nil {
 		descriptor.State, descriptor.Error = "WARNING", descriptorErr.Error()
 	}
@@ -481,8 +600,12 @@ func (t *Tuner) collectStage(ctx context.Context, plan ResolvedPlan, betMode int
 			state = "warning"
 		}
 		t.reporter.Report(StageEvent{Stage: "collection-descriptor", State: state, BetMode: betMode,
-			Path: descriptor.Path, Records: descriptor.Records, DatasetID: descriptor.DatasetID,
+			Path: descriptor.Path, Records: descriptor.Records,
 			Bytes: descriptor.Bytes, Duration: descriptor.Duration, Message: descriptor.Error})
+	}
+	if descriptorErr != nil && (ctx.Err() != nil || hasOutput(plan, OutputRGSCollected)) {
+		t.finishStage(report, stage, betMode, started, descriptorErr, diagnostics)
+		return collected, diagnostics, fmt.Errorf("required collection catalog: %w", descriptorErr)
 	}
 	t.finishStage(report, stage, betMode, started, nil, diagnostics)
 	return collected, diagnostics, nil
@@ -557,18 +680,10 @@ func cloneFloatPointer(value *float64) *float64 {
 	return &copy
 }
 
-// materializeAndVerifyStage expands c*p/n outcome weights, builds the runtime
-// alias representation, restores every seed-bank entry through the raw game,
-// and replays the resulting payouts plus effective alias marginals against the
-// hard model before allowing the mode into the publication transaction.
-func (t *Tuner) materializeAndVerifyStage(ctx context.Context, compiled CompiledModel, solution EngineSolution, betMode, betUnit int, report *RunReport) (MaterializedMode, VerificationReport, error) {
+// materializeSamplesAndVerifyStage preserves native alias validation after expansion.
+func (t *Tuner) materializeSamplesAndVerifyStage(ctx context.Context, compiled CompiledModel, solution EngineSolution, betMode, betUnit int, samples []MaterializedSample, report *RunReport) (MaterializedMode, VerificationReport, error) {
 	stage := fmt.Sprintf("materialize-verify[mode=%d]", betMode)
 	started := t.startStage(stage, betMode)
-	samples, err := ExpandSolution(compiled, solution, betMode, betUnit)
-	if err != nil {
-		t.finishStage(report, stage, betMode, started, err, nil)
-		return MaterializedMode{}, VerificationReport{}, fmt.Errorf("expand optimizer v2 solution for mode %d: %w", betMode, err)
-	}
 	// The solver witness has already passed original-row replay at the configured
 	// feasibility tolerance. Use that same proved allowance for the expanded
 	// near-one sum and the alias table's bounded approximation. Materialization
@@ -603,7 +718,7 @@ func (t *Tuner) materializeAndVerifyStage(ctx context.Context, compiled Compiled
 func (t *Tuner) publishStage(ctx context.Context, plan ResolvedPlan, betUnits []int, mode MaterializedMode, report *RunReport) (PublishedArtifact, error) {
 	stage := "publish"
 	started := t.startStage(stage, mode.BetMode)
-	writer := t.writerFactory(plan.Plan.Output)
+	writer := t.writerFactory(nativeOutputs(plan.Plan.Output))
 	if writer == nil {
 		err := fmt.Errorf("artifact writer factory returned nil")
 		t.finishStage(report, stage, mode.BetMode, started, err, nil)
@@ -657,11 +772,19 @@ func (t *Tuner) finishStage(report *RunReport, stage string, betMode int, starte
 
 // materializationViolationDiagnostic keeps the stage event and final RunResult
 // on the same typed explanation when semantic replay rejects a materialized
-// alias table. Nothing is published after this diagnostic is constructed.
+// alias table. This native output is not published; earlier families may exist.
 func materializationViolationDiagnostic() Diagnostic {
 	return Diagnostic{
 		Code: DiagnosticArtifactMaterializationViolation, Status: StatusArtifactInvalid,
-		Message:        "materialized alias distribution failed semantic replay; nothing was staged",
+		Message:        "native alias distribution failed semantic replay; this native output was not published",
+		Representation: RepresentationAtomicBuckets,
+	}
+}
+
+func rgsPointViolationDiagnostic() Diagnostic {
+	return Diagnostic{
+		Code: DiagnosticArtifactMaterializationViolation, Status: StatusArtifactInvalid,
+		Message:        "optimized point distribution failed semantic replay; this optimized output was not published",
 		Representation: RepresentationAtomicBuckets,
 	}
 }

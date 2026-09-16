@@ -1,49 +1,47 @@
-# Collection catalogs for external optimization
+# Content-only catalogs and RGS exports
 
-Every successfully saved collection bank gets a sibling `.parquet` catalog,
-including partial and Class-local distinct recovery banks. The catalog is an
-advisory, read-only export; failure does not invalidate the bank or change LP
-inputs. There is no external probability importer in this release.
+A complete, duplicate-free collection writes a seven-column catalog beside its
+ordinary seed bank. Partial/distinct recovery banks do **not** produce catalogs.
 
-```sh
-python -m pip install pyarrow==23.0.1
-python optimizer/v2/examples/collection_parquet/read_catalog.py /path/to/seed_bank_123_s4.parquet
+| Column | Type | Meaning |
+| --- | --- | --- |
+| record_index | int64 | Zero-based position in this family's result library |
+| class_id | int32 | Original Class declaration ordinal |
+| class_name | string | Original Class name |
+| probability | nullable float64 | Collected: all null; optimized: finite point probabilities |
+| win_multiplier | float64 | Original multiplier |
+| win | int64 | Exact integer payout, not reconstructed from the multiplier |
+| bet | int64 | Unit bet |
+
+The two RGS output formats are `rgs-collected` (no LP) and `rgs-optimized`
+(after LP). Both always produce `results.jsonl.zst`; optimized also produces
+`distribution.parquet`. Collected uses the catalog beside its bank.
+Parquet uses internal ZSTD: it is **not** a `.parquet.zst` file.
+
+```python
+import pandas as pd
+table = pd.read_parquet("distribution.parquet", engine="pyarrow",
+                        dtype_backend="pyarrow")
 ```
 
-The example verifies the Dataset ID using only Parquet; no bank or game runtime
-is required. Use `pyarrow.parquet.ParquetFile(path).iter_batches()` for bounded
-processing, or `pyarrow.parquet.read_table(path)` when the full table fits memory.
+For bounded-memory reading use `pyarrow.parquet.ParquetFile(path).iter_batches()`.
+Run `python read_catalog.py PATH` for a schema/order check. A legacy four-column
+file is identified explicitly; the reader never fabricates missing win/bet.
 
-| Required column | Type | Meaning |
-| --- | --- | --- |
-| record_index | int64 | Zero-based position in this saved bank, not spin Sequence |
-| class_id | int32 | Class declaration index; empty Classes do not renumber others |
-| class_name | UTF-8 string | Collection Class name |
-| win_multiplier | float64 | Original TotalWin / Bet, without rounding or merging |
+The original catalog row i, bank record i, and collected JSONL line i align.
+Optimized row i aligns with **its own** JSONL line i. Do not mix the families.
+Sorting externally is allowed if record_index is retained. It is not a byte offset.
 
-`problab.collection` contains JSON metadata: schema `problab.collection-outcomes/v1`,
-Dataset ID, bank digest, counts, game (canonical uint64 decimal **string**), mode,
-bet unit, partial/distinct flags and collection Class predicates/quotas. Other
-integer metadata must be read with exact integer support, not a floating-point
-JSON number parser. A multiplier of 0.96 means 96% RTP when averaged under the
-chosen probabilities. Class row counts are quota-selected, **not natural event
-frequencies**. Empty catalogs are valid datasets, not publishable distributions.
+There is no DatasetID, application metadata, sidecar, or external probability
+importer. Keep the run report and matching files together; an isolated export
+directory cannot prove which collection catalog belongs to it.
 
-No snapshots, seed material, per-record tags or LP design constraints are exported.
-External tools choose their own grouping, objectives and constraints. Dataset ID
-binds content, not a signature or proof of game-version correctness. It includes
-bank digest, collection predicates/quotas, flags and exact row bits; it excludes
-path/time, compression and LP-only settings. The reader contains the v1 binary
-hash framing; do not hash JSON text or Parquet file bytes as a substitute.
+JSONL rows are compact JSON values followed by LF, compressed as one streaming
+ZSTD output. They can be decoded incrementally; no custom seek/chunk index is supplied.
+Use `WithResultConverter` to inject a platform encoder (see ../rgs).
+The default `dto.IdentityConverter` includes PRNG snapshots and checkpoint:
+remove sensitive state before sharing with non-owners. Custom payload payout
+semantics are the converter author's responsibility, not verified by the LP.
 
-Future result exchange is reserved for a separate implementation: a Parquet with
-`record_index` and unconditional `probability`, and `problab.probabilities` JSON
-metadata containing schema `problab.sample-probabilities/v1`, source `dataset_id`
-and declared `rtp`. This reader does not accept, optimize or publish such results.
-
-The Go writer uses parquet-go v0.32.0, ZSTD concurrency 1, batches of 8192 and row
-groups of at most 65536. Row buffers are bounded; necessary footer metadata grows
-with row group count. Bank and catalog commit separately; transfer the completed
-catalog and verify its Dataset ID, not just its filename.
-
-See [verification commands and resource measurements](VERIFICATION.md).
+No CDF, integer-weight quantization or AliasTable is exported on the RGS route.
+External optimizers and samplers own those choices and their numerical accuracy.

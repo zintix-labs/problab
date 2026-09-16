@@ -299,6 +299,9 @@ const (
 	// OutputOptimalGacha emits the legacy per-mode zstd-compressed JSON
 	// AliasTableF64 and raw seed bank consumed through gachas/seed_bank config.
 	OutputOptimalGacha OutputFormat = "optimal_gacha"
+	// RGS formats always use internal-ZSTD Parquet and streaming JSONL.zst.
+	OutputRGSOptimized OutputFormat = "rgs-optimized"
+	OutputRGSCollected OutputFormat = "rgs-collected"
 )
 
 // OutputOptions describes where a successfully verified artifact is written.
@@ -510,6 +513,7 @@ type Status string
 
 const (
 	StatusOptimal                  Status = "OPTIMAL"
+	StatusExported                 Status = "EXPORTED"
 	StatusInfeasibleConfig         Status = "INFEASIBLE_CONFIG"
 	StatusInfeasibleSupport        Status = "INFEASIBLE_SUPPORT"
 	StatusInfeasibleModel          Status = "INFEASIBLE_MODEL"
@@ -523,7 +527,7 @@ const (
 // value is intentionally invalid so an uninitialized result cannot look final.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusOptimal,
+	case StatusOptimal, StatusExported,
 		StatusInfeasibleConfig,
 		StatusInfeasibleSupport,
 		StatusInfeasibleModel,
@@ -540,7 +544,7 @@ func (s Status) Valid() bool {
 // Success reports whether the selected mode was solved, materialized, verified,
 // and durably staged. A successful mode can still be waiting for sibling modes
 // before the writer publishes a complete runtime manifest.
-func (s Status) Success() bool { return s == StatusOptimal }
+func (s Status) Success() bool { return s == StatusOptimal || s == StatusExported }
 
 // DiagnosticCode is a stable reason code shared by JSON and terminal reports.
 // Contributors must use this closed set instead of inventing free-form strings.
@@ -643,7 +647,7 @@ type Advisory struct {
 // StopsRun reports whether this diagnostic carries a non-success final status.
 // Diagnostics with a zero Status may be informational and do not stop a run.
 func (d Diagnostic) StopsRun() bool {
-	return d.Status.Valid() && d.Status != StatusOptimal
+	return d.Status.Valid() && !d.Status.Success()
 }
 
 // Diagnostics preserves deterministic diagnostic order while providing a
@@ -680,6 +684,8 @@ func (r RunResult) Succeeded() bool { return r.Status.Success() }
 // quality, verification, and hashes. Wall-clock measurements are included for
 // operations but are deliberately excluded from solution hashing.
 type RunReport struct {
+	OptimizationState     string                    `json:"optimization_state"`
+	RGSExports            []RGSExportReport         `json:"rgs_exports,omitempty"`
 	Plan                  ResolvedPlan              `json:"resolved_plan"`
 	ExpectedRTP           float64                   `json:"expected_rtp"`
 	Overrides             RunOverrides              `json:"overrides,omitempty"`
@@ -721,10 +727,20 @@ type ModeRunReport struct {
 // one mode. CollisionProbability is the fixed display threshold used to derive
 // DrawsAtCollisionProbability from actual alias marginals.
 type BucketDistributionReport struct {
+	// Source distinguishes direct LP point probabilities from native effective
+	// alias marginals. Empty means a legacy report with no explicit provenance.
+	Source               DistributionSource        `json:"source,omitempty"`
 	BetMode              int                       `json:"bet_mode"`
 	CollisionProbability float64                   `json:"collision_probability"`
 	Classes              []ClassDistributionReport `json:"classes"`
 }
+
+type DistributionSource string
+
+const (
+	DistributionSourceAliasMarginals     DistributionSource = "alias_effective_marginals"
+	DistributionSourcePointProbabilities DistributionSource = "point_probabilities"
+)
 
 // ClassDistributionReport retains declaration order and distinguishes the
 // Class's fixed unconditional probability from conditional Bucket masses.

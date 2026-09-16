@@ -130,9 +130,10 @@ make opt
 # equivalent: go run ./cmd/opt
 ```
 
-The optimizer validates the configuration, solves and verifies the requested
-distribution, then writes the resulting artifacts to the configured
-`output.directory`. See the configuration comments for advanced options.
+The optimizer validates the configuration and collects outcomes, then either
+exports the collection directly (`rgs-collected`) or solves and verifies a
+distribution before export. Results go to `output.directory`; see the configuration
+comments for output options.
 
 ---
 

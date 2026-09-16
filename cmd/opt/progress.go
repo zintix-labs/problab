@@ -114,6 +114,9 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 		return
 	}
 	switch event.Stage {
+	case "rgs-collected", "rgs-optimized":
+		r.reportRGS(event)
+		return
 	case "collection-replay":
 		r.reportCollectionReplay(event)
 		return
@@ -133,7 +136,7 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 		if event.State == "warning" {
 			_, _ = fmt.Fprintf(r.output, "  [Descriptor] warning: %s\n", event.Message)
 		} else if event.State == "completed" && event.Path != "" {
-			_, _ = fmt.Fprintf(r.output, "  [Descriptor] %s records=%d bytes=%d dataset_id=%s (%s)\n", event.Path, event.Records, event.Bytes, event.DatasetID, formatStageDuration(event.Duration))
+			_, _ = fmt.Fprintf(r.output, "  [Descriptor] %s records=%d bytes=%d (%s)\n", event.Path, event.Records, event.Bytes, formatStageDuration(event.Duration))
 		}
 		return
 	}
@@ -141,7 +144,11 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 	switch event.State {
 	case "info":
 		if event.Stage == "expected-rtp" {
-			_, _ = fmt.Fprintf(r.output, "[Info] expected RTP: %.12g\n", event.ExpectedRTP)
+			if event.Message == "NOT_REQUESTED" {
+				_, _ = fmt.Fprintf(r.output, "[Info] configured expected RTP: %.12g (LP not requested; not a verified distribution)\n", event.ExpectedRTP)
+			} else {
+				_, _ = fmt.Fprintf(r.output, "[Info] expected RTP: %.12g\n", event.ExpectedRTP)
+			}
 		} else if event.Message != "" {
 			_, _ = fmt.Fprintf(r.output, "[Info] %s\n", event.Message)
 		}
@@ -608,6 +615,25 @@ func reportV2Outcome(output io.Writer, result optimizerv2.RunResult) {
 	if output == nil {
 		return
 	}
+	for _, export := range result.Report.RGSExports {
+		_, _ = fmt.Fprintf(output, "[RGS/%s] %s records=%d/%d\n", export.Family, export.State, export.Records, export.Total)
+		for _, file := range export.Files {
+			_, _ = fmt.Fprintf(output, "  %s (%d bytes)\n", file.Path, file.Bytes)
+		}
+		if export.Error != "" {
+			_, _ = fmt.Fprintf(output, "  %s\n", export.Error)
+		}
+	}
+	if result.Status == optimizerv2.StatusExported {
+		_, _ = fmt.Fprintln(output, "[Result] Exported; LP and distribution verification were not requested.")
+		return
+	}
+
+	for _, mode := range result.Report.Modes {
+		if mode.Distribution.Source == optimizerv2.DistributionSourcePointProbabilities {
+			_, _ = fmt.Fprintf(output, "[Distribution] mode %d: optimized point probabilities (not alias marginals)\n", mode.BetMode)
+		}
+	}
 	for _, advisory := range result.Report.Advisories {
 		_, _ = fmt.Fprintf(output, "[Advisory/%s] %s\n", advisory.Code, advisory.Message)
 		if len(advisory.SourcePaths) > 0 {
@@ -685,7 +711,7 @@ func reportV2Outcome(output io.Writer, result optimizerv2.RunResult) {
 	)
 }
 
-// writeModeDistributionCSVs persists the verified alias marginals of each
+// writeModeDistributionCSVs persists the verified distribution of each
 // generated mode as one CSV beneath directory, keeping the terminal clean while
 // still giving Designers the actual runtime distribution. Both conditional and
 // unconditional Bucket probabilities are emitted so a within-Class shape is
@@ -704,6 +730,9 @@ func writeModeDistributionCSVs(directory string, modes []optimizerv2.ModeRunRepo
 			return written, fmt.Errorf("create distribution output directory %q: %w", directory, err)
 		}
 		path := filepath.Join(directory, fmt.Sprintf("distribution_mode_%d.csv", report.BetMode))
+		if report.Source == optimizerv2.DistributionSourcePointProbabilities {
+			path = filepath.Join(directory, fmt.Sprintf("distribution_points_mode_%d.csv", report.BetMode))
+		}
 		if err := writeModeDistributionCSV(path, report); err != nil {
 			return written, err
 		}
@@ -788,4 +817,20 @@ func formatDiagnosticBound(bound optimizerv2.Bound) string {
 		return fmt.Sprintf("%.12g", bound.Min)
 	}
 	return fmt.Sprintf("[%.12g, %.12g]", bound.Min, bound.Max)
+}
+
+func (r *cliProgressReporter) reportRGS(event optimizerv2.StageEvent) {
+	switch event.State {
+	case "progress":
+		if r.interactive {
+			_, _ = fmt.Fprintf(r.output, "\r\x1b[2K  [%s] %d/%d", event.Stage, event.Records, event.TotalRecords)
+		}
+	case "started":
+		_, _ = fmt.Fprintf(r.output, "  [%s] starting %d records\n", event.Stage, event.TotalRecords)
+	case "completed", "failed":
+		if r.interactive {
+			_, _ = fmt.Fprint(r.output, "\r\x1b[2K")
+		}
+		_, _ = fmt.Fprintf(r.output, "  [%s] %s %d/%d (%s)\n", event.Stage, event.State, event.Records, event.TotalRecords, formatStageDuration(event.Duration))
+	}
 }

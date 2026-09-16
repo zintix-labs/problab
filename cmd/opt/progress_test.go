@@ -149,8 +149,8 @@ func TestCLIProgressReporterShowsReplayDeficitsFreshSummaryAndSavedBank(t *testi
 func TestCLICollectionDescriptorCompletedAndWarning(t *testing.T) {
 	var output bytes.Buffer
 	reporter := newCLIProgressReporter(&output)
-	reporter.Report(optimizerv2.StageEvent{Stage: "collection-descriptor", State: "completed", Path: "/tmp/catalog.parquet", Records: 42, Bytes: 1234, DatasetID: "sha256:abc", Duration: time.Second})
-	for _, want := range []string{"/tmp/catalog.parquet", "records=42", "bytes=1234", "dataset_id=sha256:abc", "(1s)"} {
+	reporter.Report(optimizerv2.StageEvent{Stage: "collection-descriptor", State: "completed", Path: "/tmp/catalog.parquet", Records: 42, Bytes: 1234, Duration: time.Second})
+	for _, want := range []string{"/tmp/catalog.parquet", "records=42", "bytes=1234", "(1s)"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("missing %q: %s", want, output.String())
 		}
@@ -159,6 +159,27 @@ func TestCLICollectionDescriptorCompletedAndWarning(t *testing.T) {
 	reporter.Report(optimizerv2.StageEvent{Stage: "collection-descriptor", State: "warning", Message: "write failed"})
 	if got := output.String(); got != "  [Descriptor] warning: write failed\n" {
 		t.Fatalf("warning=%q", got)
+	}
+}
+
+func TestCLIRGSProgressAndExported(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		for _, state := range []string{"completed", "failed"} {
+			var output bytes.Buffer
+			reporter := newCLIProgressReporter(&output)
+			reporter.interactive = interactive
+			reporter.Report(optimizerv2.StageEvent{Stage: "rgs-collected", State: "started", TotalRecords: 86})
+			reporter.Report(optimizerv2.StageEvent{Stage: "rgs-collected", State: "progress", Records: 37, TotalRecords: 86})
+			reporter.Report(optimizerv2.StageEvent{Stage: "rgs-collected", State: state, Records: 86, TotalRecords: 86})
+			if strings.Contains(output.String(), "37/86") != interactive || strings.Contains(output.String(), "\r\x1b[2K") != interactive || !strings.Contains(output.String(), state) {
+				t.Fatal(output.String())
+			}
+		}
+	}
+	var output bytes.Buffer
+	reportV2Outcome(&output, optimizerv2.RunResult{Status: optimizerv2.StatusExported})
+	if !strings.Contains(output.String(), "Exported") || strings.Contains(output.String(), "OPTIMAL") {
+		t.Fatal(output.String())
 	}
 }
 
@@ -509,8 +530,24 @@ func TestWriteModeDistributionCSVsWritesVerifiedMarginals(t *testing.T) {
 	}
 }
 
-// TestCLIProgressReporterExplainsTypedStageFailure verifies that a mathematical
-// diagnostic is not presented as a completed gate merely because its Go error
+func TestPointDistributionProvenance(t *testing.T) {
+	mode := optimizerv2.ModeRunReport{Distribution: optimizerv2.BucketDistributionReport{
+		Source:  optimizerv2.DistributionSourcePointProbabilities,
+		Classes: []optimizerv2.ClassDistributionReport{{Class: "example"}},
+	}}
+	directory := t.TempDir()
+	paths, err := writeModeDistributionCSVs(directory, []optimizerv2.ModeRunReport{mode})
+	if err != nil || len(paths) != 1 || filepath.Base(paths[0]) != "distribution_points_mode_0.csv" {
+		t.Fatalf("paths=%v err=%v", paths, err)
+	}
+	var output bytes.Buffer
+	reportV2Outcome(&output, optimizerv2.RunResult{Report: optimizerv2.RunReport{Modes: []optimizerv2.ModeRunReport{mode}}})
+	if !strings.Contains(output.String(), "optimized point probabilities (not alias marginals)") {
+		t.Fatalf("missing provenance: %s", output.String())
+	}
+}
+
+// A mathematical diagnostic is not a completed gate merely because its Go error
 // channel is nil.
 func TestCLIProgressReporterExplainsTypedStageFailure(t *testing.T) {
 	var output bytes.Buffer

@@ -1,97 +1,50 @@
-#!/usr/bin/env python3
-"""Read and verify a Problab catalog without a bank, Go, or game runtime.
-
-Requires pyarrow. This is a catalog reader, not a probability importer.
-"""
+"""Read content-only catalogs or optimized distributions without a game runtime."""
 import argparse
-import hashlib
 import json
-import struct
-
+import math
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+NAMES = ["record_index", "class_id", "class_name", "probability",
+         "win_multiplier", "win", "bet"]
 
-def verify_catalog(path):
+def read_catalog(path):
     catalog = pq.ParquetFile(path)
-    # Preserve IEEE negative zero in JSON range bounds while retaining arbitrary
-    # precision integer counts. Standard JSON parsers may decode literal -0 as 0.
-    metadata = json.loads(catalog.metadata.metadata[b"problab.collection"],
-                          parse_int=lambda s: -0.0 if s == "-0" else int(s))
-    if metadata["schema"] != "problab.collection-outcomes/v1":
-        raise ValueError("unsupported catalog schema")
-    game = metadata["game"]
-    if not isinstance(game, str) or not game.isascii() or not game.isdecimal() or str(int(game)) != game:
-        raise ValueError("game must be a canonical decimal string")
-    digest = hashlib.sha256()
-
-    def number(fmt, value):
-        digest.update(struct.pack("<" + fmt, value))
-
-    def string(value):
-        raw = value.encode("utf-8")
-        number("Q", len(raw))
-        digest.update(raw)
-
-    string("problab.collection-outcomes/dataset-id/v1")
-    string(metadata["schema"])
-    bank_digest = bytes.fromhex(metadata["bank_sha256"])
-    if len(bank_digest) != 32:
-        raise ValueError("invalid bank SHA256")
-    digest.update(bank_digest)
-    number("Q", metadata["record_count"])
-    number("Q", int(game))
-    number("q", metadata["bet_mode"])
-    number("q", metadata["bet_unit"])
-    string(metadata["multiplier_unit"])
-    string(metadata["ordering"])
-    number("?", metadata["partial"])
-    number("?", metadata["distinct"])
-    string(metadata["sampling"])
-    classes = metadata["classes"]
-    number("Q", len(classes))
-    for cls in classes:
-        number("i", cls["class_id"])
-        string(cls["class_name"])
-        for bound in cls["win_range"]:
-            number("d", bound)
-        for key in ("matches", "mismatches"):
-            tags = cls["tags"][key]
-            number("Q", len(tags))
-            for tag in tags:
-                string(tag)
-        number("Q", cls["requested"])
-        number("Q", cls["retained"])
-
-    columns = ["record_index", "class_id", "class_name", "win_multiplier"]
-    if catalog.schema_arrow.names != columns:
-        raise ValueError("unexpected catalog columns/order")
-    for name, dtype in zip(columns, [pa.int64(), pa.int32(), pa.string(), pa.float64()]):
-        if catalog.schema_arrow.field(name) != pa.field(name, dtype, nullable=False):
-            raise ValueError(f"unexpected type or nullability: {name}")
-    count = 0
-    retained = [0] * len(classes)
-    for batch in catalog.iter_batches(batch_size=8192, columns=columns):
-        for index, class_id, name, win in zip(*(c.to_pylist() for c in batch.columns)):
-            if index != count or not 0 <= class_id < len(classes) or classes[class_id]["class_name"] != name:
-                raise ValueError("record index or Class mapping mismatch")
-            number("q", index)
-            number("i", class_id)
-            string(name)
-            number("d", win)
-            retained[class_id] += 1
+    names = catalog.schema_arrow.names
+    if names == ["record_index", "class_id", "class_name", "win_multiplier"]:
+        return {"records": catalog.metadata.num_rows, "legacy": True,
+                "warning": "Legacy four-column catalog: exact win/bet unavailable; not the seven-column contract."}
+    expected = pa.schema([
+        pa.field("record_index", pa.int64(), False),
+        pa.field("class_id", pa.int32(), False),
+        pa.field("class_name", pa.string(), False),
+        pa.field("probability", pa.float64(), True),
+        pa.field("win_multiplier", pa.float64(), False),
+        pa.field("win", pa.int64(), False),
+        pa.field("bet", pa.int64(), False),
+    ])
+    if not catalog.schema_arrow.equals(expected, check_metadata=False):
+        raise ValueError("unexpected seven-column schema")
+    count, nulls = 0, 0
+    for batch in catalog.iter_batches(batch_size=8192):
+        for row in batch.to_pylist():
+            if row["record_index"] != count:
+                raise ValueError("original catalog order must be contiguous")
+            p = row["probability"]
+            nulls += p is None
+            if p is not None and (not math.isfinite(p) or not 0 <= p <= 1):
+                raise ValueError("invalid probability")
+            if row["win"] < 0 or row["bet"] <= 0:
+                raise ValueError("invalid integer payout/bet")
+            if not math.isfinite(row["win_multiplier"]) or row["win_multiplier"] < 0:
+                raise ValueError("invalid multiplier")
             count += 1
-    if count != metadata["record_count"] or retained != [c["retained"] for c in classes]:
-        raise ValueError("record count mismatch")
-    actual = "sha256:" + digest.hexdigest()
-    if actual != metadata["dataset_id"]:
-        raise ValueError(f"Dataset ID mismatch: {actual}")
-    return metadata
-
+    if nulls not in (0, count):
+        raise ValueError("mixed null and populated probabilities")
+    return {"records": count, "probability": "unspecified" if nulls == count else "specified",
+            "legacy": False}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("catalog")
-    args = parser.parse_args()
-    result = verify_catalog(args.catalog)
-    print(json.dumps({k: result[k] for k in ("schema", "dataset_id", "record_count", "game", "partial", "distinct")}, indent=2))
+    print(json.dumps(read_catalog(parser.parse_args().catalog), indent=2))

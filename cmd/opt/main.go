@@ -108,10 +108,10 @@ func runV2(arguments []string, _ io.Writer, stderr io.Writer) (int, error) {
 	exitCode := 0
 	for _, plan := range config.Plans {
 		result, err := tuner.Run(ctx, optimizerv2.RunRequest{PlanID: plan.ID})
+		reportV2Outcome(stderr, result)
 		if err != nil {
 			return 1, err
 		}
-		reportV2Outcome(stderr, result)
 		if !result.Succeeded() {
 			exitCode = 2
 			continue
