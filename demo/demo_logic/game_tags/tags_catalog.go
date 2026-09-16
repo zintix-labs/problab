@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package optimizer_tags
+package game_tags
 
 import (
 	"github.com/zintix-labs/problab/optimizer"
 	"github.com/zintix-labs/problab/spec"
 )
 
+type GameTagCatalog map[spec.GID]map[string]optimizer.IsTag
+
 // GameTags binds each game's collection tag set to its spec.GID. This is the
 // one place in the repository that owns this binding — per-game tag files
-var GameTags = map[spec.GID]map[string]optimizer.IsTag{
+var GameTags = GameTagCatalog{
 	0: Demo_0_Tags,
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package optimizer_tags
+package game_tags
 
 import (
 	"github.com/zintix-labs/problab/optimizer"

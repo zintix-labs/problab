@@ -28,13 +28,62 @@ import (
 	"time"
 
 	"github.com/zintix-labs/problab/demo"
-	"github.com/zintix-labs/problab/demo/demo_logic/optimizer_tags"
+	"github.com/zintix-labs/problab/demo/demo_logic/game_tags"
+	"github.com/zintix-labs/problab/dto"
 	optimizerv2 "github.com/zintix-labs/problab/optimizer/v2"
 )
 
 const embeddedConfigName = "opt_cfg.yaml"
 
-var gameTags = optimizer_tags.GameTags
+// These two package variables are the command's only application-owned
+// injection points. A fork repoints them at its own implementation without
+// editing runV2, optimizer/v2, or the embedded YAML; the values below are the
+// defaults that ship with the demo build.
+var (
+	// gameTags is a game_tags.GameTagCatalog, i.e.
+	// map[spec.GID]map[string]optimizer.IsTag, where each optimizer.IsTag is a
+	// func(*buf.SpinResult) bool predicate. WithCollectionTags stores it on the
+	// Collector and resolves it per plan against that plan's target game, so a
+	// GID no plan targets is simply unused and a game absent from the catalog
+	// collects with the built-in tags only. The inner map keys are the names
+	// that classes[].collect.tags.matches / .mismatches reference in
+	// opt_cfg.yaml; bg and fg are built in and must not be redefined here.
+	//
+	// To supply your own, build a catalog in your own package and assign it
+	// here, mirroring demo/demo_logic/game_tags:
+	//
+	//	// mygame/tags.go
+	//	func IsFreeSpins(sr *buf.SpinResult) bool { ... }
+	//	var Tags = game_tags.GameTagCatalog{
+	//		7: {"free_spins": IsFreeSpins},
+	//	}
+	//
+	//	gameTags game_tags.GameTagCatalog = mygame.Tags
+	gameTags game_tags.GameTagCatalog = game_tags.GameTags
+
+	// useConverter is a dto.ResultConverter, i.e.
+	// func(dto.SpinResult) (json.RawMessage, error). WithResultConverter binds
+	// exactly one per Tuner, and both RGS families (rgs-collected and
+	// rgs-optimized) call it once per replayed record. The returned bytes are
+	// compacted and written verbatim as one line of results.jsonl.zst, so each
+	// call must return exactly one valid UTF-8 JSON value; a converter error or
+	// invalid JSON stops the Run instead of skipping the record. It cannot
+	// affect the Parquet distribution or the native artifact_v1/gacha output.
+	//
+	// The default dto.IdentityConverter emits the whole dto.SpinResult, which
+	// carries every record's start/after PRNG snapshots and checkpoint — that
+	// is the complete seed material, so do not hand its output to a party that
+	// must not receive it. Assigning nil selects the same default. Either way
+	// the run report records converter=identity; any other function reports
+	// converter=custom, which states provenance only, not that replay state was
+	// actually removed.
+	//
+	// To supply your own, implement the function in your own package and assign
+	// it here; optimizer/v2/examples/rgs shows one that drops the replay state:
+	//
+	//	useConverter dto.ResultConverter = resultconverter.Convert
+	useConverter dto.ResultConverter = dto.IdentityConverter
+)
 
 // main is deliberately a thin composition root: it loads the command-owned
 // embedded config, constructs Problab plus optimizer/v2, and runs every declared
@@ -99,6 +148,7 @@ func runV2(arguments []string, _ io.Writer, stderr io.Writer) (int, error) {
 	tuner, err := optimizerv2.NewTuner(config, lab,
 		optimizerv2.WithReporter(reporter),
 		optimizerv2.WithCollectionTags(gameTags),
+		optimizerv2.WithResultConverter(useConverter),
 	)
 	if err != nil {
 		return 1, fmt.Errorf("construct optimizer/v2 tuner: %w", err)

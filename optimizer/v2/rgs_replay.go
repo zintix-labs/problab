@@ -6,6 +6,7 @@ package v2
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/dto"
@@ -84,7 +85,8 @@ func (r *rgsReplay) spin(ctx context.Context, snapshot []byte, win float64) (*bu
 func WithResultConverter(converter dto.ResultConverter) TunerOption {
 	return func(t *Tuner) error {
 		t.resultConverter = converter
-		t.customConverter = converter != nil
+		t.customConverter = converter != nil &&
+			reflect.ValueOf(converter).Pointer() != reflect.ValueOf(dto.IdentityConverter).Pointer()
 		return nil
 	}
 }
