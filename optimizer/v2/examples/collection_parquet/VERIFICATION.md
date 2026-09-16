@@ -37,6 +37,43 @@ formats. `TestRGSNativePreChangeBaseline` asserts the model/solution/collection
 hashes and SHA256 of manifest, mode descriptor, gacha, seed, probability and
 alias files. The baseline test passes after implementation.
 
+### Architecture-specific baseline correction
+
+The first Linux/amd64 CI run failed only `TestRGSNativePreChangeBaseline`,
+not the race detector. Its literals were captured on Darwin/arm64. To distinguish
+a new regression from an existing numerical difference, the diagnostic test was
+also run against pre-RGS commit
+`fd4c5eea47b2db266cf594de327e86a42ba5b665`, extracted into a separate temporary
+directory. Go 1.25.2 Linux/amd64 and Darwin/amd64 both produced identical old/new
+hashes, including all native artifact files. Collection snapshots and alias-index
+bytes also matched the original arm64 golden.
+
+| Hash | Original arm64 | Pre-RGS and current amd64 |
+| --- | --- | --- |
+| Model | `6581871339c863041655a023a1670ed20d31850c6e84b8246eb885dd8110fe1f` | `31bb020f3e3475099658e7f66b26c0d1381e5be910900115c0dacce32bffd0f1` |
+| Solution | `1b5e48254dd3fef67ea4eab2b33b1392e24c481bbea233f12d8752c5dd00fa07` | `98534e5980bc99338e03472a87bc2fd4848f7eb58855de23f3c1e6b02e009727` |
+
+As a diagnostic control, disabling compiler multiply-add fusion in optimizer/v2
+on arm64 also produced the amd64 model hash (not all amd64 solution bytes).
+This demonstrates that the model hash is sensitive to an existing floating-point
+execution difference; it does not establish cross-architecture solver bit parity.
+No production math or compiler flags were changed.
+
+The regression test retains the original arm64 constants and selects separately
+captured amd64 constants by GOARCH. It checks exact hashes, prints expected/actual
+values and the environment, and verifies that every expected file is present.
+Unknown architectures have no captured floating-point golden and explicitly skip
+that portion after checking the common collection hash; portable mixed-output
+byte-parity coverage remains independent. These literals assume Go 1.25.2 and
+default compilation, not arbitrary compiler optimization flags.
+
+After correction, Go 1.25.2 Linux/amd64 `go test -race ./... -count=1` passed in
+the official Go container. The same baseline test also passed with `-race`
+against the pre-RGS checkout. Darwin/arm64 race and Darwin/amd64 non-race checks
+passed for the baseline and mixed-output parity tests. Linux sources/dependencies
+were mounted read-only, with a temporary writable profiling output directory
+for sdk/perf; Python and memory opt-in suites were not part of this CI fix run.
+
 `TestRGSNativeFilesMatchMixedOutput` additionally compares every native file
 byte-for-byte between A-only and A+B+C, independently of report hashes.
 
