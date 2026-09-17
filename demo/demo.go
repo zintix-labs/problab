@@ -50,6 +50,12 @@ func NewProbLab() (*problab.Problab, error) {
 	return newProbLab()
 }
 
+// NewProbLabWithOptimalDir builds the demo lab against an Optimal Artifact
+// bundle on disk instead of running unoptimized. Point root at a published
+// artifact directory — cmd/opt writes one per game at
+// <output.directory>/artifact_v1/game_<gid>/ — and the lab loads it through
+// mmap. This is how you exercise an optimizer run end to end without wiring
+// problab.NewAuto by hand.
 func NewProbLabWithOptimalDir(root string) (*problab.Problab, error) {
 	return newProbLab(problab.WithOptimalDir(root))
 }

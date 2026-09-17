@@ -225,6 +225,12 @@ func hitMapFromSnap(d buf.CalcScreenDetail, snap *gameModeSnapshot) []int16 {
 }
 
 type SpinState struct {
+	// 續玩／回放協議的一半：業務端把 AfterCoreSnapB64U 當作下一段的
+	// StartCoreSnapB64U 送回，即可延續 RNG 流水；StartCoreSnapB64U 是回放與
+	// 稽核的唯一入口。對業務端必回。
+	//
+	// 但這兩個欄位就是可重現整個 RNG 流的種子材料。交付給 RGS、平台或任何
+	// 非數學擁有者的結果庫，converter 必須刪除它們——見 dto.ResultConverter。
 	StartCoreSnapB64U string          `json:"start_b64u"`   // 必回
 	AfterCoreSnapB64U string          `json:"after_b64u"`   // 必回
 	Checkpoint        json.RawMessage `json:"cp,omitempty"` // 視你是否要每局都回；若審計要強制，也可以去掉 omitempty
