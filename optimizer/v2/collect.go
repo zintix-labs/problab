@@ -21,8 +21,8 @@ import (
 	"math"
 
 	"github.com/zintix-labs/problab"
-	legacyoptimizer "github.com/zintix-labs/problab/optimizer"
 	"github.com/zintix-labs/problab/sdk/core"
+	"github.com/zintix-labs/problab/sdk/tag"
 	"github.com/zintix-labs/problab/spec"
 )
 
@@ -67,6 +67,8 @@ type CollectedProblem struct {
 	NextStreamOrdinal uint64
 	Classes           []CollectedClass
 	Evidence          CollectionEvidence
+	// Runtime-only frozen predicates; never serialized into banks or hashes.
+	tags *runTags
 }
 
 type classPredicate struct {
@@ -79,7 +81,7 @@ type collectionDeficits []uint64
 type collectionRuntime struct {
 	betUnit     int
 	snapshotLen int
-	tagger      *legacyoptimizer.Tagger
+	tagger      *tag.BitSet
 	predicates  []classPredicate
 }
 
@@ -119,9 +121,10 @@ func firstAcceptingClass(classes []ClassIntent, predicates []classPredicate, rem
 // worker. Keeping Problab as an explicit dependency makes collection testable
 // without placing simulation or command-line concerns inside the math engine.
 type Collector struct {
-	Lab              *problab.Problab
-	Reporter         Reporter
-	GameTags         map[spec.GID]map[string]legacyoptimizer.IsTag
+	Lab      *problab.Problab
+	Reporter Reporter
+	// Configure before Collect; do not mutate concurrently with collection.
+	GameTags         map[spec.GID]map[string]tag.IsTag
 	WorkingDirectory string
 }
 
@@ -182,10 +185,11 @@ func (c *Collector) Collect(
 	if err != nil {
 		return CollectedProblem{}, nil, err
 	}
-	if err := legacyoptimizer.NewRegisterTags(c.GameTags[plan.Plan.Target.Game]); err != nil {
+	registry, err := newCollectionTagRegistry(c.GameTags[plan.Plan.Target.Game])
+	if err != nil {
 		return CollectedProblem{}, nil, fmt.Errorf("register collection tags: %w", err)
 	}
-	tagger, predicates, err := compileTagPredicates(plan.Intent.Classes)
+	tagger, predicates, err := compileTagPredicates(plan.Intent.Classes, registry)
 	if err != nil {
 		return CollectedProblem{}, Diagnostics{configDiagnostic(err.Error())}, nil
 	}
@@ -203,6 +207,7 @@ func (c *Collector) Collect(
 	}
 
 	collected := newCollectedProblem(plan, betMode, betUnit, len(initialSnapshot))
+	collected.tags = &runTags{tagger: tagger, predicates: predicates}
 	cursors, startStreamOrdinal := parseConfiguredCollectionStreamCursors(plan.Plan.Collection.CollectedSeed)
 	collected.NextStreamOrdinal = startStreamOrdinal
 	deficits := make(collectionDeficits, len(plan.Intent.Classes))
@@ -523,7 +528,7 @@ func collectWorker(
 	betMode int,
 	classes []ClassIntent,
 	predicates []classPredicate,
-	tagger *legacyoptimizer.Tagger,
+	tagger *tag.BitSet,
 	quotas []uint64,
 	maxSpins uint64,
 	progressEvery uint64,
@@ -746,9 +751,8 @@ func optimizerBetUnit(lab *problab.Problab, gid spec.GID, betMode int) (int, err
 }
 
 // compileTagPredicates constructs one shared tag evaluation order and a pair
-// of masks per Class. The tag registry is reused from the legacy optimizer so
-// custom RegisterTag integrations keep working during the additive migration.
-func compileTagPredicates(classes []ClassIntent) (*legacyoptimizer.Tagger, []classPredicate, error) {
+// of masks per Class from an explicitly owned registry, never v1 global state.
+func compileTagPredicates(classes []ClassIntent, registry *tag.Registry) (*tag.BitSet, []classPredicate, error) {
 	tags := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, class := range classes {
@@ -764,15 +768,20 @@ func compileTagPredicates(classes []ClassIntent) (*legacyoptimizer.Tagger, []cla
 	if len(tags) == 0 {
 		return nil, predicates, nil
 	}
-	tagger, err := legacyoptimizer.GetTagger(tags...)
+	tagger, err := registry.BitSet(tags...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("compile class tags: %w", err)
 	}
 	for i, class := range classes {
-		predicates[i] = classPredicate{
-			matchMask:    tagger.Mask(class.Collect.Tags.Matches...),
-			mismatchMask: tagger.Mask(class.Collect.Tags.Mismatches...),
+		match, err := tagger.Mask(class.Collect.Tags.Matches...)
+		if err != nil {
+			return nil, nil, err
 		}
+		mismatch, err := tagger.Mask(class.Collect.Tags.Mismatches...)
+		if err != nil {
+			return nil, nil, err
+		}
+		predicates[i] = classPredicate{matchMask: match, mismatchMask: mismatch}
 	}
 	return tagger, predicates, nil
 }

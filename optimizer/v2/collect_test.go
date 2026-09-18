@@ -25,9 +25,9 @@ import (
 	"testing"
 
 	"github.com/zintix-labs/problab/demo"
-	legacyoptimizer "github.com/zintix-labs/problab/optimizer"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
+	"github.com/zintix-labs/problab/sdk/tag"
 	"github.com/zintix-labs/problab/spec"
 )
 
@@ -208,7 +208,7 @@ func TestCollectResolvesGameScopedCustomTag(t *testing.T) {
 	const gid spec.GID = 1
 	isZeroWin := func(result *buf.SpinResult) bool { return result.TotalWin == 0 }
 	collector := NewCollector(lab)
-	collector.GameTags = map[spec.GID]map[string]legacyoptimizer.IsTag{
+	collector.GameTags = map[spec.GID]map[string]tag.IsTag{
 		gid: {"custom_tag": isZeroWin},
 	}
 	plan := collectionFixturePlan(864209753, 1, 32, 10_000, 100)
@@ -260,7 +260,7 @@ func TestCollectCustomTagCanInspectExtendResult(t *testing.T) {
 		return false
 	}
 	collector := NewCollector(lab)
-	collector.GameTags = map[spec.GID]map[string]legacyoptimizer.IsTag{
+	collector.GameTags = map[spec.GID]map[string]tag.IsTag{
 		gid: {"has_extend": hasExtend},
 	}
 	plan := collectionFixturePlan(864209753, 1, 1, 10_000, 100)
@@ -297,7 +297,7 @@ func TestCollectFailsClearlyOnUnknownTagName(t *testing.T) {
 	plan := collectionFixturePlan(123, 1, 1, 10, 1)
 	plan.Intent.Classes[0].Collect.Tags.Matches = []string{"missing_custom_tag"}
 	collector := NewCollector(lab)
-	collector.GameTags = map[spec.GID]map[string]legacyoptimizer.IsTag{
+	collector.GameTags = map[spec.GID]map[string]tag.IsTag{
 		plan.Plan.Target.Game: {"different_custom_tag": func(*buf.SpinResult) bool { return true }},
 	}
 
@@ -313,41 +313,29 @@ func TestCollectFailsClearlyOnUnknownTagName(t *testing.T) {
 	}
 }
 
-func TestCollectWithoutGameTagsStillResolvesBuiltins(t *testing.T) {
+func TestCollectHasNoImplicitTags(t *testing.T) {
 	lab, err := demo.NewProbLab()
 	if err != nil {
-		t.Fatalf("construct demo Problab: %v", err)
+		t.Fatal(err)
 	}
 	defer func() { _ = lab.Close() }()
-
 	plan := collectionFixturePlan(975312468, 1, 16, 1_000, 20)
-	plan.Intent.Classes[0].Collect.Tags.Matches = []string{"bg"}
-	withoutOption, diagnostics, err := NewCollector(lab).Collect(context.Background(), plan, 0)
-	if err != nil || diagnostics.StopsRun() {
-		t.Fatalf("Collect without GameTags: diagnostics=%+v err=%v", diagnostics, err)
+	collector := NewCollector(lab)
+	if _, d, err := collector.Collect(context.Background(), plan, 0); err != nil || d.StopsRun() {
+		t.Fatalf("tag-free collect: %v %v", d, err)
 	}
-	withEmptySet := NewCollector(lab)
-	withEmptySet.GameTags = map[spec.GID]map[string]legacyoptimizer.IsTag{
-		plan.Plan.Target.Game: {},
-	}
-	withOption, diagnostics, err := withEmptySet.Collect(context.Background(), plan, 0)
-	if err != nil || diagnostics.StopsRun() {
-		t.Fatalf("Collect with empty game tag set: diagnostics=%+v err=%v", diagnostics, err)
-	}
-	if !reflect.DeepEqual(withoutOption, withOption) {
-		t.Fatal("nil GameTags changed built-in bg collection behavior")
-	}
-
-	replay, err := lab.NewUnoptimizedMachineWithSeed(plan.Plan.Target.Game, 1, true)
-	if err != nil {
-		t.Fatalf("construct replay machine: %v", err)
-	}
-	for index, sample := range withoutOption.Classes[0].Samples {
-		if err := replay.RestoreCore(sample.Snapshot); err != nil {
-			t.Fatalf("restore accepted sample[%d]: %v", index, err)
+	for _, name := range []string{"bg", "fg"} {
+		plan.Intent.Classes[0].Collect.Tags.Matches = []string{name}
+		for _, defs := range []map[spec.GID]map[string]tag.IsTag{nil, {plan.Plan.Target.Game: {}}} {
+			collector.GameTags = defs
+			_, d, err := collector.Collect(context.Background(), plan, 0)
+			if err != nil || !d.StopsRun() || !strings.Contains(d[0].Message, name) {
+				t.Fatalf("implicit %s resolved: %v %v", name, d, err)
+			}
 		}
-		if _, matched := legacyoptimizer.IsOnlyBg(replay.SpinInternal(0)); !matched {
-			t.Fatalf("accepted sample[%d] does not satisfy built-in bg", index)
+		collector.GameTags = map[spec.GID]map[string]tag.IsTag{plan.Plan.Target.Game: {name: func(*buf.SpinResult) bool { return true }}}
+		if _, d, err := collector.Collect(context.Background(), plan, 0); err != nil || d.StopsRun() {
+			t.Fatalf("explicit %s rejected: %v %v", name, d, err)
 		}
 	}
 }

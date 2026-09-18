@@ -41,13 +41,13 @@ const embeddedConfigName = "opt_cfg.yaml"
 // defaults that ship with the demo build.
 var (
 	// gameTags is a game_tags.GameTagCatalog, i.e.
-	// map[spec.GID]map[string]optimizer.IsTag, where each optimizer.IsTag is a
+	// map[spec.GID]map[string]tag.IsTag, where each tag.IsTag is a
 	// func(*buf.SpinResult) bool predicate. WithCollectionTags stores it on the
 	// Collector and resolves it per plan against that plan's target game, so a
 	// GID no plan targets is simply unused and a game absent from the catalog
-	// collects with the built-in tags only. The inner map keys are the names
+	// has no tags. The inner map keys are the names
 	// that classes[].collect.tags.matches / .mismatches reference in
-	// opt_cfg.yaml; bg and fg are built in and must not be redefined here.
+	// opt_cfg.yaml; bg and fg are demo-defined predicates, not built-ins.
 	//
 	// To supply your own, build a catalog in your own package and assign it
 	// here, mirroring demo/demo_logic/game_tags:

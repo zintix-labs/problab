@@ -32,6 +32,7 @@ type PreparedProblem struct {
 	BetUnit int
 	Spins   uint64
 	Classes []PreparedClass
+	tags    *runTags
 }
 
 // PreparedClass combines the fixed unconditional Class probability with either
@@ -94,6 +95,7 @@ func PrepareProblem(plan ResolvedPlan, collected CollectedProblem) (PreparedProb
 		Plan: plan, Game: collected.Game, BetMode: collected.BetMode,
 		BetUnit: collected.BetUnit, Spins: collected.Spins,
 		Classes: make([]PreparedClass, 0, len(plan.Intent.Classes)),
+		tags:    collected.tags,
 	}
 	if len(collected.Classes) != len(plan.Intent.Classes) {
 		return PreparedProblem{}, nil, fmt.Errorf("collector returned %d classes for %d intents", len(collected.Classes), len(plan.Intent.Classes))

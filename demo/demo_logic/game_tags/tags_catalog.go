@@ -15,11 +15,11 @@
 package game_tags
 
 import (
-	"github.com/zintix-labs/problab/optimizer"
+	"github.com/zintix-labs/problab/sdk/tag"
 	"github.com/zintix-labs/problab/spec"
 )
 
-type GameTagCatalog map[spec.GID]map[string]optimizer.IsTag
+type GameTagCatalog map[spec.GID]map[string]tag.IsTag
 
 // GameTags binds each game's collection tag set to its spec.GID. This is the
 // one place in the repository that owns this binding — per-game tag files

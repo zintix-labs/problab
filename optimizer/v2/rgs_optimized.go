@@ -44,7 +44,7 @@ func verifyRGSPoints(compiled CompiledModel, solution EngineSolution, samples []
 }
 
 func optimizedRGSRows(compiled CompiledModel, samples []MaterializedSample, p []float64) (rgsRows, error) {
-	tagger, predicates, err := compileTagPredicates(compiled.Prepared.Plan.Intent.Classes)
+	tagger, predicates, err := compiled.Prepared.replayTags()
 	if err != nil {
 		return nil, err
 	}

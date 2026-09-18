@@ -292,7 +292,7 @@ func replayMaterializedSnapshots(
 	if err != nil {
 		return MaterializedMode{}, VerificationCheck{}, fmt.Errorf("construct raw runtime-replay machine: %w", err)
 	}
-	tagger, predicates, err := compileTagPredicates(compiled.Prepared.Plan.Intent.Classes)
+	tagger, predicates, err := compiled.Prepared.replayTags()
 	if err != nil {
 		return MaterializedMode{}, VerificationCheck{}, fmt.Errorf("compile runtime-replay Class predicates: %w", err)
 	}

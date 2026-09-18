@@ -29,7 +29,7 @@ import (
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/dto"
-	legacyoptimizer "github.com/zintix-labs/problab/optimizer"
+	"github.com/zintix-labs/problab/sdk/tag"
 	"github.com/zintix-labs/problab/spec"
 )
 
@@ -223,15 +223,26 @@ func WithReporter(reporter Reporter) TunerOption {
 }
 
 // WithCollectionTags binds each game's custom collection tag predicates by
-// GID. It stores the map on the already-constructed Collector and performs
-// no registration or validation itself — resolution and registration into
-// the legacy tag registry happen per-plan inside Collector.Collect, scoped
-// to that plan's target game, via legacyoptimizer.NewRegisterTags. A game
-// absent from gameTags is valid and collects using only the built-in bg/fg
-// tags.
-func WithCollectionTags(gameTags map[spec.GID]map[string]legacyoptimizer.IsTag) TunerOption {
+// GID. Both maps are copied when the option is applied; callers must not mutate
+// them concurrently with construction. Each Run freezes its own BitSet, shared
+// by collection and verification. Predicates must be read-only and concurrency
+// safe. This does not make a single Tuner safe for concurrent Run calls.
+// There are no built-in or reserved tag names. Every referenced tag must be
+// explicitly supplied for its game; nil supplies no tags.
+func WithCollectionTags(gameTags map[spec.GID]map[string]tag.IsTag) TunerOption {
 	return func(tuner *Tuner) error {
-		tuner.collector.GameTags = gameTags
+		owned := make(map[spec.GID]map[string]tag.IsTag, len(gameTags))
+		for gid, definitions := range gameTags {
+			ownedDefinitions := make(map[string]tag.IsTag, len(definitions))
+			for name, fn := range definitions {
+				ownedDefinitions[name] = fn
+			}
+			if _, err := newCollectionTagRegistry(ownedDefinitions); err != nil {
+				return fmt.Errorf("game %d collection tags: %w", gid, err)
+			}
+			owned[gid] = ownedDefinitions
+		}
+		tuner.collector.GameTags = owned
 		return nil
 	}
 }
