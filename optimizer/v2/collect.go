@@ -756,12 +756,12 @@ func compileTagPredicates(classes []ClassIntent, registry *tag.Registry) (*tag.B
 	tags := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, class := range classes {
-		for _, tag := range append(append([]string(nil), class.Collect.Tags.Matches...), class.Collect.Tags.Mismatches...) {
-			if _, exists := seen[tag]; exists {
+		for _, name := range append(append([]string(nil), class.Collect.Tags.Matches...), class.Collect.Tags.Mismatches...) {
+			if _, exists := seen[name]; exists {
 				continue
 			}
-			seen[tag] = struct{}{}
-			tags = append(tags, tag)
+			seen[name] = struct{}{}
+			tags = append(tags, name)
 		}
 	}
 	predicates := make([]classPredicate, len(classes))
