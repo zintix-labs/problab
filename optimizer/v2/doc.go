@@ -38,7 +38,10 @@
 // that player-experience optimality is not claimed. The solve order proves hard
 // feasibility, minimizes Main Group profile deviation, maximizes supported
 // Other-bucket visibility, maximizes supported sibling visibility inside Main
-// Groups, and only then selects the canonical bucket-probability vector. The two
+// Groups, and only then selects a minimum-CV bucket-probability vector with one
+// second-moment LP. Multiple optima are accepted; repeatability is scoped to
+// fixed inputs, implementation and execution environment, not across platforms
+// or solver versions. The two
 // visibility stages are neutral soft refinements and never rewrite designer hard
 // intent. Before publication, every
 // seed-bank snapshot is replayed through raw game logic and semantic constraints

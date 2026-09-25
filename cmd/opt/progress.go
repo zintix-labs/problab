@@ -302,7 +302,7 @@ func cliOptimizationStageLabel(stage optimizerv2.OptimizationStageID) string {
 	case optimizerv2.StageMaximizeMainGroupInternalVisibility:
 		return "Maximizing minimum relative visibility within Main Group buckets"
 	case optimizerv2.StageSelectCanonicalBucketProbabilities:
-		return "Selecting canonical bucket probabilities"
+		return "Selecting bucket probabilities by minimum CV"
 	default:
 		return string(stage)
 	}

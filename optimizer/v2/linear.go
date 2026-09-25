@@ -45,7 +45,6 @@ const (
 	OriginDerivedSemanticGuardrail RuleOrigin = "DerivedSemanticGuardrail"
 	OriginDesignerPreference       RuleOrigin = "DesignerPreference"
 	OriginSystemNeutralPreference  RuleOrigin = "SystemNeutralPreference"
-	OriginCanonicalization         RuleOrigin = "Canonicalization"
 )
 
 // Sense is the semantic comparison operator used by a LinearRow.
@@ -211,7 +210,7 @@ type Solver interface {
 	Solve(context.Context, LinearProblem, LinearObjective, SolveOptions) (SolveResult, error)
 }
 
-// cloneLinearProblem makes a deep copy before a lexicographic phase adds rows.
+// cloneLinearProblem makes a deep copy before a refinement stage adds rows.
 // This prevents one candidate or bisection probe from mutating the shared base.
 func cloneLinearProblem(source LinearProblem) LinearProblem {
 	result := LinearProblem{

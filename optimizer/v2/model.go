@@ -181,24 +181,16 @@ func compileClassHardRows(compiled *CompiledModel, classIndex int) error {
 // are subtracted from each RHS; intent:true contributions retain their c_k
 // multiplier exactly once.
 func compileGlobalRows(compiled *CompiledModel) (Diagnostic, error) {
-	secondCoefficients := make(map[VariableID]float64)
-	fixedSecond := 0.0
-	for classIndex, class := range compiled.Prepared.Classes {
-		if !class.Intent {
-			fixedSecond += class.Probability * class.Buckets[0].SecondMoment
-			continue
-		}
-		for bucketIndex, bucket := range class.Buckets {
-			id := compiled.ClassVariables[classIndex][bucketIndex]
-			addCoefficient(secondCoefficients, id, class.Probability*bucket.SecondMoment)
-		}
+	secondTerms, fixedSecond, err := buildSecondMomentExpression(*compiled)
+	if err != nil {
+		return Diagnostic{}, err
 	}
 	overall := compiled.Prepared.Plan.Intent.Overall
 	expectedRTP := compiled.Prepared.ExpectedRTP()
 	meanSquare := expectedRTP * expectedRTP
 	lowerSecond := meanSquare * (1 + overall.CV.Min*overall.CV.Min)
 	upperSecond := meanSquare * (1 + overall.CV.Max*overall.CV.Max)
-	if len(secondCoefficients) == 0 {
+	if len(secondTerms) == 0 {
 		tolerance := scaledTolerance(compiled.Prepared.Plan.EngineOptions.FeasibilityTolerance, fixedSecond, lowerSecond, upperSecond)
 		if fixedSecond < lowerSecond-tolerance || fixedSecond > upperSecond+tolerance {
 			return supportDiagnostic(DiagnosticGlobalCVInfeasible, fmt.Sprintf("fixed empirical second moment %.12g is outside CV-derived range [%.12g, %.12g]", fixedSecond, lowerSecond, upperSecond), "overall.cv"), nil
@@ -208,14 +200,14 @@ func compileGlobalRows(compiled *CompiledModel) (Diagnostic, error) {
 	if err := addRow(&compiled.Hard, LinearRow{
 		ID: "global:cv:min", Family: "overall_cv", Origin: OriginDesignerHard,
 		YAMLPath: "overall.cv.min", Description: "unconditional second moment meets the configured minimum CV",
-		Sense: SenseGE, RHS: lowerSecond - fixedSecond, Terms: sortedTerms(secondCoefficients),
+		Sense: SenseGE, RHS: lowerSecond - fixedSecond, Terms: secondTerms,
 	}); err != nil {
 		return Diagnostic{}, err
 	}
 	if err := addRow(&compiled.Hard, LinearRow{
 		ID: "global:cv:max", Family: "overall_cv", Origin: OriginDesignerHard,
 		YAMLPath: "overall.cv.max", Description: "unconditional second moment meets the configured maximum CV",
-		Sense: SenseLE, RHS: upperSecond - fixedSecond, Terms: sortedTerms(secondCoefficients),
+		Sense: SenseLE, RHS: upperSecond - fixedSecond, Terms: secondTerms,
 	}); err != nil {
 		return Diagnostic{}, err
 	}

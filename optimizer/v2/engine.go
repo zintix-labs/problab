@@ -46,7 +46,7 @@ const (
 	metricMainProfileDeviation           = "main_profile_deviation_delta"
 	metricOtherBucketVisibility          = "other_bucket_visibility_rho"
 	metricMainGroupInternalVisibility    = "main_group_internal_visibility_rho"
-	metricCanonicalBucketProbabilities   = "canonical_bucket_probabilities"
+	metricCanonicalBucketProbabilities   = "unconditional_second_moment"
 	reasonNoSupportedOtherBuckets        = "no-supported-other-buckets"
 	reasonNoMainGroupWithMultipleSupport = "no-main-group-with-multiple-supported-buckets"
 )
@@ -493,62 +493,54 @@ func (e *IntentEngine) maximizeMainGroupInternalVisibility(
 	return locked, lockedWitness, report, EngineSolution{}, nil
 }
 
-// selectCanonicalBucketProbabilities performs stable lexicographic minimization over primary bucket
-// masses only. Each established minimum is locked with a one-sided numerical
-// allowance before the next solve. This chooses a deterministic serialization
-// representative and makes no player-experience optimality claim.
+// selectCanonicalBucketProbabilities selects a versioned representative by
+// minimum second moment (equivalently CV at fixed positive mean). The wire name
+// is retained for compatibility; it implies neither uniqueness nor lexicography.
 func (e *IntentEngine) selectCanonicalBucketProbabilities(
-	ctx context.Context,
-	compiled CompiledModel,
-	base LinearProblem,
-	witness SolveResult,
-	options SolveOptions,
-	observer OptimizationStageObserver,
+	ctx context.Context, compiled CompiledModel, base LinearProblem, witness SolveResult,
+	options SolveOptions, observer OptimizationStageObserver,
 ) (LinearProblem, SolveResult, CanonicalizationReport, EngineSolution, error) {
 	report := CanonicalizationReport{
 		Objective: string(StageSelectCanonicalBucketProbabilities),
-		Metric:    metricCanonicalBucketProbabilities, Direction: "lexicographically-minimize",
+		Metric:    metricCanonicalBucketProbabilities, Direction: "minimize",
 		PrimaryVariables: len(compiled.Primary),
 	}
 	stage := beginOptimizationStage(observer, StageSelectCanonicalBucketProbabilities, report.Objective, report.Metric)
 	defer stage.ensureTerminal()
-	problem := cloneLinearProblem(base)
-	current := witness
-	for primaryIndex, primary := range compiled.Primary {
-		result, err := e.solver.Solve(ctx, problem, LinearObjective{
-			Name: StageSelectCanonicalBucketProbabilities, Sense: Minimize, Origin: ObjectiveCanonicalBucketProbability,
-			Terms: []LinearTerm{{Variable: primary.ID, Coeff: 1}},
+	if err := validateFixedExpectation(compiled, base, options.FeasibilityTolerance); err != nil {
+		return LinearProblem{}, SolveResult{}, report, internalEngineFailure(err.Error(), witness.Evidence), nil
+	}
+	terms, fixed, err := buildSecondMomentExpression(compiled)
+	if err != nil {
+		return LinearProblem{}, SolveResult{}, report, internalEngineFailure(err.Error(), witness.Evidence), nil
+	}
+	result := witness
+	if len(compiled.Primary) > 0 {
+		result, err = e.solver.Solve(ctx, base, LinearObjective{
+			Name: StageSelectCanonicalBucketProbabilities, Sense: Minimize, Origin: ObjectiveCanonicalBucketProbability, Terms: terms,
 		}, options)
+		report.Solves = 1
 		if err != nil {
 			return LinearProblem{}, SolveResult{}, report, EngineSolution{}, err
 		}
-		report.Solves++
 		if result.Status != SolveOptimal {
-			return LinearProblem{}, SolveResult{}, report, contradictionFromKnownWitness(fmt.Sprintf("canonical bucket probability solve %d became infeasible or invalid", primaryIndex), result), nil
+			return LinearProblem{}, SolveResult{}, report, contradictionFromKnownWitness("minimum CV selection became infeasible or invalid", result), nil
 		}
-		column := -1
-		for i, variable := range problem.Variables {
-			if variable.ID == primary.ID {
-				column = i
-				break
-			}
-		}
-		if column < 0 {
-			return LinearProblem{}, SolveResult{}, report, internalEngineFailure(fmt.Sprintf("canonical variable %q is missing", primary.ID), result.Evidence), nil
-		}
-		lock := result.Values[column] + math.Max(options.FeasibilityTolerance, options.OptimalityTolerance)
-		if err := addRow(&problem, LinearRow{
-			ID: RowID(fmt.Sprintf("canonical-bucket-probability:primary-%04d:lock", primaryIndex)), Family: "canonical_bucket_probability", Origin: OriginCanonicalization,
-			ClassID: compiled.Prepared.Classes[primary.ClassIndex].ID, Description: "preserve the established lexicographic minimum of one primary bucket mass",
-			Sense: SenseLE, RHS: lock, Terms: []LinearTerm{{Variable: primary.ID, Coeff: 1}},
-		}); err != nil {
-			return LinearProblem{}, SolveResult{}, report, internalEngineFailure(err.Error(), result.Evidence), nil
-		}
-		current = result
-		stage.tick(report.Solves, len(compiled.Primary), solveStatusName(result.Status))
 	}
-	stage.finish("completed", report.Solves, nil, nil, nil, solveStatusName(current.Status), "")
-	return problem, current, report, EngineSolution{}, nil
+	second, cv, err := minimumCVStatistics(compiled, base, result.Values, terms, fixed, options.FeasibilityTolerance)
+	if err != nil {
+		result.Status = SolveNumericalFailure
+		return LinearProblem{}, SolveResult{}, report, contradictionFromKnownWitness(err.Error(), result), nil
+	}
+	report.Method = "min_cv"
+	report.SecondMoment = floatPointer(second)
+	report.CV = cv
+	report.CVDefined = cv != nil
+	if report.Solves > 0 {
+		stage.tick(1, 1, solveStatusName(result.Status))
+	}
+	stage.finish("completed", report.Solves, nil, nil, nil, solveStatusName(result.Status), "")
+	return base, result, report, EngineSolution{}, nil
 }
 
 // solveProbe executes one zero-objective feasibility problem while preserving

@@ -911,14 +911,18 @@ type BisectionReport struct {
 	Probes             int     `json:"probes"`
 }
 
-// CanonicalizationReport describes deterministic tie-breaking after every
+// CanonicalizationReport describes minimum-CV selection after every
 // higher-priority mathematical and neutral-preference lock is installed.
 type CanonicalizationReport struct {
-	Objective        string `json:"objective"`
-	Metric           string `json:"metric"`
-	Direction        string `json:"direction"`
-	PrimaryVariables int    `json:"primary_variables"`
-	Solves           int    `json:"solves"`
+	Method           string   `json:"method,omitempty"`
+	SecondMoment     *float64 `json:"second_moment,omitempty"`
+	CV               *float64 `json:"cv,omitempty"`
+	CVDefined        bool     `json:"cv_defined"`
+	Objective        string   `json:"objective"`
+	Metric           string   `json:"metric"`
+	Direction        string   `json:"direction"`
+	PrimaryVariables int      `json:"primary_variables"`
+	Solves           int      `json:"solves"`
 }
 
 // ClassIntentReport describes group-level Main profile quality and supported

@@ -348,7 +348,7 @@ func TestCLIProgressReporterNumbersTopLevelStageAndKeepsHeader(t *testing.T) {
 
 func TestCLIProgressReporterCanonicalBucketProgress(t *testing.T) {
 	for _, interactive := range []bool{true, false} {
-		for _, state := range []string{"completed", "failed"} {
+		for _, state := range []string{"completed", "failed", "canceled"} {
 			name := state + "/redirected"
 			if interactive {
 				name = state + "/interactive"
@@ -363,22 +363,26 @@ func TestCLIProgressReporterCanonicalBucketProgress(t *testing.T) {
 					BetMode: 0, State: "started",
 				}
 				reporter.Report(event)
-				body := "  step 5 Selecting canonical bucket probabilities (mode 0) ... "
+				body := "  step 5 Selecting bucket probabilities by minimum CV (mode 0) ... "
 				want := ""
 				if interactive {
 					want = body
 				}
-				for _, count := range []int{1, 37, 80} {
-					event.State, event.Probe, event.Total = "progress", count, 80
+				for _, count := range []int{1} {
+					event.State, event.Probe, event.Total = "progress", count, 1
 					reporter.Report(event)
 					if interactive {
-						want += fmt.Sprintf("\r\x1b[2K%s%d/80", body, count)
+						want += fmt.Sprintf("\r\x1b[2K%s%d/1", body, count)
 					}
 					if got := output.String(); got != want {
 						t.Fatalf("progress output=%q want=%q", got, want)
 					}
 				}
 				event.State = state
+				if state == "canceled" {
+					event.State = "failed"
+					event.Message = "context canceled"
+				}
 				event.Duration = 263300 * time.Millisecond
 				if state == "failed" {
 					event.Message = "solver stopped"
@@ -390,7 +394,7 @@ func TestCLIProgressReporterCanonicalBucketProgress(t *testing.T) {
 				if state == "completed" {
 					want += body + "success (4m23.3s)\n"
 				} else {
-					want += body + "failed: solver stopped\n"
+					want += body + "failed: " + event.Message + "\n"
 				}
 				if got := output.String(); got != want {
 					t.Fatalf("terminal output=%q want=%q", got, want)

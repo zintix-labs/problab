@@ -30,7 +30,7 @@
 # durations and progress events do not. Changing a seed, budget, tolerance, or
 # any Designer value therefore creates a different auditable run configuration.
 #
-# The solver uses a strict lexicographic sequence. Every later stage preserves
+# The solver uses a strict priority sequence. Every later stage preserves
 # the solution space locked by all earlier stages:
 #
 #   1. prove-hard-feasibility
@@ -58,10 +58,11 @@
 #      into Designer-authored intent.
 #
 #   5. select-canonical-bucket-probabilities
-#      Lexicographically minimize primary bucket masses in stable Class/bucket
-#      order to choose one deterministic serialization representative. This is
-#      not a player-experience score and makes no claim that the representative
-#      is more fun than another point in the same locked feasible space.
+#      Use one LP to minimize the unconditional second moment (minimum CV at
+#      fixed positive RTP), preserving all earlier locks and the CV hard range.
+#      This favors lower weighted within-Class variance, not a player-experience
+#      score. Multiple optima are accepted. Reproducibility is scoped to fixed
+#      inputs and execution environment, not different platforms/solver versions.
 #
 # An infeasible soft-stage probe is a normal bisection signal. It narrows the
 # bracket; it does not fail the Run, rewrite the YAML, or ask the Designer to

@@ -110,7 +110,7 @@ func TestRealSolverMainGroupVisibilityPreventsCanonicalZeroing(t *testing.T) {
 			t.Fatalf("bucket %d mass %.12g below locked floor %.12g", bucketIndex, mass, floor)
 		}
 	}
-	if solution.CanonicalBucketProbabilitySelection.Solves != 3 {
+	if solution.CanonicalBucketProbabilitySelection.Solves != 1 {
 		t.Fatalf("canonical report=%+v", solution.CanonicalBucketProbabilitySelection)
 	}
 	again, err := NewIntentEngine(NewGonumSolver()).Solve(context.Background(), compiled)
@@ -165,7 +165,7 @@ func fixedMultiGroupVisibilityModel() CompiledModel {
 	options.MainGroupInternalVisibilityBisectionIterations = 40
 	classes := []PreparedClass{
 		{
-			ID: "class-a", Index: 0, Intent: true,
+			ID: "class-a", Index: 0, Intent: true, Probability: .5,
 			Buckets: []PreparedBucket{
 				{Index: 0, Samples: []CollectedSample{{Snapshot: []byte("a0")}}, MainGroup: 0},
 				{Index: 1, Samples: []CollectedSample{{Snapshot: []byte("a1")}}, MainGroup: 0},
@@ -173,7 +173,7 @@ func fixedMultiGroupVisibilityModel() CompiledModel {
 			Groups: []PreparedGroup{{Index: 0, BucketIndexes: []int{0, 1}, PreferShare: 1}},
 		},
 		{
-			ID: "class-b", Index: 1, Intent: true,
+			ID: "class-b", Index: 1, Intent: true, Probability: .5,
 			Buckets: []PreparedBucket{
 				{Index: 0, Samples: []CollectedSample{{Snapshot: []byte("b0")}}, MainGroup: 0},
 				{Index: 1, Samples: []CollectedSample{{Snapshot: []byte("b1")}}, MainGroup: 0},
@@ -197,8 +197,10 @@ func fixedMultiGroupVisibilityModel() CompiledModel {
 		VariableIndex:  make(map[VariableID]int),
 	}
 	for classIndex, class := range classes {
+		norm := make([]LinearTerm, 0, len(class.Buckets))
 		for bucketIndex := range class.Buckets {
 			id := VariableID(fmt.Sprintf("p:%04d:%04d", classIndex, bucketIndex))
+			norm = append(norm, LinearTerm{Variable: id, Coeff: 1})
 			compiled.VariableIndex[id] = len(compiled.Hard.Variables)
 			compiled.Hard.Variables = append(compiled.Hard.Variables, LinearVariable{ID: id, Lower: 0, Upper: 1})
 			compiled.Hard.Rows = append(compiled.Hard.Rows, LinearRow{
@@ -209,6 +211,10 @@ func fixedMultiGroupVisibilityModel() CompiledModel {
 			compiled.ClassVariables[classIndex] = append(compiled.ClassVariables[classIndex], id)
 			compiled.Primary = append(compiled.Primary, PrimaryVariable{ID: id, ClassIndex: classIndex, BucketIndex: bucketIndex})
 		}
+		compiled.Hard.Rows = append(compiled.Hard.Rows,
+			LinearRow{ID: RowID(fmt.Sprintf("class:%04d:normalization", classIndex)), Sense: SenseEQ, RHS: 1, Terms: norm},
+			LinearRow{ID: RowID(fmt.Sprintf("class:%04d:mean", classIndex)), Sense: SenseEQ},
+		)
 	}
 	return compiled
 }

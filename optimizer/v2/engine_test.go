@@ -85,6 +85,17 @@ func (s *scriptedSolver) Solve(
 	}
 	if step.status == SolveOptimal {
 		result.Values = make([]float64, len(problem.Variables))
+		count := 0
+		for _, v := range problem.Variables {
+			if strings.HasPrefix(string(v.ID), "p:") {
+				count++
+			}
+		}
+		for i, v := range problem.Variables {
+			if strings.HasPrefix(string(v.ID), "p:") {
+				result.Values[i] = 1 / float64(count)
+			}
+		}
 	}
 	return result, nil
 }
@@ -101,6 +112,7 @@ func engineTestMainGroupModel(mainVisibilityIterations int) CompiledModel {
 		{Index: 1, Samples: []CollectedSample{{Snapshot: []byte{2}}}, RiskCap: math.Inf(1), MainGroup: 0},
 	}
 	compiled.Prepared.Classes[0].Groups[0].BucketIndexes = []int{0, 1}
+	compiled.Hard.Rows[0].Terms = []LinearTerm{{Variable: "p:0000:0000", Coeff: 1}, {Variable: "p:0000:0001", Coeff: 1}}
 	return compiled
 }
 
@@ -116,8 +128,8 @@ func (s *scriptedSolver) assertConsumed() {
 // engineTestModel builds the smallest semantic CompiledModel that exercises
 // Main profile refinement and canonicalization. When withOther is true it adds
 // one supported Other bucket so the model also exercises Other visibility. The hard rows are
-// intentionally empty: these tests isolate Engine stage policy, while model
-// compilation and numerical replay are covered by their own test suites.
+// limited to normalization and the exact zero mean: stage-policy fixtures
+// must still satisfy the minimum-CV fixed-expectation contract.
 func engineTestModel(withOther bool, profileIterations, visibilityIterations int) CompiledModel {
 	variables := []LinearVariable{{ID: "p:0000:0000", Lower: 0, Upper: 1}}
 	primary := []PrimaryVariable{{ID: "p:0000:0000", ClassIndex: 0, BucketIndex: 0}}
@@ -142,13 +154,22 @@ func engineTestModel(withOther bool, profileIterations, visibilityIterations int
 				OtherVisibilityBisectionIterations: visibilityIterations,
 			}},
 			Classes: []PreparedClass{{
-				ID: "class-0", Index: 0, Intent: true,
+				ID: "class-0", Index: 0, Intent: true, Probability: 1,
 				Buckets: buckets,
 				Groups:  []PreparedGroup{{Index: 0, BucketIndexes: []int{0}, PreferShare: 1}},
 				Others:  others,
 			}},
 		},
-		Hard:           LinearProblem{Variables: variables},
+		Hard: LinearProblem{Variables: variables, Rows: []LinearRow{
+			{ID: "class:0000:normalization", Sense: SenseEQ, RHS: 1, Terms: func() []LinearTerm {
+				terms := make([]LinearTerm, len(classVariables))
+				for i, id := range classVariables {
+					terms[i] = LinearTerm{Variable: id, Coeff: 1}
+				}
+				return terms
+			}()},
+			{ID: "class:0000:mean", Sense: SenseEQ, RHS: 0},
+		}},
 		Primary:        primary,
 		ClassVariables: [][]VariableID{classVariables},
 		VariableIndex: map[VariableID]int{
@@ -228,7 +249,7 @@ func TestIntentEngineTreatsMainProfileProbeInfeasibleAsBracketSignal(t *testing.
 // TestIntentEngineTreatsOtherVisibilityProbeInfeasibleAsBracketSignal proves that infeasible
 // rho probes tighten the maximizing bracket and preserve the known feasible
 // Main profile witness. The scripted probes establish rho* in [0.25, 0.5), after
-// which the tolerance lock and both primary canonical solves still run.
+// which the tolerance lock and one minimum-CV solve still run.
 func TestIntentEngineTreatsOtherVisibilityProbeInfeasibleAsBracketSignal(t *testing.T) {
 	solver := &scriptedSolver{t: t, steps: []solverStep{
 		{origin: ObjectiveHardFeasibility, status: SolveOptimal},
@@ -240,7 +261,6 @@ func TestIntentEngineTreatsOtherVisibilityProbeInfeasibleAsBracketSignal(t *test
 		{origin: ObjectiveOtherBucketVisibilityProbe, status: SolveInfeasible}, // rho = 0.5
 		{origin: ObjectiveOtherBucketVisibilityProbe, status: SolveOptimal},    // rho = 0.25
 		{origin: ObjectiveIntentRefinement, status: SolveOptimal},              // fixed rho = 0.24
-		{origin: ObjectiveCanonicalBucketProbability, status: SolveOptimal},
 		{origin: ObjectiveCanonicalBucketProbability, status: SolveOptimal},
 	}}
 
@@ -303,7 +323,6 @@ func TestIntentEngineMaximizesMainGroupInternalVisibilityBeforeCanonicalSelectio
 		{origin: ObjectiveMainGroupInternalVisibilityProbe, name: StageMaximizeMainGroupInternalVisibility, status: SolveInfeasible},
 		{origin: ObjectiveMainGroupInternalVisibilityProbe, name: StageMaximizeMainGroupInternalVisibility, status: SolveOptimal},
 		{origin: ObjectiveIntentRefinement, name: StageMaximizeMainGroupInternalVisibility, status: SolveOptimal},
-		{origin: ObjectiveCanonicalBucketProbability, name: StageSelectCanonicalBucketProbabilities, status: SolveOptimal},
 		{origin: ObjectiveCanonicalBucketProbability, name: StageSelectCanonicalBucketProbabilities, status: SolveOptimal},
 	}
 	solver := &scriptedSolver{t: t, steps: steps}
@@ -377,7 +396,6 @@ func TestIntentEngineMainGroupVisibilityRhoOneSkipsIntermediateBisection(t *test
 		{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveOptimal}, // rho=0 is an actual solve
 		{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveOptimal}, // rho=1
 		{origin: ObjectiveIntentRefinement, status: SolveOptimal},
-		{origin: ObjectiveCanonicalBucketProbability, status: SolveOptimal},
 		{origin: ObjectiveCanonicalBucketProbability, status: SolveOptimal},
 	}}
 	result, err := NewIntentEngine(solver).Solve(context.Background(), engineTestMainGroupModel(7))
