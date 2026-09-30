@@ -14,16 +14,25 @@
 
 package ops
 
-import "github.com/zintix-labs/problab/spec"
+import (
+	"github.com/zintix-labs/problab/sdk/layer"
+	"github.com/zintix-labs/problab/spec"
+)
 
 // FillScreen 堆疊補盤：配合 Gravity 使用，從 fillIdx 開始往上補
+// 負值格不補圖，也不消耗輪帶位置。
 //
 //   - screen: 盤面 (原地修改)
 //   - reels: 補盤用的輪帶
 //   - fillIdxBuf: 每行開始補的位置 (通常由 Gravity 回傳)
 //   - reelPosIdx: 每行目前輪帶讀取到的位置 (Stateful，會被修改)
 //   - cols: 盤面寬度
-func FillScreen(screen []int16, reels *spec.ReelSet, fillIdxBuf []int, reelPosIdx []int, cols int) {
+//
+// 可選 layers 將補入位置重置為各自的預設值；未傳入時只操作 screen。
+// 跳過負值格；新圖標的遊戲狀態由呼叫者之後設定。
+// Layer 須無別名；長度不符或 nil 在任何寫入前 panic，其餘參數沿用 FillScreen 契約。
+func FillScreen(screen []int16, reels *spec.ReelSet, fillIdxBuf []int, reelPosIdx []int, cols int, layers ...layer.SyncOps) {
+	validateLayers(screen, layers)
 	for c, startRowPtr := range fillIdxBuf {
 		// 如果該行滿了 (startRowPtr < 0)，就跳過
 		if startRowPtr < 0 {
@@ -36,6 +45,9 @@ func FillScreen(screen []int16, reels *spec.ReelSet, fillIdxBuf []int, reelPosId
 
 		// 從起始點往上補到頂 (0)
 		for w := startRowPtr; w >= 0; w -= cols {
+			if screen[w] < 0 {
+				continue
+			}
 			currentReelPos-- // 先--
 			// 處理輪帶回捲
 			if currentReelPos < 0 {
@@ -43,6 +55,11 @@ func FillScreen(screen []int16, reels *spec.ReelSet, fillIdxBuf []int, reelPosId
 			}
 			// 填值
 			screen[w] = int16(strip[currentReelPos])
+			if len(layers) != 0 {
+				for _, lr := range layers {
+					lr.ResetIdx(w)
+				}
+			}
 		}
 		// 更新狀態回 caller
 		reelPosIdx[c] = currentReelPos
@@ -57,7 +74,11 @@ func FillScreen(screen []int16, reels *spec.ReelSet, fillIdxBuf []int, reelPosId
 //   - reelPosIdx: 每行目前輪帶讀取到的位置 (Stateful，會被修改)
 //   - cols: 盤面寬度
 //   - rows: 盤面高度
-func FillScreenByHole(screen []int16, reels *spec.ReelSet, reelPosIdx []int, cols int, rows int) {
+//
+// 可選 layers 只重置實際補入的零值格，保留既有圖標與負值格的狀態。
+// Layer 與初始化責任同 FillScreen；輪帶消耗與原入口一致。
+func FillScreenByHole(screen []int16, reels *spec.ReelSet, reelPosIdx []int, cols int, rows int, layers ...layer.SyncOps) {
+	validateLayers(screen, layers)
 	for c := 0; c < cols; c++ {
 		currentReelPos := reelPosIdx[c]
 		strip := reels.Reels[c].ReelSymbols
@@ -73,6 +94,11 @@ func FillScreenByHole(screen []int16, reels *spec.ReelSet, reelPosIdx []int, col
 					currentReelPos = stripLen - 1
 				}
 				screen[idx] = int16(strip[currentReelPos])
+				if len(layers) != 0 {
+					for _, lr := range layers {
+						lr.ResetIdx(idx)
+					}
+				}
 			}
 		}
 		reelPosIdx[c] = currentReelPos

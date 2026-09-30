@@ -15,11 +15,48 @@
 package calc
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/spec"
 )
+
+func TestCalculatorsExcludeNegativeCells(t *testing.T) {
+	for _, tc := range []struct {
+		mode   string
+		screen []int16
+		want   int
+	}{
+		{"count", []int16{0, 0, 0, -1, -32768}, 7},
+		{"line_ltr", []int16{0, 0, 0, -1, 0}, 7},
+		{"line_ltr", []int16{-2, 0, 0, 0, 0}, 0},
+		{"line_rtl", []int16{0, -2, 0, 0, 0}, 7},
+		{"way_ltr", []int16{0, 0, 0, -1, 0}, 7},
+		{"way_rtl", []int16{0, -2, 0, 0, 0}, 7},
+		{"cluster", []int16{0, 0, 0, -1, 0}, 7},
+		{"cluster", []int16{0, 0, -2, 0, 0}, 0},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			gms := buildGameModeSetting(5, 1, tc.mode, [][]int16{{0, 0, 0, 0, 0}}, []string{"H1"}, [][]int{{0, 0, 7, 11, 19}})
+			sc := NewScreenCalculator(&gms)
+			gmr := buf.NewGameModeResult(0, &gms, 4, 4)
+			before := slices.Clone(tc.screen)
+			sc.CalcScreen(1, tc.screen, gmr)
+			if gmr.GetTmpWin() != tc.want {
+				t.Fatalf("win=%d want=%d", gmr.GetTmpWin(), tc.want)
+			}
+			if !slices.Equal(before, tc.screen) {
+				t.Fatal("calculator changed screen")
+			}
+			for _, i := range gmr.HitMapTmp() {
+				if tc.screen[i] < 0 {
+					t.Fatal("negative cell in hitmap")
+				}
+			}
+		})
+	}
+}
 
 func buildGameModeSetting(cols, rows int, betType string, lineTable [][]int16, symbolUsed []string, payTable [][]int) spec.GameModeSetting {
 	return spec.GameModeSetting{
