@@ -135,6 +135,9 @@ exports the collection directly (`rgs-collected`) or solves and verifies a
 distribution before export. Results go to `output.directory`; see the configuration
 comments for output options.
 
+For your own application, use [`optimizer/v2/cli.Run`](optimizer/v2/cli) with
+your configuration bytes, Problab instance, collection tags, and result converter.
+
 ---
 
 ## Typical Use Cases

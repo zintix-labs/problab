@@ -1,5 +1,3 @@
-//go:build !poc
-
 // Copyright 2025 Zintix Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package cli
 
 import (
-	"encoding/csv"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	optimizerv2 "github.com/zintix-labs/problab/optimizer/v2"
 )
 
@@ -57,6 +54,7 @@ const (
 // in-place rewrites: sub-steps print their final "... success (<dur>)" line
 // directly and collection falls back to bounded ten-percent milestone logs.
 type cliProgressReporter struct {
+	mu             sync.Mutex
 	output         io.Writer
 	interactive    bool
 	renderedLines  int
@@ -75,18 +73,15 @@ type cliProgressReporter struct {
 	replayInline bool
 }
 
-// newCLIProgressReporter detects a character-device stderr without importing a
-// terminal package. Failure to inspect the file is conservative: the reporter
-// switches to append-only milestone logs, which never emit ANSI cursor codes.
+// newCLIProgressReporter refreshes only a real terminal supplied directly as
+// *os.File. Files, pipes, wrapped writers and failed probes use append-only logs.
 func newCLIProgressReporter(output io.Writer) *cliProgressReporter {
 	reporter := &cliProgressReporter{
 		output:         output,
 		lastMilestones: make(map[string]int),
 	}
-	if file, ok := output.(*os.File); ok {
-		if info, err := file.Stat(); err == nil {
-			reporter.interactive = info.Mode()&os.ModeCharDevice != 0
-		}
+	if file, ok := output.(*os.File); ok && file != nil {
+		reporter.interactive = isatty.IsTerminal(file.Fd())
 	}
 	return reporter
 }
@@ -99,6 +94,8 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 	if r == nil || r.output == nil {
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	// A well-formed replay stream always ends with completed or warning. Keep a
 	// defensive newline here so an interrupted/custom Reporter event cannot
 	// cause the next unrelated stage to be printed in the middle of its row.
@@ -611,214 +608,6 @@ func formatStageDuration(duration time.Duration) string {
 // or the publication state of a successfully generated mode. The verified bucket
 // distribution is written to a file by writeModeDistributionCSVs, not printed,
 // so a successful run leaves a clean terminal.
-func reportV2Outcome(output io.Writer, result optimizerv2.RunResult) {
-	if output == nil {
-		return
-	}
-	for _, export := range result.Report.RGSExports {
-		_, _ = fmt.Fprintf(output, "[RGS/%s] %s records=%d/%d\n", export.Family, export.State, export.Records, export.Total)
-		for _, file := range export.Files {
-			_, _ = fmt.Fprintf(output, "  %s (%d bytes)\n", file.Path, file.Bytes)
-		}
-		if export.Error != "" {
-			_, _ = fmt.Fprintf(output, "  %s\n", export.Error)
-		}
-	}
-	if result.Status == optimizerv2.StatusExported {
-		_, _ = fmt.Fprintln(output, "[Result] Exported; LP and distribution verification were not requested.")
-		return
-	}
-
-	for _, mode := range result.Report.Modes {
-		if mode.Distribution.Source == optimizerv2.DistributionSourcePointProbabilities {
-			_, _ = fmt.Fprintf(output, "[Distribution] mode %d: optimized point probabilities (not alias marginals)\n", mode.BetMode)
-		}
-	}
-	for _, advisory := range result.Report.Advisories {
-		_, _ = fmt.Fprintf(output, "[Advisory/%s] %s\n", advisory.Code, advisory.Message)
-		if len(advisory.SourcePaths) > 0 {
-			_, _ = fmt.Fprintf(output, "  config location: %s\n", strings.Join(advisory.SourcePaths, ", "))
-		}
-	}
-	if !result.Succeeded() {
-		stopping := make([]optimizerv2.Diagnostic, 0, len(result.Diagnostics))
-		for _, diagnostic := range result.Diagnostics {
-			if diagnostic.StopsRun() {
-				stopping = append(stopping, diagnostic)
-			}
-		}
-		if len(stopping) == 0 {
-			_, _ = fmt.Fprintf(output, "[Result] Failed (%s): no diagnostics available\n", result.Status)
-			return
-		}
-
-		if len(stopping) == 1 {
-			_, _ = fmt.Fprintf(output, "[Result] Failed (%s / %s): 1 localized problem found\n", result.Status, stopping[0].Code)
-		} else {
-			_, _ = fmt.Fprintf(output, "[Result] Failed (%s): %d localized problems found\n", result.Status, len(stopping))
-		}
-		for index, diagnostic := range stopping {
-			_, _ = fmt.Fprintf(
-				output,
-				"  %d. [%s] %s\n",
-				index+1,
-				diagnostic.Code,
-				diagnostic.Message,
-			)
-			if diagnostic.Requested != nil {
-				_, _ = fmt.Fprintf(output, "     required range: %s\n", formatDiagnosticBound(*diagnostic.Requested))
-			}
-			if diagnostic.Achievable != nil {
-				_, _ = fmt.Fprintf(output, "     achievable range: %s\n", formatDiagnosticBound(*diagnostic.Achievable))
-			}
-			if diagnostic.Deficit > 0 {
-				_, _ = fmt.Fprintf(output, "     minimum required gap: %.12g\n", diagnostic.Deficit)
-			}
-			if len(diagnostic.SourcePaths) > 0 {
-				_, _ = fmt.Fprintf(output, "     config location: %s\n", strings.Join(diagnostic.SourcePaths, ", "))
-			}
-		}
-		return
-	}
-
-	publication := result.Report.Publication
-	if publication == nil {
-		_, _ = fmt.Fprintln(output, "[Result] Generation succeeded")
-		return
-	}
-	if publication.State == optimizerv2.PublicationManifestPublished {
-		if publication.ManifestPath == "" {
-			_, _ = fmt.Fprintf(output, "[Result] mode %d generated; all-format output bundles produced\n", publication.BetMode)
-			return
-		}
-		_, _ = fmt.Fprintf(
-			output,
-			"[Result] mode %d generated; all-format output bundles produced; Artifact v1 manifest: %s\n",
-			publication.BetMode,
-			publication.ManifestPath,
-		)
-		return
-	}
-	if publication.State == optimizerv2.PublicationOutputsPublished {
-		_, _ = fmt.Fprintf(output, "[Result] mode %d generated; all-format output bundles produced\n", publication.BetMode)
-		return
-	}
-	_, _ = fmt.Fprintf(
-		output,
-		"[Result] mode %d generated and staged; missing mode %v, output bundle incomplete\n",
-		publication.BetMode,
-		publication.MissingModes,
-	)
-}
-
-// writeModeDistributionCSVs persists the verified distribution of each
-// generated mode as one CSV beneath directory, keeping the terminal clean while
-// still giving Designers the actual runtime distribution. Both conditional and
-// unconditional Bucket probabilities are emitted so a within-Class shape is
-// never confused with a whole-game hit rate. Per-seed probability summarizes
-// the uniform allocation within each Bucket; median and mean describe its
-// empirical sample payout multipliers.
-// It returns the paths it wrote, in mode order.
-func writeModeDistributionCSVs(directory string, modes []optimizerv2.ModeRunReport) ([]string, error) {
-	written := make([]string, 0, len(modes))
-	for _, mode := range modes {
-		report := mode.Distribution
-		if len(report.Classes) == 0 {
-			continue
-		}
-		if err := os.MkdirAll(directory, 0o755); err != nil {
-			return written, fmt.Errorf("create distribution output directory %q: %w", directory, err)
-		}
-		path := filepath.Join(directory, fmt.Sprintf("distribution_mode_%d.csv", report.BetMode))
-		if report.Source == optimizerv2.DistributionSourcePointProbabilities {
-			path = filepath.Join(directory, fmt.Sprintf("distribution_points_mode_%d.csv", report.BetMode))
-		}
-		if err := writeModeDistributionCSV(path, report); err != nil {
-			return written, err
-		}
-		written = append(written, path)
-	}
-	return written, nil
-}
-
-func writeModeDistributionCSV(path string, report optimizerv2.BucketDistributionReport) (err error) {
-	file, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("create distribution file %q: %w", path, err)
-	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close distribution file %q: %w", path, closeErr)
-		}
-	}()
-
-	writer := csv.NewWriter(file)
-	_ = writer.Write([]string{
-		"class",
-		"bucket",
-		"class_global_probability",
-		"conditional_probability",
-		"unconditional_probability",
-		"median",
-		"mean",
-		"seed_count",
-		"seed_probability",
-		"collision_probability",
-		"draws_at_collision_probability",
-	})
-	collision := strconv.FormatFloat(report.CollisionProbability, 'g', 6, 64)
-	for _, class := range report.Classes {
-		classProbability := strconv.FormatFloat(class.Probability, 'g', 9, 64)
-		for _, bucket := range class.Buckets {
-			_ = writer.Write([]string{
-				class.Class,
-				formatBucketInterval(bucket),
-				classProbability,
-				strconv.FormatFloat(bucket.ConditionalProbability, 'g', 9, 64),
-				strconv.FormatFloat(bucket.UnconditionalProbability, 'g', 9, 64),
-				strconv.FormatFloat(bucket.Median, 'g', 9, 64),
-				strconv.FormatFloat(bucket.Mean, 'g', 9, 64),
-				strconv.Itoa(bucket.SeedCount),
-				strconv.FormatFloat(bucket.SeedProbability, 'e', 9, 64),
-				collision,
-				formatCollisionDraws(bucket.DrawsAtCollisionProbability),
-			})
-		}
-	}
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return fmt.Errorf("write distribution file %q: %w", path, err)
-	}
-	return nil
-}
-
-// formatBucketInterval mirrors the configured classifier: every controlled
-// Bucket is [lower, upper) except the final one, while empirical-uniform Classes
-// use one inclusive interval.
-func formatBucketInterval(bucket optimizerv2.BucketProbabilityReport) string {
-	closing := ")"
-	if bucket.UpperInclusive {
-		closing = "]"
-	}
-	return fmt.Sprintf("[%.9g, %.9g%s", bucket.Lower, bucket.Upper, closing)
-}
-
-func formatCollisionDraws(draws float64) string {
-	if draws <= 0 {
-		return "never"
-	}
-	return fmt.Sprintf("%.0f", draws)
-}
-
-// formatDiagnosticBound keeps exact points compact while still distinguishing
-// them from inclusive intervals in the operator-facing failure report.
-func formatDiagnosticBound(bound optimizerv2.Bound) string {
-	if bound.Min == bound.Max {
-		return fmt.Sprintf("%.12g", bound.Min)
-	}
-	return fmt.Sprintf("[%.12g, %.12g]", bound.Min, bound.Max)
-}
-
 func (r *cliProgressReporter) reportRGS(event optimizerv2.StageEvent) {
 	switch event.State {
 	case "progress":

@@ -174,6 +174,9 @@ Optimizer 会验证配置并收集结果；选择 `rgs-collected` 时直接导�
 其他模式则求解并验证目标分布后导出。结果写入 `output.directory`，
 输出选项请参考配置注释。
 
+自行组装应用时，使用 [`optimizer/v2/cli.Run`](optimizer/v2/cli)，
+传入配置内容、Problab 实例、收集标签与结果转换器即可。
+
 ---
 
 ## 快速开始

@@ -1,5 +1,3 @@
-//go:build !poc
-
 // Copyright 2025 Zintix Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,11 +16,30 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
 	optimizerv2 "github.com/zintix-labs/problab/optimizer/v2"
 )
+
+func TestMainRejectsArgumentsSubprocess(t *testing.T) {
+	if os.Getenv("PROBLAB_TEST_OPT_MAIN") == "1" {
+		os.Args = []string{"opt", "unsupported"}
+		main()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMainRejectsArgumentsSubprocess$")
+	cmd.Env = append(os.Environ(), "PROBLAB_TEST_OPT_MAIN=1")
+	out, err := cmd.CombinedOutput()
+	if e, ok := err.(*exec.ExitError); !ok || e.ExitCode() != 1 {
+		t.Fatalf("err=%v output=%s", err, out)
+	}
+	if !strings.Contains(string(out), "does not accept command-line parameters") {
+		t.Fatalf("output=%s", out)
+	}
+}
 
 // TestLoadV2ConfigUsesOnlyEmbeddedIntentPlans proves the command-owned YAML is
 // the complete execution source. Every declared plan is directly resolvable;
@@ -30,7 +47,11 @@ import (
 func TestLoadV2ConfigUsesOnlyEmbeddedIntentPlans(t *testing.T) {
 	t.Parallel()
 
-	config, err := loadV2Config()
+	raw, err := embeddedV2Config.ReadFile(embeddedConfigName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := optimizerv2.ParseConfig(raw)
 	if err != nil {
 		t.Fatalf("loadV2Config: %v", err)
 	}
@@ -50,55 +71,6 @@ func TestLoadV2ConfigUsesOnlyEmbeddedIntentPlans(t *testing.T) {
 			resolved.Plan.Seed.Kind() != plan.Seed.Kind() || !bytes.Equal(resolved.Plan.Seed.Bytes(), plan.Seed.Bytes()) {
 			t.Fatalf("plan %q was not used directly from embedded config: resolved=%+v source=%+v", plan.ID, resolved.Plan, plan)
 		}
-	}
-}
-
-// TestParseEmbeddedConfigContentFailuresAreTyped retains the command boundary's
-// distinction between strict-schema decoding and semantic validation without
-// reintroducing an external-config runtime path.
-func TestParseEmbeddedConfigContentFailuresAreTyped(t *testing.T) {
-	canonical, err := embeddedV2Config.ReadFile(embeddedConfigName)
-	if err != nil {
-		t.Fatalf("read embedded %s: %v", embeddedConfigName, err)
-	}
-
-	tests := []struct {
-		name      string
-		content   []byte
-		want      string
-		wantStage string
-	}{
-		{
-			name:      "unknown field",
-			content:   append(append([]byte(nil), canonical...), []byte("\nunexpected_embedded_field: true\n")...),
-			want:      "unexpected_embedded_field",
-			wantStage: "load-config",
-		},
-		{
-			name:      "semantic invalid",
-			content:   []byte(strings.Replace(string(canonical), "version: 2", "version: 999", 1)),
-			want:      "version",
-			wantStage: "static-validation",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := parseV2ConfigBytes(test.content, `embedded "opt_cfg.yaml"`)
-			if err == nil {
-				t.Fatal("parseV2ConfigBytes succeeded")
-			}
-			if !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error=%q, want %q", err, test.want)
-			}
-			if got := invalidV2ConfigStage(err); got != test.wantStage {
-				t.Fatalf("invalid stage=%q, want %q", got, test.wantStage)
-			}
-			result := configInvalidRunResult(err, test.wantStage, 0)
-			if result.Status != optimizerv2.StatusInfeasibleConfig ||
-				len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != optimizerv2.DiagnosticConfigInvalid {
-				t.Fatalf("typed result=%+v", result)
-			}
-		})
 	}
 }
 
