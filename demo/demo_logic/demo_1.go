@@ -174,19 +174,19 @@ func (g *game0001) getBaseResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameMod
 				break
 			}
 			// 4. record win
-			gmr.AddAct(buf.FinishAct, "win", nil, nil)
+			gmr.AddAct(buf.FinishStep, "win", nil, nil)
 
 			// 5. clear hit symbol on screen
 			ops.Clear(screen, hit)
-			gmr.AddAct(buf.FinishStep, "clear", screen, nil)
+			gmr.AddAct(buf.FinishAct, "clear", screen, nil)
 
 			// 6. gravity
 			ops.Gravity(screen, sg.Cols, sg.Rows, g.fixed.screenFillPos)
-			gmr.AddAct(buf.FinishStep, "gravity", screen, nil)
+			gmr.AddAct(buf.FinishAct, "gravity", screen, nil)
 
 			// 7. fill screen
 			ops.FillScreen(screen, fillReelSet, g.fixed.screenFillPos, g.fixed.fillReelsIdx, sg.Cols)
-			gmr.AddAct(buf.FinishStep, "fillscreen", screen, nil)
+			gmr.AddAct(buf.FinishAct, "fillscreen", screen, nil)
 		}
 
 		// trigger
@@ -231,19 +231,19 @@ func (g *game0001) getFreeResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameMod
 				break
 			}
 			// 4. record win
-			gmr.AddAct(buf.FinishAct, "win", nil, nil)
+			gmr.AddAct(buf.FinishStep, "win", nil, nil)
 
 			// 5. clear hit symbol on screen
 			ops.Clear(screen, hit)
-			gmr.AddAct(buf.FinishStep, "clear", screen, nil)
+			gmr.AddAct(buf.FinishAct, "clear", screen, nil)
 
 			// 6. gravity
 			ops.Gravity(screen, sg.Cols, sg.Rows, g.fixed.screenFillPos)
-			gmr.AddAct(buf.FinishStep, "gravity", screen, nil)
+			gmr.AddAct(buf.FinishAct, "gravity", screen, nil)
 
 			// 7. fill screen
 			ops.FillScreen(screen, fillReelSet, g.fixed.screenFillPos, g.fixed.fillReelsIdx, sg.Cols)
-			gmr.AddAct(buf.FinishStep, "fillscreen", screen, nil)
+			gmr.AddAct(buf.FinishAct, "fillscreen", screen, nil)
 		}
 		gmr.FinishRound()
 	}
