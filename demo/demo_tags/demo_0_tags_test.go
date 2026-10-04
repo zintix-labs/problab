@@ -15,13 +15,14 @@
 package demo_tags
 
 import (
+	"testing"
+
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/tag"
-	"testing"
 )
 
 func TestDemo0CollectionTags(t *testing.T) {
-	r, err := tag.NewRegistry(GameTags[0])
+	r, err := tag.NewRegistry(Catalog[0])
 	if err != nil {
 		t.Fatal(err)
 	}
