@@ -1,0 +1,33 @@
+# One deterministic non-simulator machine; RNG continues across players/groups.
+# Only complete-result games without checkpoints are supported in phase 1.
+game_id: 0
+# Integer retains int64 seed semantics. Also accepts "utf8:..." or "hex:...".
+seed: 77
+analysis:
+  - name: monotone
+    ci: confidence_99 # confidence_95 (default) or confidence_99
+    player:
+      players: 1000
+      init_bet: 300 # Initial balance = this value * game BetUnits[0].
+      strategy: monotone # Fixed wager; target is 3x initial balance, at most 5000 spins (demo/demo_strategies/game_0.go).
+    win_buckets: [0, 0.5, 1, 2, 5, 10]
+    events: # First match only; predicates within tags are AND-ed.
+      - event: zero_win
+        win_range: [0, 0]
+      - event: small_win
+        win_range: [0, 0.5] # (0,0.5); zero is its own bucket.
+        tags: [bg] # Demo-owned tag, not a playerexp built-in.
+      - event: large_win
+        win_range: [10, null] # [10,+Inf).
+  - name: higher_bet
+    ci: confidence_99
+    player:
+      players: 1000
+      init_bet: 300
+      strategy: higher_bet
+    win_buckets: [0, 0.5, 1, 2, 5, 10]
+    events:
+      - event: below_two
+        win_range: [0, 2] # Includes zero and all buckets below 2.
+# No configurable max_spin: 20,000 completed rounds per player is the fixed
+# finite-experience boundary. Use Simulator for long-run distribution studies.

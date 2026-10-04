@@ -16,13 +16,38 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/zintix-labs/problab"
 	optimizerv2 "github.com/zintix-labs/problab/optimizer/v2"
 )
+
+func TestRunV2UsesInjectedLabFactory(t *testing.T) {
+	// Do not parallelize: this test temporarily replaces the composition point.
+	original := pLab
+	t.Cleanup(func() { pLab = original })
+	sentinel := errors.New("private runtime construction failed")
+	calls := 0
+	pLab = func() (*problab.Problab, error) {
+		calls++
+		return nil, sentinel
+	}
+	var stdout, stderr bytes.Buffer
+	code, err := runV2(nil, &stdout, &stderr)
+	if code != 1 || !errors.Is(err, sentinel) || calls != 1 {
+		t.Fatalf("code=%d err=%v factory calls=%d", code, err, calls)
+	}
+	if !strings.HasPrefix(err.Error(), "construct Problab: ") {
+		t.Fatalf("missing project-neutral construction context: %v", err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("unexpected output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
 
 func TestMainRejectsArgumentsSubprocess(t *testing.T) {
 	if os.Getenv("PROBLAB_TEST_OPT_MAIN") == "1" {
@@ -47,7 +72,7 @@ func TestMainRejectsArgumentsSubprocess(t *testing.T) {
 func TestLoadV2ConfigUsesOnlyEmbeddedIntentPlans(t *testing.T) {
 	t.Parallel()
 
-	raw, err := embeddedV2Config.ReadFile(embeddedConfigName)
+	raw, err := optConfig.ReadFile(embeddedConfigName)
 	if err != nil {
 		t.Fatal(err)
 	}

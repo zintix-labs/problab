@@ -15,6 +15,8 @@
 package problab
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/zintix-labs/problab/dto"
@@ -64,18 +66,24 @@ type OptimalRuntime struct {
 }
 
 type Machine struct {
-	gameName    string              // 遊戲名稱（來自 GameSetting.GameName，主要用於觀測/日誌）
-	gameId      spec.GID            // 遊戲 ID（Catalog 內唯一；用於路由與查表）
-	core        *core.Core          // RNG 核心（PRNG + Snapshot/Restore 合約；熱路徑會頻繁取樣）
-	gh          *slot.Game          // 遊戲執行核心（Slot 邏輯入口；由 LogicRegistry + GameSetting 組裝）
-	BetUnits    []int               // 押注單位（由遊戲設定衍生；通常給外部列舉 UI/測試）
-	SpinRequest *buf.SpinRequest    // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
-	SpinResult  *buf.SpinResult     // 可重用的結果 buffer（熱路徑；每次 Spin 會覆寫）
-	mu          sync.Mutex          // 防併發鎖：保護可重用 buffers 與核心狀態一致性
-	rngMode     rngMode             // deterministic 或 production new-cycle reseed lifecycle
-	poolSlot    uint64              // MachinePool 的穩定 slot identity；非 pool Machine 為 0
-	poolGen     uint64              // 此 slot 的重建 generation；非 pool Machine 為 0
-	optimal     *optimalrt.Artifact // Problab instance 共用的不可變優化資料
+	// Offline buffers are borrowed until the next call, protected by mu.
+	// Keep selector/start, selected seed and after-state storage disjoint:
+	// third-party PRNG snapshots may alias their own reusable scratch buffer.
+	offlineRequest                          buf.SpinRequest
+	offlineState                            buf.SpinState
+	offlineStart, offlineSeed, offlineAfter []byte
+	gameName                                string              // 遊戲名稱（來自 GameSetting.GameName，主要用於觀測/日誌）
+	gameId                                  spec.GID            // 遊戲 ID（Catalog 內唯一；用於路由與查表）
+	core                                    *core.Core          // RNG 核心（PRNG + Snapshot/Restore 合約；熱路徑會頻繁取樣）
+	gh                                      *slot.Game          // 遊戲執行核心（Slot 邏輯入口；由 LogicRegistry + GameSetting 組裝）
+	BetUnits                                []int               // 押注單位（由遊戲設定衍生；通常給外部列舉 UI/測試）
+	SpinRequest                             *buf.SpinRequest    // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
+	SpinResult                              *buf.SpinResult     // 可重用的結果 buffer（熱路徑；每次 Spin 會覆寫）
+	mu                                      sync.Mutex          // 防併發鎖：保護可重用 buffers 與核心狀態一致性
+	rngMode                                 rngMode             // deterministic 或 production new-cycle reseed lifecycle
+	poolSlot                                uint64              // MachinePool 的穩定 slot identity；非 pool Machine 為 0
+	poolGen                                 uint64              // 此 slot 的重建 generation；非 pool Machine 為 0
+	optimal                                 *optimalrt.Artifact // Problab instance 共用的不可變優化資料
 }
 
 type rngMode uint8
@@ -231,6 +239,84 @@ func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
 	m.SpinRequest.BetMult = 1
 	m.SpinRequest.Bet = m.BetUnits[betMode]
 	return m.gh.GetResult(m.SpinRequest)
+}
+
+// UsesOptimal reports the loaded runtime source, not merely a config flag.
+func (m *Machine) UsesOptimal() bool { return m.optimal != nil }
+
+// SpinOffline executes a deterministic new spin with a validated wager. It is
+// for sequential offline tools, not production requests or checkpoint recovery.
+// The result and its nested buffers are borrowed until the next Machine call.
+// Callers must not share this Machine or retain/mutate its borrowed result.
+func (m *Machine) SpinOffline(betMode, betMult int) (result *buf.SpinResult, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.rngMode != rngDeterministic {
+		return nil, fmt.Errorf("SpinOffline requires a deterministic machine")
+	}
+	if betMode < 0 || betMode >= len(m.BetUnits) || betMult <= 0 {
+		return nil, fmt.Errorf("invalid offline wager: mode=%d mult=%d", betMode, betMult)
+	}
+	unit := m.BetUnits[betMode]
+	if unit <= 0 || betMult > int(^uint(0)>>1)/unit {
+		return nil, fmt.Errorf("invalid or overflowing offline wager")
+	}
+	m.offlineRequest = buf.SpinRequest{GameId: m.gameId, GameName: m.gameName,
+		BetMode: betMode, BetMult: betMult, Bet: unit * betMult}
+	req := &m.offlineRequest
+	var seed []byte
+	if m.optimal != nil {
+		seed, err = m.optimal.PickSeed(betMode, m.core)
+		if err != nil {
+			return nil, fmt.Errorf("pick optimal seed: %w", err)
+		}
+		m.offlineSeed = append(m.offlineSeed[:0], seed...)
+		seed = m.offlineSeed
+	}
+	start, err := m.SnapshotCore()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot before offline spin: %w", err)
+	}
+	// A third-party PRNG may reuse its snapshot buffer on the next call.
+	m.offlineStart = append(m.offlineStart[:0], start...)
+	start = m.offlineStart
+	if m.optimal != nil {
+		selectionState := start
+		defer func() {
+			p := recover()
+			restoreErr := m.RestoreCore(selectionState)
+			if p != nil {
+				if restoreErr != nil {
+					panic(errors.Join(fmt.Errorf("game panic: %v", p), restoreErr))
+				}
+				panic(p)
+			}
+			if restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore selection stream: %w", restoreErr))
+				result = nil
+			}
+		}()
+		if err = m.RestoreCore(seed); err != nil {
+			return nil, fmt.Errorf("restore optimal seed: %w", err)
+		}
+		start = seed
+	}
+	result = m.gh.GetResult(req)
+	if result == nil {
+		return nil, fmt.Errorf("offline game returned nil result")
+	}
+	after, err := m.SnapshotCore()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot after offline spin: %w", err)
+	}
+	if result.State == nil {
+		m.offlineState = buf.SpinState{}
+		result.State = &m.offlineState
+	}
+	m.offlineAfter = append(m.offlineAfter[:0], after...)
+	result.State.StartCoreSnap = start
+	result.State.AfterCoreSnap = m.offlineAfter
+	return result, nil
 }
 
 func (m *Machine) valid(req *dto.SpinRequest) error {

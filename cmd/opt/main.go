@@ -23,20 +23,22 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/demo"
-	"github.com/zintix-labs/problab/demo/demo_logic/game_tags"
+	"github.com/zintix-labs/problab/demo/demo_tags"
 	"github.com/zintix-labs/problab/dto"
 	optimizercli "github.com/zintix-labs/problab/optimizer/v2/cli"
+	"github.com/zintix-labs/problab/sdk/tag"
 )
 
 const embeddedConfigName = "opt_cfg.yaml"
 
-// These two package variables are the command's only application-owned
+// These package variables are the command's application-owned
 // injection points. A fork repoints them at its own implementation without
 // editing runV2, optimizer/v2, or the embedded YAML; the values below are the
 // defaults that ship with the demo build.
 var (
-	// gameTags is a game_tags.GameTagCatalog, i.e.
+	// gameTags is a tag.GameTagCatalog, i.e.
 	// map[spec.GID]map[string]tag.IsTag, where each tag.IsTag is a
 	// func(*buf.SpinResult) bool predicate. WithCollectionTags stores it on the
 	// Collector and resolves it per plan against that plan's target game, so a
@@ -46,16 +48,16 @@ var (
 	// opt_cfg.yaml; bg and fg are demo-defined predicates, not built-ins.
 	//
 	// To supply your own, build a catalog in your own package and assign it
-	// here, mirroring demo/demo_logic/game_tags:
+	// here, mirroring demo/demo_tags:
 	//
 	//	// mygame/tags.go
 	//	func IsFreeSpins(sr *buf.SpinResult) bool { ... }
-	//	var Tags = game_tags.GameTagCatalog{
+	//	var Tags = tag.GameTagCatalog{
 	//		7: {"free_spins": IsFreeSpins},
 	//	}
 	//
-	//	gameTags game_tags.GameTagCatalog = mygame.Tags
-	gameTags game_tags.GameTagCatalog = game_tags.GameTags
+	//	gameTags tag.GameTagCatalog = mygame.Tags
+	gameTags tag.GameTagCatalog = demo_tags.Catalog
 
 	// useConverter is a dto.ResultConverter, i.e.
 	// func(dto.SpinResult) (json.RawMessage, error). WithResultConverter binds
@@ -79,6 +81,11 @@ var (
 	//
 	//	useConverter dto.ResultConverter = resultconverter.Convert
 	useConverter dto.ResultConverter = dto.IdentityConverter
+
+	// pLab constructs your project's game runtime and registrations.
+	// Optimizer collection explicitly uses unoptimized machines.
+	// This command owns and closes the returned Lab.
+	pLab func() (*problab.Problab, error) = demo.NewProbLab
 )
 
 // main is deliberately a thin composition root: it loads the command-owned
@@ -108,13 +115,13 @@ func runV2(arguments []string, _ io.Writer, stderr io.Writer) (int, error) {
 		)
 	}
 
-	raw, err := embeddedV2Config.ReadFile(embeddedConfigName)
+	raw, err := optConfig.ReadFile(embeddedConfigName)
 	if err != nil {
 		return 1, fmt.Errorf("read embedded config: %w", err)
 	}
-	lab, err := demo.NewProbLab()
+	lab, err := pLab()
 	if err != nil {
-		return 1, fmt.Errorf("construct demo Problab: %w", err)
+		return 1, fmt.Errorf("construct Problab: %w", err)
 	}
 	defer func() { _ = lab.Close() }()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

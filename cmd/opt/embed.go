@@ -16,8 +16,8 @@ package main
 
 import "embed"
 
-// embeddedV2Config contains the command's optimizer v2 configuration.
+// optConfig contains the command's optimizer v2 configuration.
 // Every declared RunPlan is executed through the shared CLI facade.
 //
 //go:embed opt_cfg.yaml
-var embeddedV2Config embed.FS
+var optConfig embed.FS

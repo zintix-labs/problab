@@ -8,7 +8,14 @@ import (
 	"fmt"
 
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/spec"
 )
+
+// GameTagCatalog groups named predicates by game ID.
+// Names are game-scoped; the catalog does not register tags automatically.
+// Applications assemble it and inject it into consumers.
+// Do not mutate its maps while consumers are running.
+type GameTagCatalog map[spec.GID]map[string]IsTag
 
 // IsTag inspects a borrowed result. Predicates must not mutate it and must be
 // safe for concurrent calls when their BitSet is shared by workers.

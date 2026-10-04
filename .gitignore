@@ -23,6 +23,7 @@
 build/bin/*
 build/profiling/*
 build/optimizer/*
+build/exp/*
 
 # scripts
 scripts/bin/*

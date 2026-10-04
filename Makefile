@@ -74,7 +74,7 @@ OPS_SRC = $(wildcard scripts/*.go)
 # -----------------------------------------------------------------------------
 # .PHONY
 # -----------------------------------------------------------------------------
-.PHONY: all build run bin clean help h svr dev
+.PHONY: all build run bin clean help h svr dev exp
 .PHONY: pprof read-pprof heap read-heap allocs read-allocs pgo
 .PHONY: test test-all test-detail
 .PHONY: docker-build docker-run docker-sh docker-clean docker-prune
@@ -127,6 +127,10 @@ dev:
 ## Optimizer
 opt:
 	@go run ./cmd/opt
+
+## Finite player experience analysis (embedded cmd/exp/exp_cfg.yaml)
+exp:
+	@go run ./cmd/exp
 
 ## clean go cache & build
 clean: 
@@ -256,6 +260,7 @@ help:
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "run" "Run simulation using 'go run'"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "dev" "Open Dev Web Panel at http://localhost:5808/dev"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "opt" "Run optimizer"
+	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "exp" "Analyze finite player experiences (cmd/exp/exp_cfg.yaml)"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "svr" "Start HTTP server using 'go run ./cmd/svr'"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "bin" "Run compiled binary (faster startup)"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "clean" "Remove build artifacts and cache"

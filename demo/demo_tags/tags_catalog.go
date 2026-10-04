@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package game_tags
+package demo_tags
 
 import (
 	"github.com/zintix-labs/problab/sdk/tag"
-	"github.com/zintix-labs/problab/spec"
 )
 
-type GameTagCatalog map[spec.GID]map[string]tag.IsTag
-
-// GameTags binds each game's collection tag set to its spec.GID. This is the
-// one place in the repository that owns this binding — per-game tag files
-var GameTags = GameTagCatalog{
+// Catalog assembles the demo's game-scoped predicates for explicit injection.
+// Per-game files define predicates; this catalog binds them to game IDs.
+var Catalog = tag.GameTagCatalog{
 	0: Demo_0_Tags,
 }

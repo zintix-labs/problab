@@ -177,6 +177,11 @@ Optimizer 会验证配置并收集结果；选择 `rgs-collected` 时直接导�
 自行组装应用时，使用 [`optimizer/v2/cli.Run`](optimizer/v2/cli)，
 传入配置内容、Problab 实例、收集标签与结果转换器即可。
 
+### 有限玩家体验（`playerexp` + `cmd/exp`）
+
+编辑 `cmd/exp/exp_cfg.yaml`，注入适用游戏的策略与标签后执行 `make exp`，
+CSV 报告输出至 `build/exp`。组装方式与第一期边界见 [playerexp](playerexp/README.md)。
+
 ---
 
 ## 快速开始

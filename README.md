@@ -138,6 +138,12 @@ comments for output options.
 For your own application, use [`optimizer/v2/cli.Run`](optimizer/v2/cli) with
 your configuration bytes, Problab instance, collection tags, and result converter.
 
+### Finite player experience (`playerexp` + `cmd/exp`)
+
+Edit `cmd/exp/exp_cfg.yaml`, register your game-specific strategies/tags, then run
+`make exp` to export player-experience CSV reports to `build/exp`. See
+[playerexp](playerexp/README.md) for composition and phase-one boundaries.
+
 ---
 
 ## Typical Use Cases
