@@ -362,8 +362,15 @@ func replaySemanticSolution(problem LinearProblem, values []float64, tolerance f
 		if !math.IsInf(variable.Upper, 1) {
 			violation = math.Max(violation, value-variable.Upper)
 		}
+		allowed := scaledTolerance(tolerance, variable.Lower, variable.Upper)
+		if !isFinite(violation) || !isFinite(allowed) {
+			// A non-finite intermediate is never acceptance (techspec §4.1).
+			maxBoundViolation = math.Inf(1)
+			pass = false
+			continue
+		}
 		maxBoundViolation = math.Max(maxBoundViolation, violation)
-		if violation > scaledTolerance(tolerance, variable.Lower, variable.Upper) {
+		if violation > allowed {
 			pass = false
 		}
 	}
@@ -382,8 +389,18 @@ func replaySemanticSolution(problem LinearProblem, values []float64, tolerance f
 		case SenseGE:
 			violation = math.Max(row.RHS-lhs, 0)
 		}
+		allowed := scaledTolerance(tolerance, lhs, row.RHS)
+		if !isFinite(lhs) || !isFinite(violation) || !isFinite(allowed) {
+			// An overflowed sum (+Inf, or NaN from Inf−Inf, possibly hidden by
+			// a fused multiply-add) must not pass as satisfied: every accepted
+			// point then has finite intermediates, which the evidence envelope
+			// relies on (techspec §4.1).
+			maxRowViolation = math.Inf(1)
+			pass = false
+			continue
+		}
 		maxRowViolation = math.Max(maxRowViolation, violation)
-		if violation > scaledTolerance(tolerance, lhs, row.RHS) {
+		if violation > allowed {
 			pass = false
 		}
 	}

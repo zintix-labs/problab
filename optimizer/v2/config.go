@@ -249,6 +249,9 @@ func validateEngineOptions(options EngineOptions) error {
 			return invalid(field.path, "must be finite and greater than zero")
 		}
 	}
+	if err := validateEvidenceTolerance(options.FeasibilityTolerance); err != nil {
+		return invalid("engine_options.feasibility_tolerance", "%s", err.Error())
+	}
 	if options.QuantileEpsilon >= 0.5 {
 		return invalid("engine_options.quantile_epsilon", "must be less than 0.5 so the strict lower-median side remains meaningful")
 	}
