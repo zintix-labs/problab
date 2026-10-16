@@ -1,0 +1,502 @@
+{
+  "version": "slow-solve-v1",
+  "encoding": "float64-shortest-roundtrip-v1",
+  "stage": "maximize-main-group-internal-visibility",
+  "source": "sigma-min",
+  "class": 2,
+  "class_count": 3,
+  "probe": "3.0517578125e-05",
+  "solve_index": 556,
+  "engine_version": "intent-lp-v2.9.0",
+  "solver": "*v2.experimentTimeoutSolver",
+  "backend_version": "gonum.org/v1/gonum/v0.16.0",
+  "transform_version": "intent-lp-v2/gonum-standard-form-v2",
+  "options": {
+    "feasibility_tolerance": "1e-09",
+    "optimality_tolerance": "1e-09"
+  },
+  "problem": {
+    "encoding": "float64-shortest-roundtrip-v1",
+    "variables": [
+      {
+        "id": "p:0001:0000",
+        "lower": "0",
+        "upper": "1"
+      },
+      {
+        "id": "p:0001:0001",
+        "lower": "0",
+        "upper": "1"
+      },
+      {
+        "id": "p:0001:0002",
+        "lower": "0",
+        "upper": "1"
+      },
+      {
+        "id": "p:0001:0003",
+        "lower": "0",
+        "upper": "1"
+      },
+      {
+        "id": "p:0001:0004",
+        "lower": "0",
+        "upper": "1"
+      },
+      {
+        "id": "d:main:0001:0000",
+        "lower": "0",
+        "upper": "+Inf"
+      },
+      {
+        "id": "d:main:0001:0001",
+        "lower": "0",
+        "upper": "+Inf"
+      }
+    ],
+    "rows": [
+      {
+        "id": "class:0001:normalization",
+        "family": "normalization",
+        "origin": "SystemInvariant",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1]",
+        "sense": 0,
+        "rhs": "1",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0003",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0004",
+            "coeff": "1"
+          }
+        ]
+      },
+      {
+        "id": "class:0001:mean",
+        "family": "class_mean",
+        "origin": "DesignerHard",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.exp",
+        "sense": 0,
+        "rhs": "2",
+        "terms": [
+          {
+            "variable": "p:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "2"
+          },
+          {
+            "variable": "p:0001:0003",
+            "coeff": "3"
+          },
+          {
+            "variable": "p:0001:0004",
+            "coeff": "4"
+          }
+        ]
+      },
+      {
+        "id": "class:0001:median:lower",
+        "family": "class_median",
+        "origin": "DesignerHard",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.median[0]",
+        "sense": 1,
+        "rhs": "0.499999999",
+        "terms": []
+      },
+      {
+        "id": "class:0001:median:upper",
+        "family": "class_median",
+        "origin": "DesignerHard",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.median[1]",
+        "sense": 2,
+        "rhs": "0.5",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0003",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0004",
+            "coeff": "1"
+          }
+        ]
+      },
+      {
+        "id": "class:0001:main:min",
+        "family": "main_total",
+        "origin": "DesignerHard",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.subjective.main_experience.probability.min",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "1"
+          }
+        ]
+      },
+      {
+        "id": "class:0001:main:max",
+        "family": "main_total",
+        "origin": "DesignerHard",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.subjective.main_experience.probability.max",
+        "sense": 1,
+        "rhs": "1",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "1"
+          }
+        ]
+      },
+      {
+        "id": "class:0001:main:guardrail:0000",
+        "family": "main_group_guardrail",
+        "origin": "DerivedSemanticGuardrail",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.subjective.main_experience.groups[0]",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0003",
+            "coeff": "-0.5"
+          },
+          {
+            "variable": "p:0001:0004",
+            "coeff": "-0.5"
+          }
+        ]
+      },
+      {
+        "id": "class:0001:main:guardrail:0001",
+        "family": "main_group_guardrail",
+        "origin": "DerivedSemanticGuardrail",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.subjective.main_experience.groups[1]",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "p:0001:0002",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0003",
+            "coeff": "-0.5"
+          },
+          {
+            "variable": "p:0001:0004",
+            "coeff": "-0.5"
+          }
+        ]
+      },
+      {
+        "id": "main-profile-deviation:class-0001:group-0000:positive",
+        "family": "main_profile_deviation",
+        "origin": "DesignerPreference",
+        "class_id": "class-001",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "d:main:0001:0000",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0000",
+            "coeff": "-0.33333333333333337"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "-0.33333333333333337"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "0.6666666666666666"
+          }
+        ]
+      },
+      {
+        "id": "main-profile-deviation:class-0001:group-0000:negative",
+        "family": "main_profile_deviation",
+        "origin": "DesignerPreference",
+        "class_id": "class-001",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "d:main:0001:0000",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0000",
+            "coeff": "0.33333333333333337"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "0.33333333333333337"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "-0.6666666666666666"
+          }
+        ]
+      },
+      {
+        "id": "main-profile-deviation:class-0001:group-0001:positive",
+        "family": "main_profile_deviation",
+        "origin": "DesignerPreference",
+        "class_id": "class-001",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "d:main:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0000",
+            "coeff": "0.3333333333333333"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "0.3333333333333333"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "-0.6666666666666667"
+          }
+        ]
+      },
+      {
+        "id": "main-profile-deviation:class-0001:group-0001:negative",
+        "family": "main_profile_deviation",
+        "origin": "DesignerPreference",
+        "class_id": "class-001",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "d:main:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0000",
+            "coeff": "-0.3333333333333333"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "-0.3333333333333333"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "0.6666666666666667"
+          }
+        ]
+      },
+      {
+        "id": "main-profile-deviation:class-0001:fixed-delta",
+        "family": "main_profile_deviation_lock",
+        "origin": "DesignerPreference",
+        "class_id": "class-001",
+        "sense": 1,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "d:main:0001:0000",
+            "coeff": "1"
+          },
+          {
+            "variable": "d:main:0001:0001",
+            "coeff": "1"
+          },
+          {
+            "variable": "p:0001:0000",
+            "coeff": "-1.3333333335859754"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "-1.3333333335859754"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "-1.3333333335859754"
+          }
+        ]
+      },
+      {
+        "id": "other-bucket-visibility:class-0001:bucket-0003:fixed-rho",
+        "family": "other_bucket_visibility",
+        "origin": "SystemNeutralPreference",
+        "class_id": "class-001",
+        "sense": 2,
+        "rhs": "0.499999995",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "0.499999995"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "0.499999995"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "0.499999995"
+          },
+          {
+            "variable": "p:0001:0003",
+            "coeff": "1"
+          }
+        ]
+      },
+      {
+        "id": "other-bucket-visibility:class-0001:bucket-0004:fixed-rho",
+        "family": "other_bucket_visibility",
+        "origin": "SystemNeutralPreference",
+        "class_id": "class-001",
+        "sense": 2,
+        "rhs": "0.499999995",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "0.499999995"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "0.499999995"
+          },
+          {
+            "variable": "p:0001:0002",
+            "coeff": "0.499999995"
+          },
+          {
+            "variable": "p:0001:0004",
+            "coeff": "1"
+          }
+        ]
+      },
+      {
+        "id": "main-group-internal-visibility:class-0001:group-0000:bucket-0000:fixed-rho",
+        "family": "main_group_internal_visibility",
+        "origin": "SystemNeutralPreference",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.subjective.main_experience.groups[0]",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "0.9999847412109375"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "-1.52587890625e-05"
+          }
+        ]
+      },
+      {
+        "id": "main-group-internal-visibility:class-0001:group-0000:bucket-0001:fixed-rho",
+        "family": "main_group_internal_visibility",
+        "origin": "SystemNeutralPreference",
+        "class_id": "class-001",
+        "yaml_path": "intents.model-test.classes[1].design.subjective.main_experience.groups[0]",
+        "sense": 2,
+        "rhs": "0",
+        "terms": [
+          {
+            "variable": "p:0001:0000",
+            "coeff": "-1.52587890625e-05"
+          },
+          {
+            "variable": "p:0001:0001",
+            "coeff": "0.9999847412109375"
+          }
+        ]
+      }
+    ]
+  },
+  "objective": {
+    "name": "maximize-main-group-internal-visibility",
+    "sense": 0,
+    "origin": "DiagnosticBound",
+    "terms": [
+      {
+        "variable": "p:0001:0001",
+        "coeff": "0.3"
+      },
+      {
+        "variable": "p:0001:0002",
+        "coeff": "1.2"
+      },
+      {
+        "variable": "p:0001:0003",
+        "coeff": "2.6999999999999997"
+      },
+      {
+        "variable": "p:0001:0004",
+        "coeff": "4.8"
+      }
+    ]
+  }
+}

@@ -65,10 +65,17 @@ type engineRun struct {
 	emitMu      sync.Mutex
 	current     solveContext
 	solveIndex  int
-	slowSolves  int
 	evidenceDir string
 	options     SolveOptions
 	counters    EvidenceCounters
+
+	// The two sets of techspec §4.6: accept (internal) judges every
+	// witness and is what probe and lock certificates prove empty;
+	// hardProof (external, the production replay) is what a hard
+	// INFEASIBLE_MODEL certificate proves empty.
+	accept     acceptanceRule
+	probeProof acceptanceRule
+	hardProof  acceptanceRule
 }
 
 func (e *IntentEngine) newRun(compiled CompiledModel, observer OptimizationStageObserver) *engineRun {
@@ -76,13 +83,21 @@ func (e *IntentEngine) newRun(compiled CompiledModel, observer OptimizationStage
 	if dir == "" && compiled.Prepared.Plan.Plan.Output.Directory != "" {
 		dir = filepath.Join(compiled.Prepared.Plan.Plan.Output.Directory, evidenceSubdirectory)
 	}
-	return &engineRun{engine: e, compiled: compiled, observer: observer, evidenceDir: dir,
+	run := &engineRun{engine: e, compiled: compiled, observer: observer, evidenceDir: dir,
 		options: SolveOptions{
 			FeasibilityTolerance: compiled.Prepared.Plan.EngineOptions.FeasibilityTolerance,
 			OptimalityTolerance:  compiled.Prepared.Plan.EngineOptions.OptimalityTolerance,
 		},
 		counters: EvidenceCounters{WitnessAttempts: map[string]int{}, WitnessFound: map[string]int{}},
 	}
+	run.useTolerance(run.options.FeasibilityTolerance)
+	return run
+}
+
+// useTolerance sets the replay tolerance τ and the two sets derived from it.
+func (r *engineRun) useTolerance(tau float64) {
+	r.options.FeasibilityTolerance = tau
+	r.accept, r.probeProof, r.hardProof = internalRule(tau), internalRule(tau), productRule(tau)
 }
 
 // emit serializes every observer call (engine thread and watcher goroutines)
@@ -126,6 +141,7 @@ func (r *engineRun) Solve(ctx context.Context, problem LinearProblem, objective 
 		return SolveResult{}, err
 	}
 	r.solveIndex++
+	r.counters.Solves++
 	index := r.solveIndex
 	meta := r.current
 	// Own immutable input copy: the watcher reads only this.
@@ -159,7 +175,7 @@ func (r *engineRun) Solve(ctx context.Context, problem LinearProblem, objective 
 	finished.Path = savedPath
 	finished.Status = solveStatusName(result.Status)
 	if finished.Duration >= r.engine.slowThreshold() {
-		r.slowSolves++
+		r.counters.SlowSolves++
 	}
 	r.emit(finished)
 	if err == nil {

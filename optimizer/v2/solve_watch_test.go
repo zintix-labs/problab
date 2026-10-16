@@ -213,8 +213,8 @@ func TestWatchedSolveSlowHintSavesAndCleansUp(t *testing.T) {
 		record.EngineVersion != engineImplementationVersion || record.Options["feasibility_tolerance"] != "1e-09" {
 		t.Fatalf("saved record incomplete: %+v %v", record, err)
 	}
-	if run.slowSolves != 1 {
-		t.Fatalf("slow solve count = %d", run.slowSolves)
+	if run.counters.SlowSolves != 1 || run.counters.Solves != 1 {
+		t.Fatalf("solve counters = %+v", run.counters)
 	}
 }
 

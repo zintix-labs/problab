@@ -16,10 +16,16 @@ package v2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
 )
+
+// errModelStructure marks a broken semantic model (bad Class split, builder
+// failure). Stages turn it into INTERNAL_ERROR; any other error is
+// cancellation or a broken dependency and is propagated unchanged.
+var errModelStructure = errors.New("model structure")
 
 // Exact completion thresholds (techspec §8.1). They are rationals: 1e-8 as a
 // float64 is not 10⁻⁸, and completion is never decided in floating point.
@@ -38,9 +44,6 @@ func requiredMinimumCVGap(candidate *big.Rat) *big.Rat {
 const (
 	cvMinRowID RowID = "global:cv:min"
 	cvMaxRowID RowID = "global:cv:max"
-
-	sigmaMinSource = "sigma-min"
-	sigmaMaxSource = "sigma-max"
 
 	splitRuleVersion = "class-id-rows-v1"
 )
@@ -127,8 +130,9 @@ func splitByClass(problem LinearProblem, classes []PreparedClass) ([]classSubpro
 // bound of one linear objective over the envelope of its bound problem.
 type objectiveBoundEvidence struct {
 	problem     LinearProblem
-	terms       []LinearTerm // objective over problem's variables
-	direction   string       // "upper" or "lower"
+	rule        acceptanceRule // envelope rule the bound holds over
+	terms       []LinearTerm   // objective over problem's variables
+	direction   string         // "upper" or "lower"
 	rows        []rowSide
 	multipliers []*big.Rat
 	value       *big.Rat
@@ -137,7 +141,8 @@ type objectiveBoundEvidence struct {
 // cvDisjointEvidence is a type-C certificate: the summed outer σ intervals of
 // every Class miss the relaxed global CV range on one side (techspec §6.3).
 type cvDisjointEvidence struct {
-	side    string // "lower": Σlo_out > U_relaxed; "upper": Σhi_out < L_relaxed
+	side    string         // "lower": Σlo_out > U_relaxed; "upper": Σhi_out < L_relaxed
+	rule    acceptanceRule // shared by relaxed and every Class bound
 	cvRow   LinearRow
 	cvVars  []LinearVariable
 	relaxed *big.Rat
@@ -160,7 +165,6 @@ type jointDecision struct {
 	safeLowerS *big.Rat
 	gapS       *big.Rat
 	requiredS  *big.Rat
-	improved   bool
 }
 
 // gapMet reports whether the minimum-CV gap is proven within its requirement.
@@ -182,7 +186,7 @@ func (d jointDecision) betterGap(other jointDecision) bool {
 func (r *engineRun) decideJoint(ctx context.Context, problem LinearProblem, stage OptimizationStageID, origin ObjectiveOrigin, probe *float64, minCV bool, start []float64) (jointDecision, error) {
 	subs, global, err := splitByClass(problem, r.compiled.Prepared.Classes)
 	if err != nil {
-		return jointDecision{}, err
+		return jointDecision{}, fmt.Errorf("%w: %v", errModelStructure, err)
 	}
 	witnesses := make([][]float64, len(subs))
 	for i, sub := range subs {
@@ -200,7 +204,9 @@ func (r *engineRun) decideJoint(ctx context.Context, problem LinearProblem, stag
 		}
 		witnesses[i] = result.witness
 	}
-	if len(global) == 0 {
+	// Without CV rows the Classes are independent. Minimum CV still has to
+	// minimize σ unless the second moment is fully fixed (S = F).
+	if len(global) == 0 && (!minCV || len(r.sigmaOf(problem)) == 0) {
 		joint := assemble(problem, subs, witnesses, witnesses, 0)
 		if !r.replayAccepts(problem, joint) {
 			return jointDecision{classification: classification{class: evidenceUnknown, reasons: []string{"assembled joint witness failed replay"}}}, nil
@@ -214,30 +220,7 @@ func (r *engineRun) decideJoint(ctx context.Context, problem LinearProblem, stag
 		}
 		return decision, nil
 	}
-	decision, err := r.couple(ctx, problem, subs, witnesses, stage, probe, minCV, start, false)
-	if err != nil {
-		return jointDecision{}, err
-	}
-	if decision.class != evidenceUnknown && (!minCV || decision.class != evidenceFeasible || decision.gapMet()) {
-		return decision, nil
-	}
-	r.counters.SigmaEndpointImprovements++
-	improved, err := r.couple(ctx, problem, subs, witnesses, stage, probe, minCV, start, true)
-	if err != nil {
-		return jointDecision{}, err
-	}
-	improved.improved = true
-	decision.improved = true
-	if decision.class == evidenceUnknown {
-		if improved.class != evidenceUnknown {
-			return improved, nil
-		}
-		return decision, nil
-	}
-	if improved.betterGap(decision) {
-		return improved, nil
-	}
-	return decision, nil
+	return r.couple(ctx, problem, subs, witnesses, stage, probe, minCV, start)
 }
 
 func (r *engineRun) fixedSecond() *big.Rat {
@@ -248,24 +231,24 @@ func (r *engineRun) fixedSecond() *big.Rat {
 	return ratOf(fixed)
 }
 
-// couple is one pass of the §6.3 coupling decision with σ endpoints from
-// Gonum (preferExact=false) or from the exact inner optimum (true).
+// couple is the §6.3 coupling decision.
 func (r *engineRun) couple(ctx context.Context, problem LinearProblem, subs []classSubproblem, witnesses [][]float64,
-	stage OptimizationStageID, probe *float64, minCV bool, start []float64, preferExact bool,
+	stage OptimizationStageID, probe *float64, minCV bool, start []float64,
 ) (jointDecision, error) {
-	sigma := sigmaCoefficients(problem)
+	sigma := r.sigmaOf(problem)
 	intervals := make([]classInterval, len(subs))
 	for i, sub := range subs {
 		where := solveContext{stage: stage, class: sub.position, classCount: len(subs), probe: probe}
-		interval, err := r.classInterval(ctx, sub, sigma, witnesses[i], where, preferExact)
+		interval, err := r.classInterval(ctx, sub, sigma, witnesses[i], where)
 		if err != nil {
 			return jointDecision{}, err
 		}
 		intervals[i] = interval
 	}
-	lower, upper, err := r.relaxedCVRange(problem)
+	rule := r.proofRule(stage)
+	lower, upper, err := r.relaxedCVRange(problem, rule)
 	if err != nil {
-		return jointDecision{}, err
+		return jointDecision{}, fmt.Errorf("%w: %v", errModelStructure, err)
 	}
 	sumLoIn, sumHiIn := new(big.Rat), new(big.Rat)
 	sumLoOut, sumHiOut := new(big.Rat), new(big.Rat)
@@ -281,10 +264,10 @@ func (r *engineRun) couple(ctx context.Context, problem LinearProblem, subs []cl
 		sumHiOut = ratAdd(sumHiOut, interval.hiOut.value)
 	}
 	if outerComplete && upper.present && sumLoOut.Cmp(upper.relaxed) > 0 {
-		return disjoint("lower", upper, intervals, func(c classInterval) objectiveBoundEvidence { return *c.loOut }), nil
+		return disjoint("lower", rule, upper, intervals, func(c classInterval) objectiveBoundEvidence { return *c.loOut }), nil
 	}
 	if outerComplete && lower.present && sumHiOut.Cmp(lower.relaxed) < 0 {
-		return disjoint("upper", lower, intervals, func(c classInterval) objectiveBoundEvidence { return *c.hiOut }), nil
+		return disjoint("upper", rule, lower, intervals, func(c classInterval) objectiveBoundEvidence { return *c.hiOut }), nil
 	}
 	// Aim at max(L_T, Σlo_in) clamped into the inner range; acceptance is the
 	// joint replay, not exact interval arithmetic.
@@ -347,19 +330,19 @@ func (r *engineRun) couple(ctx context.Context, problem LinearProblem, subs []cl
 	return decision, nil
 }
 
-func disjoint(side string, limit relaxedLimit, intervals []classInterval, pick func(classInterval) objectiveBoundEvidence) jointDecision {
-	evidence := &cvDisjointEvidence{side: side, cvRow: limit.row, cvVars: limit.vars, relaxed: limit.relaxed}
+func disjoint(side string, rule acceptanceRule, limit relaxedLimit, intervals []classInterval, pick func(classInterval) objectiveBoundEvidence) jointDecision {
+	evidence := &cvDisjointEvidence{side: side, rule: rule, cvRow: limit.row, cvVars: limit.vars, relaxed: limit.relaxed}
 	for _, interval := range intervals {
 		evidence.classes = append(evidence.classes, pick(interval))
 	}
 	return jointDecision{classification: classification{class: evidenceInfeasible,
-		evidence: &infeasibilityEvidence{kind: evidenceKindCVDisjoint, cv: evidence}}}
+		evidence: &infeasibilityEvidence{kind: evidenceKindCVDisjoint, rule: rule, cv: evidence}}}
 }
 
 // classInterval computes inner (replayed witnesses) and outer (exact dual
 // bounds, type D) σ intervals of one Class subproblem.
 func (r *engineRun) classInterval(ctx context.Context, sub classSubproblem, sigma map[VariableID]float64,
-	fallback []float64, where solveContext, preferExact bool,
+	fallback []float64, where solveContext,
 ) (classInterval, error) {
 	var terms []LinearTerm
 	coefficients := map[int]*big.Rat{}
@@ -378,7 +361,7 @@ func (r *engineRun) classInterval(ctx context.Context, sub classSubproblem, sigm
 	}
 	var interval classInterval
 	for _, sense := range []ObjectiveSense{Minimize, Maximize} {
-		x, err := r.sigmaEndpoint(ctx, sub.problem, terms, coefficients, sense, where, preferExact)
+		x, err := r.sigmaEndpoint(ctx, sub.problem, coefficients, sense)
 		if err != nil {
 			return classInterval{}, err
 		}
@@ -393,7 +376,8 @@ func (r *engineRun) classInterval(ctx context.Context, sub classSubproblem, sigm
 	}
 	started := time.Now()
 	defer func() { r.counters.ExactBoundTime += time.Since(started) }()
-	model, _, err := buildEnvelope(sub.problem, r.tau())
+	rule := r.proofRule(where.stage)
+	model, _, err := buildEnvelopeRule(sub.problem, rule)
 	if err != nil {
 		return interval, nil // no outer interval: decisions stay on the safe side
 	}
@@ -415,7 +399,7 @@ func (r *engineRun) classInterval(ctx context.Context, sub classSubproblem, sigm
 		if !result.check.valid {
 			continue
 		}
-		bound := &objectiveBoundEvidence{problem: sub.problem, terms: terms, direction: direction,
+		bound := &objectiveBoundEvidence{problem: sub.problem, rule: rule, terms: terms, direction: direction,
 			rows: modelRowSides(model), multipliers: result.multipliers, value: result.check.value}
 		if direction == "lower" {
 			interval.loOut = bound
@@ -434,44 +418,33 @@ func modelRowSides(model exactModel) []rowSide {
 	return rows
 }
 
-// sigmaEndpoint returns a replayed minimizer or maximizer of σ on one Class,
-// from Gonum or from the exact optimum of the inner model.
-func (r *engineRun) sigmaEndpoint(ctx context.Context, problem LinearProblem, terms []LinearTerm, coefficients map[int]*big.Rat,
-	sense ObjectiveSense, where solveContext, preferExact bool,
-) ([]float64, error) {
-	gonum := func() ([]float64, error) {
-		where.source = sigmaMinSource
-		if sense == Maximize {
-			where.source = sigmaMaxSource
-		}
-		r.at(where)
-		result, err := r.Solve(ctx, problem, LinearObjective{Name: where.stage, Sense: sense, Origin: ObjectiveDiagnostic, Terms: terms}, r.options)
-		if err != nil {
-			return nil, err
-		}
-		if result.Status == SolveOptimal && r.replayAccepts(problem, result.Values) {
-			return append([]float64(nil), result.Values...), nil
-		}
+// sigmaEndpoint returns a minimizer or maximizer of σ on one Class from the
+// budgeted exact simplex (inner model first), accepted by the internal rule;
+// nil when the budget runs out or no candidate passes. σ endpoints never use
+// Gonum: its simplex has no iteration limit and was observed not to return on
+// these small LPs (PRD 0010 §3.5).
+func (r *engineRun) sigmaEndpoint(ctx context.Context, problem LinearProblem, coefficients map[int]*big.Rat, sense ObjectiveSense) ([]float64, error) {
+	started := time.Now()
+	defer func() {
+		r.counters.SigmaEndpoints++
+		r.counters.SigmaEndpointTime += time.Since(started)
+	}()
+	models, err := buildCandidateModels(problem, r.accept)
+	if err != nil {
 		return nil, nil
 	}
-	exact := func() ([]float64, error) {
-		started := time.Now()
-		defer func() {
-			r.counters.ExactWitnesses++
-			r.counters.ExactWitnessTime += time.Since(started)
-		}()
-		inner, err := buildInnerModel(problem, r.tau())
-		if err != nil {
-			return nil, nil
+	direction := coefficients
+	if sense == Minimize {
+		direction = make(map[int]*big.Rat, len(coefficients))
+		for j, a := range coefficients {
+			direction[j] = ratNeg(a)
 		}
-		direction := coefficients
-		if sense == Minimize {
-			direction = make(map[int]*big.Rat, len(coefficients))
-			for j, a := range coefficients {
-				direction[j] = ratNeg(a)
-			}
+	}
+	for _, model := range models {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		point, status := exactOptimum(ctx, inner, direction, r.budget())
+		point, status := exactOptimum(ctx, model, direction, r.budget())
 		switch status {
 		case exactCanceled:
 			return nil, ctx.Err()
@@ -480,23 +453,13 @@ func (r *engineRun) sigmaEndpoint(ctx context.Context, problem LinearProblem, te
 			return nil, nil
 		}
 		if point == nil {
-			return nil, nil
+			continue
 		}
-		candidate := ratsToFloats(point)
-		if !r.replayAccepts(problem, candidate) {
-			return nil, nil
+		if candidate := ratsToFloats(point); r.replayAccepts(problem, candidate) {
+			return candidate, nil
 		}
-		return candidate, nil
 	}
-	first, second := gonum, exact
-	if preferExact {
-		first, second = exact, gonum
-	}
-	x, err := first()
-	if err != nil || x != nil {
-		return x, err
-	}
-	return second()
+	return nil, nil
 }
 
 // relaxedLimit is one global CV row and its replay-relaxed limit in T scale.
@@ -512,13 +475,13 @@ type relaxedLimit struct {
 // alone: each row with its own variables forms a one-row problem whose
 // envelope row carries exactly the slack and rounding allowance the joint
 // envelope would (CV rows reference only bounded primary variables).
-func (r *engineRun) relaxedCVRange(problem LinearProblem) (relaxedLimit, relaxedLimit, error) {
+func (r *engineRun) relaxedCVRange(problem LinearProblem, rule acceptanceRule) (relaxedLimit, relaxedLimit, error) {
 	var lower, upper relaxedLimit
 	for _, row := range problem.Rows {
 		if row.ID != cvMinRowID && row.ID != cvMaxRowID {
 			continue
 		}
-		relaxed, vars, err := relaxCVRow(problem, row, r.tau())
+		relaxed, vars, err := relaxCVRow(problem, row, rule)
 		if err != nil {
 			return relaxedLimit{}, relaxedLimit{}, err
 		}
@@ -534,7 +497,7 @@ func (r *engineRun) relaxedCVRange(problem LinearProblem) (relaxedLimit, relaxed
 
 // relaxCVRow returns the relaxed limit of one CV row (L_T' for the GE row,
 // U_T' for the LE row) and the variables it references.
-func relaxCVRow(problem LinearProblem, row LinearRow, tau float64) (*big.Rat, []LinearVariable, error) {
+func relaxCVRow(problem LinearProblem, row LinearRow, rule acceptanceRule) (*big.Rat, []LinearVariable, error) {
 	position := make(map[VariableID]int, len(problem.Variables))
 	for j, variable := range problem.Variables {
 		position[variable.ID] = j
@@ -547,7 +510,7 @@ func relaxCVRow(problem LinearProblem, row LinearRow, tau float64) (*big.Rat, []
 		}
 		mini.Variables = append(mini.Variables, problem.Variables[j])
 	}
-	model, _, err := buildEnvelope(mini, tau)
+	model, _, err := buildEnvelopeRule(mini, rule)
 	if err != nil {
 		return nil, nil, fmt.Errorf("relax %s: %w", row.ID, err)
 	}
@@ -560,6 +523,29 @@ func relaxCVRow(problem LinearProblem, row LinearRow, tau float64) (*big.Rat, []
 		}
 	}
 	return nil, nil, fmt.Errorf("CV row %q has unexpected sense %v", row.ID, row.Sense)
+}
+
+// sigmaOf is σ for problem: the CV rows' terms, or, for a problem without CV
+// rows, the compiled second-moment expression (the same terms; techspec §7.3).
+func (r *engineRun) sigmaOf(problem LinearProblem) map[VariableID]float64 {
+	if sigma := sigmaCoefficients(problem); len(sigma) > 0 {
+		return sigma
+	}
+	sigma := map[VariableID]float64{}
+	terms, _, err := buildSecondMomentExpression(r.compiled)
+	if err != nil {
+		return sigma
+	}
+	present := map[VariableID]bool{}
+	for _, v := range problem.Variables {
+		present[v.ID] = true
+	}
+	for _, term := range terms {
+		if present[term.Variable] {
+			sigma[term.Variable] = term.Coeff
+		}
+	}
+	return sigma
 }
 
 func sigmaCoefficients(problem LinearProblem) map[VariableID]float64 {

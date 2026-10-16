@@ -27,7 +27,8 @@ func newEvidenceRun(t *testing.T, solver Solver) *engineRun {
 	t.Helper()
 	engine := &IntentEngine{solver: solver, evidenceDirectory: t.TempDir()}
 	run := engine.newRun(CompiledModel{}, nil)
-	run.options = SolveOptions{FeasibilityTolerance: evidenceTestTau, OptimalityTolerance: 1e-9}
+	run.options.OptimalityTolerance = 1e-9
+	run.useTolerance(evidenceTestTau)
 	return run
 }
 
@@ -108,21 +109,43 @@ func TestClassifyInfeasibleSet(t *testing.T) {
 	}
 }
 
-// A04: x ≤ s and x ≥ s + k·τ·max(1,|s|). Each row has its own τ allowance,
-// so the gray zone sits at k = 2.
+// A04: x ≤ s and x ≥ s + k·τ·max(1,|s|). Each row has its own allowance:
+// τ/3 in the internal set, τ in the external set. Hard decisions accept
+// witnesses from the internal set and prove infeasibility for the external
+// set, so (2/3, 2] is UNKNOWN; probe decisions prove for the internal set.
 func TestClassifyToleranceBoundary(t *testing.T) {
 	run := newEvidenceRun(t, NewGonumSolver())
+	classify := func(stage OptimizationStageID, problem LinearProblem) classification {
+		result, err := run.classify(context.Background(), problem, solveContext{stage: stage}, ObjectiveHardFeasibility)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
 	for _, s := range []float64{0, 1000} {
-		for _, k := range []float64{0.5, 1.5, 1.9, 1.99, 2.01, 2.05, 2.5, 3, 5} {
+		for _, k := range []float64{0.5, 0.66, 0.68, 0.7, 1.5, 1.9, 1.99, 2.01, 2.05, 2.5, 3, 5} {
 			scale := math.Max(1, math.Abs(s))
 			problem := oneVarProblem(-1e4, 1e4, xRow("le", SenseLE, s, 1), xRow("ge", SenseGE, s+k*evidenceTestTau*scale, 1))
-			result := classifyForTest(t, run, problem)
+			hard := classify(StageProveHardFeasibility, problem)
 			want := evidenceFeasible
-			if k > 2 {
+			switch {
+			case k > 2:
+				want = evidenceInfeasible
+			case k > 2.0/3:
+				want = evidenceUnknown
+			}
+			if hard.class != want {
+				t.Fatalf("hard s=%g k=%g: %s (%s), want %s", s, k, hard.class, hard.reasonText(), want)
+			}
+			if want == evidenceUnknown && !strings.Contains(hard.reasonText(), "certificate: "+reasonEnvelopeNonEmpty) {
+				t.Fatalf("hard s=%g k=%g: unknown for another reason: %s", s, k, hard.reasonText())
+			}
+			probe := classify(StageMinimizeMainProfileDeviation, problem)
+			if want = evidenceFeasible; k > 2.0/3 {
 				want = evidenceInfeasible
 			}
-			if result.class != want {
-				t.Fatalf("s=%g k=%g: %s (%s), want %s", s, k, result.class, result.reasonText(), want)
+			if probe.class != want {
+				t.Fatalf("probe s=%g k=%g: %s (%s), want %s", s, k, probe.class, probe.reasonText(), want)
 			}
 		}
 	}

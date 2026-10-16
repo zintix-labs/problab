@@ -76,6 +76,7 @@ type farkasEvidence struct {
 // point. Exactly one of the kind-specific fields is set.
 type infeasibilityEvidence struct {
 	kind     string
+	rule     acceptanceRule // the set the evidence proves empty (techspec §4.6)
 	problem  LinearProblem
 	farkas   *farkasEvidence
 	emptyBox *emptyBoxError
@@ -104,21 +105,29 @@ func (c classification) reasonText() string {
 }
 
 func (r *engineRun) budget() exactBudget {
+	budget := defaultExactBudget
 	if r.engine.exactBudget != nil {
-		return *r.engine.exactBudget
+		budget = *r.engine.exactBudget
 	}
-	return defaultExactBudget
+	budget.usage = &r.counters
+	return budget
 }
 
 func (r *engineRun) tau() float64 { return r.options.FeasibilityTolerance }
 
 // replayAccepts is the single acceptance test for every witness candidate.
 func (r *engineRun) replayAccepts(problem LinearProblem, values []float64) bool {
-	if len(values) != len(problem.Variables) {
-		return false
+	return replayWithRule(problem, values, r.accept)
+}
+
+// proofRule is the rule an infeasibility certificate must cover: the
+// production replay for the hard model (a Designer-facing claim), the engine
+// acceptance rule for probes and locks.
+func (r *engineRun) proofRule(stage OptimizationStageID) acceptanceRule {
+	if stage == StageProveHardFeasibility {
+		return r.hardProof
 	}
-	_, _, ok := replaySemanticSolution(problem, values, r.tau())
-	return ok
+	return r.probeProof
 }
 
 // classify decides one feasibility question with evidence only (techspec
@@ -145,7 +154,7 @@ func (r *engineRun) classify(ctx context.Context, problem LinearProblem, where s
 	if err := ctx.Err(); err != nil {
 		return classification{}, err
 	}
-	evidence, reason, err := r.certifyInfeasible(ctx, problem)
+	evidence, reason, err := r.certifyInfeasible(ctx, problem, r.proofRule(where.stage))
 	if err != nil {
 		return classification{}, err
 	}
@@ -194,6 +203,9 @@ func (r *engineRun) tryWitness(ctx context.Context, problem LinearProblem, where
 		if result.Status != SolveOptimal {
 			return nil, "backend " + solveStatusName(result.Status), nil
 		}
+		if len(result.Values) < len(problem.Variables) {
+			return nil, "backend returned too few values", nil
+		}
 		candidate := append([]float64(nil), result.Values[:len(problem.Variables)]...)
 		if !r.replayAccepts(problem, candidate) {
 			return nil, "witness failed replay", nil
@@ -205,40 +217,43 @@ func (r *engineRun) tryWitness(ctx context.Context, problem LinearProblem, where
 			r.counters.ExactWitnesses++
 			r.counters.ExactWitnessTime += time.Since(started)
 		}()
-		inner, err := buildInnerModel(problem, r.tau())
+		models, err := buildCandidateModels(problem, r.accept)
 		if err != nil {
 			return nil, envelopeReason(err), nil
 		}
-		point, status := exactPoint(ctx, inner, r.budget())
-		switch status {
-		case exactCanceled:
-			return nil, "", ctx.Err()
-		case exactBudgetHit:
-			r.counters.BudgetExhausted++
-			return nil, reasonBudget, nil
+		reason := "candidate models empty"
+		for _, model := range models {
+			point, status := exactPoint(ctx, model, r.budget())
+			switch status {
+			case exactCanceled:
+				return nil, "", ctx.Err()
+			case exactBudgetHit:
+				r.counters.BudgetExhausted++
+				return nil, reasonBudget, nil
+			}
+			if point == nil {
+				continue
+			}
+			if candidate := ratsToFloats(point); r.replayAccepts(problem, candidate) {
+				return candidate, "", nil
+			}
+			reason = "witness failed replay"
 		}
-		if point == nil {
-			return nil, "inner model empty", nil
-		}
-		candidate := ratsToFloats(point)
-		if !r.replayAccepts(problem, candidate) {
-			return nil, "witness failed replay", nil
-		}
-		return candidate, "", nil
+		return nil, reason, nil
 	}
 	return nil, "", fmt.Errorf("unknown witness source %q", source)
 }
 
 // certifyInfeasible tries type-B (empty box) and type-A (exact Farkas)
 // evidence on the outer envelope of problem.
-func (r *engineRun) certifyInfeasible(ctx context.Context, problem LinearProblem) (*infeasibilityEvidence, string, error) {
+func (r *engineRun) certifyInfeasible(ctx context.Context, problem LinearProblem, rule acceptanceRule) (*infeasibilityEvidence, string, error) {
 	started := time.Now()
 	defer func() { r.counters.InfeasibilityCertificateTime += time.Since(started) }()
-	model, _, err := buildEnvelope(problem, r.tau())
+	model, _, err := buildEnvelopeRule(problem, rule)
 	var empty *emptyBoxError
 	if errors.As(err, &empty) {
 		r.counters.InfeasibilityCertificates++
-		return &infeasibilityEvidence{kind: evidenceKindEmptyBox, problem: problem, emptyBox: empty}, "", nil
+		return &infeasibilityEvidence{kind: evidenceKindEmptyBox, rule: rule, problem: problem, emptyBox: empty}, "", nil
 	}
 	if err != nil {
 		return nil, envelopeReason(err), nil
@@ -262,7 +277,7 @@ func (r *engineRun) certifyInfeasible(ctx context.Context, problem LinearProblem
 	for i, row := range model.rows {
 		rows[i] = rowSide{row: row.source, side: row.side}
 	}
-	return &infeasibilityEvidence{kind: evidenceKindFarkas, problem: problem,
+	return &infeasibilityEvidence{kind: evidenceKindFarkas, rule: rule, problem: problem,
 		farkas: &farkasEvidence{rows: rows, multipliers: result.multipliers}}, "", nil
 }
 

@@ -551,22 +551,28 @@ func (s Status) Success() bool { return s == StatusOptimal || s == StatusExporte
 type DiagnosticCode string
 
 const (
-	DiagnosticConfigInvalid                    DiagnosticCode = "ConfigInvalid"
-	DiagnosticCollectionInsufficient           DiagnosticCode = "CollectionInsufficient"
-	DiagnosticDuplicateReplayIdentity          DiagnosticCode = "DuplicateReplayIdentity"
-	DiagnosticMeanSupportInfeasible            DiagnosticCode = "MeanSupportInfeasible"
-	DiagnosticRiskCapacityInfeasible           DiagnosticCode = "RiskCapacityInfeasible"
-	DiagnosticUniformClassRiskInfeasible       DiagnosticCode = "UniformClassRiskInfeasible"
-	DiagnosticUniformClassMathInfeasible       DiagnosticCode = "UniformClassMathInfeasible"
-	DiagnosticMainExperienceSupportInfeasible  DiagnosticCode = "MainExperienceSupportInfeasible"
-	DiagnosticClassMeanInfeasible              DiagnosticCode = "ClassMeanInfeasible"
-	DiagnosticMainProbabilityInfeasible        DiagnosticCode = "MainProbabilityInfeasible"
-	DiagnosticMainGroupGuardrailInfeasible     DiagnosticCode = "MainGroupGuardrailInfeasible"
-	DiagnosticMedianInfeasible                 DiagnosticCode = "MedianInfeasible"
-	DiagnosticGlobalCVInfeasible               DiagnosticCode = "GlobalCVInfeasible"
-	DiagnosticHardModelInfeasible              DiagnosticCode = "HardModelInfeasible"
-	DiagnosticRepresentationInfeasible         DiagnosticCode = "RepresentationInfeasible"
-	DiagnosticSolverNumericalFailure           DiagnosticCode = "SolverNumericalFailure"
+	DiagnosticConfigInvalid                   DiagnosticCode = "ConfigInvalid"
+	DiagnosticCollectionInsufficient          DiagnosticCode = "CollectionInsufficient"
+	DiagnosticDuplicateReplayIdentity         DiagnosticCode = "DuplicateReplayIdentity"
+	DiagnosticMeanSupportInfeasible           DiagnosticCode = "MeanSupportInfeasible"
+	DiagnosticRiskCapacityInfeasible          DiagnosticCode = "RiskCapacityInfeasible"
+	DiagnosticUniformClassRiskInfeasible      DiagnosticCode = "UniformClassRiskInfeasible"
+	DiagnosticUniformClassMathInfeasible      DiagnosticCode = "UniformClassMathInfeasible"
+	DiagnosticMainExperienceSupportInfeasible DiagnosticCode = "MainExperienceSupportInfeasible"
+	DiagnosticClassMeanInfeasible             DiagnosticCode = "ClassMeanInfeasible"
+	DiagnosticMainProbabilityInfeasible       DiagnosticCode = "MainProbabilityInfeasible"
+	DiagnosticMainGroupGuardrailInfeasible    DiagnosticCode = "MainGroupGuardrailInfeasible"
+	DiagnosticMedianInfeasible                DiagnosticCode = "MedianInfeasible"
+	DiagnosticGlobalCVInfeasible              DiagnosticCode = "GlobalCVInfeasible"
+	DiagnosticHardModelInfeasible             DiagnosticCode = "HardModelInfeasible"
+	DiagnosticRepresentationInfeasible        DiagnosticCode = "RepresentationInfeasible"
+	DiagnosticSolverNumericalFailure          DiagnosticCode = "SolverNumericalFailure"
+	// DiagnosticEvidenceUnavailable: neither a replay-accepted witness nor a
+	// verified certificate was obtained; it is not a Designer conflict.
+	DiagnosticEvidenceUnavailable DiagnosticCode = "EvidenceUnavailable"
+	// DiagnosticPrecisionUnproven: the verified error bound of a stage did not
+	// reach the required precision within its budget.
+	DiagnosticPrecisionUnproven                DiagnosticCode = "PrecisionUnproven"
 	DiagnosticArtifactMaterializationViolation DiagnosticCode = "ArtifactMaterializationViolation"
 	DiagnosticInternalModelError               DiagnosticCode = "InternalModelError"
 )
@@ -892,8 +898,12 @@ type EvidenceCounters struct {
 	ExactBoundTime               time.Duration  `json:"exact_bound_ns"`
 	ExactWitnesses               int            `json:"exact_witnesses"`
 	ExactWitnessTime             time.Duration  `json:"exact_witness_ns"`
-	SigmaEndpointImprovements    int            `json:"sigma_endpoint_improvements"`
+	SigmaEndpoints               int            `json:"sigma_endpoints"`
+	SigmaEndpointTime            time.Duration  `json:"sigma_endpoint_ns"`
 	BudgetExhausted              int            `json:"budget_exhausted"`
+	ExactCalls                   int            `json:"exact_calls"`
+	MaxExactPivots               int            `json:"max_exact_pivots"`
+	MaxExactBits                 int            `json:"max_exact_bits"`
 }
 
 // OptimizationStageObserver receives synchronous, declaration-ordered engine
@@ -925,7 +935,9 @@ type IntentQualityReport struct {
 	PhaseB BisectionReport `json:"phase_b_other_visibility"`
 }
 
-// BisectionReport records the final proved bracket of one semantic optimization.
+// BisectionReport records the final proved bracket of one semantic
+// optimization. Lower and Upper are evidence-backed: each end is a theoretical
+// endpoint, a replay-accepted witness, or a verified certificate (Basis).
 type BisectionReport struct {
 	Applicable         bool    `json:"applicable"`
 	InapplicableReason string  `json:"inapplicable_reason,omitempty"`
@@ -936,7 +948,31 @@ type BisectionReport struct {
 	Upper              float64 `json:"upper"`
 	FixedValue         float64 `json:"fixed_value"`
 	Probes             int     `json:"probes"`
+
+	LowerBasis        string            `json:"lower_basis,omitempty"`
+	UpperBasis        string            `json:"upper_basis,omitempty"`
+	VerifiedBound     float64           `json:"verified_bound"`
+	VerifiedWithLock  float64           `json:"verified_bound_with_lock"`
+	RequiredPrecision float64           `json:"required_precision"`
+	StopReason        string            `json:"stop_reason,omitempty"`
+	Evidence          *EvidenceCounters `json:"evidence,omitempty"`
 }
+
+// Basis values of BisectionReport.LowerBasis/UpperBasis.
+const (
+	BasisTheoreticalEndpoint = "theoretical-endpoint"
+	BasisVerifiedCertificate = "verified-certificate"
+	BasisVerifiedDualBound   = "verified-dual-bound"
+	BasisReplayedWitness     = "replayed-witness"
+)
+
+// StopReason values of BisectionReport.
+const (
+	StopEndpoint            = "endpoint"
+	StopConverged           = "converged"
+	StopBudget              = "budget"
+	StopEvidenceUnavailable = "evidence-unavailable"
+)
 
 // CanonicalizationReport describes minimum-CV selection after every
 // higher-priority mathematical and neutral-preference lock is installed.
@@ -950,6 +986,13 @@ type CanonicalizationReport struct {
 	Direction        string   `json:"direction"`
 	PrimaryVariables int      `json:"primary_variables"`
 	Solves           int      `json:"solves"`
+
+	// Exact optimality evidence of the per-Class decomposition, in GapUnit.
+	SafeLowerBound *float64          `json:"safe_lower_bound,omitempty"`
+	OptimalityGap  *float64          `json:"optimality_gap,omitempty"`
+	RequiredGap    *float64          `json:"required_gap,omitempty"`
+	GapUnit        string            `json:"gap_unit,omitempty"`
+	Evidence       *EvidenceCounters `json:"evidence,omitempty"`
 }
 
 // ClassIntentReport describes group-level Main profile quality and supported

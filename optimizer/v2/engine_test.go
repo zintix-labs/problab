@@ -16,114 +16,16 @@ package v2
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
+	"errors"
 	"math"
+	"math/big"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
-
-// solverStep describes one exact Engine-to-Solver interaction. Keeping the
-// expected ObjectiveOrigin beside the backend result protects stage mapping:
-// the same SolveInfeasible status has deliberately different meanings in hard
-// feasibility, semantic preference refinements, and canonicalization.
-type solverStep struct {
-	origin ObjectiveOrigin
-	name   OptimizationStageID
-	status SolveStatus
-}
-
-// scriptedSolver is a strict, backend-independent Solver test double. It
-// returns a correctly sized primal vector for optimal steps because the Engine
-// maps canonical values by semantic variable ID after all stage transforms.
-type scriptedSolver struct {
-	t     *testing.T
-	steps []solverStep
-	next  int
-}
-
-// Solve consumes exactly one declared step and rejects an unexpected stage or
-// an extra solve. This makes every test below document the intended stage
-// protocol in addition to checking the final public Status.
-func (s *scriptedSolver) Solve(
-	_ context.Context,
-	problem LinearProblem,
-	objective LinearObjective,
-	_ SolveOptions,
-) (SolveResult, error) {
-	s.t.Helper()
-	if s.next >= len(s.steps) {
-		return SolveResult{}, fmt.Errorf("unexpected solver call %d with origin %q", s.next, objective.Origin)
-	}
-	step := s.steps[s.next]
-	s.next++
-	if objective.Origin != step.origin {
-		return SolveResult{}, fmt.Errorf(
-			"solver call %d origin = %q, want %q",
-			s.next-1,
-			objective.Origin,
-			step.origin,
-		)
-	}
-	if step.name != "" && objective.Name != step.name {
-		return SolveResult{}, fmt.Errorf(
-			"solver call %d name = %q, want %q",
-			s.next-1,
-			objective.Name,
-			step.name,
-		)
-	}
-	result := SolveResult{
-		Status: step.status,
-		Evidence: SolverEvidence{
-			Objective:       string(objective.Name),
-			Backend:         "scripted-test-solver",
-			BackendCode:     string(objective.Origin),
-			SemanticColumns: len(problem.Variables),
-			Rows:            len(problem.Rows),
-		},
-	}
-	if step.status == SolveOptimal {
-		result.Values = make([]float64, len(problem.Variables))
-		count := 0
-		for _, v := range problem.Variables {
-			if strings.HasPrefix(string(v.ID), "p:") {
-				count++
-			}
-		}
-		for i, v := range problem.Variables {
-			if strings.HasPrefix(string(v.ID), "p:") {
-				result.Values[i] = 1 / float64(count)
-			}
-		}
-	}
-	return result, nil
-}
-
-func engineTestMainGroupModel(mainVisibilityIterations int) CompiledModel {
-	compiled := engineTestModel(false, 0, 0)
-	compiled.Prepared.Plan.EngineOptions.MainGroupInternalVisibilityBisectionIterations = mainVisibilityIterations
-	compiled.Hard.Variables = append(compiled.Hard.Variables, LinearVariable{ID: "p:0000:0001", Lower: 0, Upper: 1})
-	compiled.Primary = append(compiled.Primary, PrimaryVariable{ID: "p:0000:0001", ClassIndex: 0, BucketIndex: 1})
-	compiled.ClassVariables[0] = append(compiled.ClassVariables[0], "p:0000:0001")
-	compiled.VariableIndex["p:0000:0001"] = 1
-	compiled.Prepared.Classes[0].Buckets = []PreparedBucket{
-		{Index: 0, Samples: []CollectedSample{{Snapshot: []byte{1}}}, RiskCap: math.Inf(1), MainGroup: 0},
-		{Index: 1, Samples: []CollectedSample{{Snapshot: []byte{2}}}, RiskCap: math.Inf(1), MainGroup: 0},
-	}
-	compiled.Prepared.Classes[0].Groups[0].BucketIndexes = []int{0, 1}
-	compiled.Hard.Rows[0].Terms = []LinearTerm{{Variable: "p:0000:0000", Coeff: 1}, {Variable: "p:0000:0001", Coeff: 1}}
-	return compiled
-}
-
-// assertConsumed verifies that an early return did not silently skip a stage
-// and that the Engine did not perform an undocumented additional solver call.
-func (s *scriptedSolver) assertConsumed() {
-	s.t.Helper()
-	if s.next != len(s.steps) {
-		s.t.Fatalf("solver consumed %d of %d scripted calls", s.next, len(s.steps))
-	}
-}
 
 // engineTestModel builds the smallest semantic CompiledModel that exercises
 // Main profile refinement and canonicalization. When withOther is true it adds
@@ -161,14 +63,14 @@ func engineTestModel(withOther bool, profileIterations, visibilityIterations int
 			}},
 		},
 		Hard: LinearProblem{Variables: variables, Rows: []LinearRow{
-			{ID: "class:0000:normalization", Sense: SenseEQ, RHS: 1, Terms: func() []LinearTerm {
+			{ID: "class:0000:normalization", ClassID: "class-0", Sense: SenseEQ, RHS: 1, Terms: func() []LinearTerm {
 				terms := make([]LinearTerm, len(classVariables))
 				for i, id := range classVariables {
 					terms[i] = LinearTerm{Variable: id, Coeff: 1}
 				}
 				return terms
 			}()},
-			{ID: "class:0000:mean", Sense: SenseEQ, RHS: 0},
+			{ID: "class:0000:mean", ClassID: "class-0", Sense: SenseEQ, RHS: 0},
 		}},
 		Primary:        primary,
 		ClassVariables: [][]VariableID{classVariables},
@@ -188,293 +90,300 @@ func assertNear(t *testing.T, name string, got, want float64) {
 	}
 }
 
-// TestIntentEngineMapsOnlyHardInfeasibleToRunInfeasible proves that the first
-// hard-feasibility solve is the sole SolveInfeasible path that may produce the
-// public INFEASIBLE_MODEL status and its stable diagnostic code.
-func TestIntentEngineMapsOnlyHardInfeasibleToRunInfeasible(t *testing.T) {
-	solver := &scriptedSolver{t: t, steps: []solverStep{
-		{origin: ObjectiveHardFeasibility, status: SolveInfeasible},
-	}}
+// statusSolver answers every solve with one backend status and no values, so
+// every decision must come from the exact path.
+type statusSolver struct{ status SolveStatus }
 
-	result, err := NewIntentEngine(solver).Solve(context.Background(), engineTestModel(false, 2, 2))
-	if err != nil {
-		t.Fatalf("Solve: %v", err)
+func (s statusSolver) Solve(context.Context, LinearProblem, LinearObjective, SolveOptions) (SolveResult, error) {
+	return SolveResult{Status: s.status}, nil
+}
+
+// countingSolver counts backend calls and records the calls made after the
+// caller's context was cancelled.
+type countingSolver struct {
+	inner           Solver
+	calls           int
+	afterCancelling int
+}
+
+func (s *countingSolver) Solve(ctx context.Context, p LinearProblem, o LinearObjective, opt SolveOptions) (SolveResult, error) {
+	s.calls++
+	if ctx.Err() != nil {
+		s.afterCancelling++
 	}
-	solver.assertConsumed()
-	if result.Status != StatusInfeasibleModel {
-		t.Fatalf("Status = %q, want %q", result.Status, StatusInfeasibleModel)
-	}
-	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != DiagnosticHardModelInfeasible {
-		t.Fatalf("Diagnostics = %+v, want one %q diagnostic", result.Diagnostics, DiagnosticHardModelInfeasible)
+	return s.inner.Solve(ctx, p, o, opt)
+}
+
+// skewedModel is P00 E4: one Class whose exact Main-profile optimum is
+// δ* = 0.4, so the profile stage really bisects.
+func skewedModel(t *testing.T) CompiledModel {
+	compiled := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, evidenceSkewedClass(0, 1))
+	compiled.Prepared.Plan.EngineOptions.ProfileBisectionIterations = 60
+	return compiled
+}
+
+// TestIntentEngineBackendStatusNeverDecides: a backend that reports every
+// problem infeasible, numerically failed or unbounded neither produces
+// INFEASIBLE_MODEL on a feasible model nor stops the run; the exact path
+// supplies every witness (PRD 0010 §3.2).
+func TestIntentEngineBackendStatusNeverDecides(t *testing.T) {
+	for _, status := range []SolveStatus{SolveInfeasible, SolveNumericalFailure, SolveUnbounded} {
+		solution, err := NewIntentEngine(statusSolver{status}).Solve(context.Background(), skewedModel(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if solution.Status != StatusOptimal {
+			t.Fatalf("backend %s: status=%s diagnostics=%+v", solveStatusName(status), solution.Status, solution.Diagnostics)
+		}
+		assertProfileBracket(t, solution.MainProfileOptimization, 0.4)
 	}
 }
 
-// TestIntentEngineTreatsMainProfileProbeInfeasibleAsBracketSignal proves that infeasible
-// delta probes tighten the minimizing bracket and do not terminate the Run.
-// The scripted probes establish delta* in (1, 1.5], followed by a successful
-// tolerance lock and canonical solve.
-func TestIntentEngineTreatsMainProfileProbeInfeasibleAsBracketSignal(t *testing.T) {
-	solver := &scriptedSolver{t: t, steps: []solverStep{
-		{origin: ObjectiveHardFeasibility, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},    // delta = 2 endpoint
-		{origin: ObjectiveMainProfileProbe, status: SolveInfeasible}, // delta = 0 endpoint
-		{origin: ObjectiveMainProfileProbe, status: SolveInfeasible}, // delta = 1
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},    // delta = 1.5
-		{origin: ObjectiveIntentRefinement, status: SolveOptimal},    // fixed delta = 1.51
-		{origin: ObjectiveCanonicalBucketProbability, status: SolveOptimal},
-	}}
-
-	result, err := NewIntentEngine(solver).Solve(context.Background(), engineTestModel(false, 2, 2))
+// TestIntentEngineHardInfeasibleNeedsCertificate: only a verified certificate
+// on the external set produces INFEASIBLE_MODEL.
+func TestIntentEngineHardInfeasibleNeedsCertificate(t *testing.T) {
+	compiled := skewedModel(t)
+	compiled.Hard = cloneLinearProblem(compiled.Hard)
+	compiled.Hard.Rows = append(compiled.Hard.Rows, LinearRow{ID: "test:impossible", ClassID: compiled.Prepared.Classes[0].ID,
+		Sense: SenseGE, RHS: 2, Terms: []LinearTerm{{Variable: compiled.Primary[0].ID, Coeff: 1}}})
+	solution, err := NewIntentEngine(NewGonumSolver()).Solve(context.Background(), compiled)
 	if err != nil {
-		t.Fatalf("Solve: %v", err)
+		t.Fatal(err)
 	}
-	solver.assertConsumed()
-	if result.Status != StatusOptimal {
-		t.Fatalf("Status = %q, want %q; diagnostics = %+v", result.Status, StatusOptimal, result.Diagnostics)
+	if solution.Status != StatusInfeasibleModel || len(solution.Diagnostics) == 0 {
+		t.Fatalf("status=%s diagnostics=%+v", solution.Status, solution.Diagnostics)
 	}
-	if result.MainProfileOptimization.Probes != 4 {
-		t.Fatalf("MainProfileOptimization.Probes = %d, want 4", result.MainProfileOptimization.Probes)
+	// Without exact budget no certificate exists: the same model is UNKNOWN.
+	engine := NewIntentEngine(NewGonumSolver())
+	engine.exactBudget = &exactBudget{maxPivots: 0, maxBits: 1 << 14}
+	if solution, err = engine.Solve(context.Background(), compiled); err != nil {
+		t.Fatal(err)
 	}
-	if result.MainProfileOptimization.Objective != string(StageMinimizeMainProfileDeviation) || result.MainProfileOptimization.Metric != metricMainProfileDeviation || result.MainProfileOptimization.Direction != "minimize" {
-		t.Fatalf("Main profile report identity = (%q, %q), want common delta/minimize", result.MainProfileOptimization.Objective, result.MainProfileOptimization.Direction)
-	}
-	assertNear(t, "MainProfileOptimization.Lower", result.MainProfileOptimization.Lower, 1)
-	assertNear(t, "MainProfileOptimization.Upper", result.MainProfileOptimization.Upper, 1.5)
-	assertNear(t, "MainProfileOptimization.FixedValue", result.MainProfileOptimization.FixedValue, 1.51)
-	if result.OtherBucketVisibilityOptimization.Probes != 0 {
-		t.Fatalf("OtherBucketVisibilityOptimization.Probes = %d, want 0 for a Class without Others", result.OtherBucketVisibilityOptimization.Probes)
+	if solution.Status != StatusNumericalFailure || solution.Diagnostics[0].Code != DiagnosticEvidenceUnavailable {
+		t.Fatalf("zero budget: status=%s diagnostics=%+v", solution.Status, solution.Diagnostics)
 	}
 }
 
-// TestIntentEngineTreatsOtherVisibilityProbeInfeasibleAsBracketSignal proves that infeasible
-// rho probes tighten the maximizing bracket and preserve the known feasible
-// Main profile witness. The scripted probes establish rho* in [0.25, 0.5), after
-// which the tolerance lock and one minimum-CV solve still run.
-func TestIntentEngineTreatsOtherVisibilityProbeInfeasibleAsBracketSignal(t *testing.T) {
-	solver := &scriptedSolver{t: t, steps: []solverStep{
-		{origin: ObjectiveHardFeasibility, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},              // delta = 2 endpoint
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},              // delta = 0 endpoint
-		{origin: ObjectiveIntentRefinement, status: SolveOptimal},              // fixed delta = 0.01
-		{origin: ObjectiveOtherBucketVisibilityProbe, status: SolveOptimal},    // rho = 0 endpoint
-		{origin: ObjectiveOtherBucketVisibilityProbe, status: SolveInfeasible}, // rho = 1 endpoint
-		{origin: ObjectiveOtherBucketVisibilityProbe, status: SolveInfeasible}, // rho = 0.5
-		{origin: ObjectiveOtherBucketVisibilityProbe, status: SolveOptimal},    // rho = 0.25
-		{origin: ObjectiveIntentRefinement, status: SolveOptimal},              // fixed rho = 0.24
-		{origin: ObjectiveCanonicalBucketProbability, status: SolveOptimal},
-	}}
-
-	result, err := NewIntentEngine(solver).Solve(context.Background(), engineTestModel(true, 2, 2))
-	if err != nil {
-		t.Fatalf("Solve: %v", err)
-	}
-	solver.assertConsumed()
-	if result.Status != StatusOptimal {
-		t.Fatalf("Status = %q, want %q; diagnostics = %+v", result.Status, StatusOptimal, result.Diagnostics)
-	}
-	if result.OtherBucketVisibilityOptimization.Probes != 4 {
-		t.Fatalf("OtherBucketVisibilityOptimization.Probes = %d, want 4", result.OtherBucketVisibilityOptimization.Probes)
-	}
-	if result.OtherBucketVisibilityOptimization.Objective != string(StageMaximizeOtherBucketVisibility) || result.OtherBucketVisibilityOptimization.Metric != metricOtherBucketVisibility || result.OtherBucketVisibilityOptimization.Direction != "maximize" {
-		t.Fatalf("Other visibility report identity = (%q, %q), want common rho/maximize", result.OtherBucketVisibilityOptimization.Objective, result.OtherBucketVisibilityOptimization.Direction)
-	}
-	assertNear(t, "OtherBucketVisibilityOptimization.Lower", result.OtherBucketVisibilityOptimization.Lower, 0.25)
-	assertNear(t, "OtherBucketVisibilityOptimization.Upper", result.OtherBucketVisibilityOptimization.Upper, 0.5)
-	assertNear(t, "OtherBucketVisibilityOptimization.FixedValue", result.OtherBucketVisibilityOptimization.FixedValue, 0.24)
-}
-
-// TestIntentEngineMapsCanonicalInfeasibleToNumericalFailure proves that once a
-// feasible hard/intent witness exists, an unexpectedly infeasible canonical
-// solve is a numerical or transform contradiction. It must never rewrite the
-// already established fact into a false INFEASIBLE_MODEL Run status.
-func TestIntentEngineMapsCanonicalInfeasibleToNumericalFailure(t *testing.T) {
-	solver := &scriptedSolver{t: t, steps: []solverStep{
-		{origin: ObjectiveHardFeasibility, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-		{origin: ObjectiveIntentRefinement, status: SolveOptimal},
-		{origin: ObjectiveCanonicalBucketProbability, status: SolveInfeasible},
-	}}
-
-	result, err := NewIntentEngine(solver).Solve(context.Background(), engineTestModel(false, 2, 2))
-	if err != nil {
-		t.Fatalf("Solve: %v", err)
-	}
-	solver.assertConsumed()
-	if result.Status != StatusNumericalFailure {
-		t.Fatalf("Status = %q, want %q", result.Status, StatusNumericalFailure)
-	}
-	if result.Status == StatusInfeasibleModel {
-		t.Fatal("canonical SolveInfeasible was incorrectly promoted to INFEASIBLE_MODEL")
-	}
-	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != DiagnosticSolverNumericalFailure {
-		t.Fatalf("Diagnostics = %+v, want one %q diagnostic", result.Diagnostics, DiagnosticSolverNumericalFailure)
+// assertProfileBracket checks a minimizing bracket against the exact optimum
+// of the unrelaxed model. The bracket is relative to the internal set, which
+// is larger, so its optimum may sit slightly below (within the τ/3 slack).
+func assertProfileBracket(t *testing.T, report BisectionReport, exact float64) {
+	t.Helper()
+	if !(report.Lower <= exact && exact-report.Upper <= 1e-8) {
+		t.Fatalf("bracket [%.17g, %.17g] inconsistent with exact optimum %.17g (%+v)", report.Lower, report.Upper, exact, report)
 	}
 }
 
-func TestIntentEngineMaximizesMainGroupInternalVisibilityBeforeCanonicalSelection(t *testing.T) {
-	steps := []solverStep{
-		{origin: ObjectiveHardFeasibility, name: StageProveHardFeasibility, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, name: StageMinimizeMainProfileDeviation, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, name: StageMinimizeMainProfileDeviation, status: SolveOptimal},
-		{origin: ObjectiveIntentRefinement, name: StageMinimizeMainProfileDeviation, status: SolveOptimal},
-		{origin: ObjectiveMainGroupInternalVisibilityProbe, name: StageMaximizeMainGroupInternalVisibility, status: SolveOptimal},
-		{origin: ObjectiveMainGroupInternalVisibilityProbe, name: StageMaximizeMainGroupInternalVisibility, status: SolveInfeasible},
-		{origin: ObjectiveMainGroupInternalVisibilityProbe, name: StageMaximizeMainGroupInternalVisibility, status: SolveInfeasible},
-		{origin: ObjectiveMainGroupInternalVisibilityProbe, name: StageMaximizeMainGroupInternalVisibility, status: SolveOptimal},
-		{origin: ObjectiveIntentRefinement, name: StageMaximizeMainGroupInternalVisibility, status: SolveOptimal},
-		{origin: ObjectiveCanonicalBucketProbability, name: StageSelectCanonicalBucketProbabilities, status: SolveOptimal},
+// TestBisectionStopsAtRequiredPrecision is A27: the bracket stops the first
+// time its exact width reaches 1/10⁸, well before the iteration cap.
+func TestBisectionStopsAtRequiredPrecision(t *testing.T) {
+	solution, err := NewIntentEngine(NewGonumSolver()).Solve(context.Background(), skewedModel(t))
+	if err != nil {
+		t.Fatal(err)
 	}
-	solver := &scriptedSolver{t: t, steps: steps}
-	var events []OptimizationStageEvent
-	result, err := NewIntentEngine(solver).SolveObserved(context.Background(), engineTestMainGroupModel(2), func(event OptimizationStageEvent) {
-		events = append(events, event)
+	if solution.Status != StatusOptimal {
+		t.Fatalf("status=%s diagnostics=%+v", solution.Status, solution.Diagnostics)
+	}
+	report := solution.MainProfileOptimization
+	assertProfileBracket(t, report, 0.4)
+	if report.StopReason != StopConverged || report.LowerBasis != BasisVerifiedCertificate || report.UpperBasis != BasisReplayedWitness {
+		t.Fatalf("report=%+v", report)
+	}
+	// Halving [0, 2] first reaches 1e-8 after 28 midpoints: 2/2²⁸ ≈ 7.45e-9.
+	if report.Probes != 2+28 || report.VerifiedBound > 1e-8 || report.VerifiedBound <= 0.5e-8 {
+		t.Fatalf("probes=%d width=%g, want 30 probes and the first width ≤ 1e-8", report.Probes, report.VerifiedBound)
+	}
+}
+
+func TestParameterPrecisionIsInclusiveAndExact(t *testing.T) {
+	if !parameterPrecisionMet(big.NewRat(1, 100_000_000)) {
+		t.Fatal("width exactly 1/10⁸ must complete")
+	}
+	if parameterPrecisionMet(ratAdd(big.NewRat(1, 100_000_000), big.NewRat(1, 1<<62))) {
+		t.Fatal("width just above 1/10⁸ must not complete")
+	}
+	// float64(1e-8) is slightly above 1/10⁸: an exact comparison rejects it.
+	if parameterPrecisionMet(ratOf(1e-8)) == (ratOf(1e-8).Cmp(big.NewRat(1, 100_000_000)) > 0) {
+		t.Fatal("float64(1e-8) must be compared exactly")
+	}
+}
+
+// TestBisectionUnknownBeforePrecisionIsPrecisionUnproven: with no exact
+// budget the δ = 0 endpoint has no certificate; the search stops on UNKNOWN
+// with the bracket still wide, which is PrecisionUnproven, never infeasible.
+func TestBisectionUnknownBeforePrecisionIsPrecisionUnproven(t *testing.T) {
+	engine := NewIntentEngine(NewGonumSolver())
+	engine.exactBudget = &exactBudget{maxPivots: 0, maxBits: 1 << 14}
+	solution, err := engine.Solve(context.Background(), skewedModel(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if solution.Status != StatusNumericalFailure || solution.Diagnostics[0].Code != DiagnosticPrecisionUnproven ||
+		!strings.Contains(solution.Diagnostics[0].Message, "stop reason "+StopEvidenceUnavailable) {
+		t.Fatalf("status=%s diagnostics=%+v", solution.Status, solution.Diagnostics)
+	}
+	if !strings.Contains(solution.Diagnostics[0].Message, designerUncertainHint) {
+		t.Fatalf("message lacks the fixed hint: %q", solution.Diagnostics[0].Message)
+	}
+}
+
+// TestBisectionCancellationTakesPriority: cancelling during the profile
+// bisection returns the context error and starts no further solve.
+func TestBisectionCancellationTakesPriority(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	solver := &countingSolver{inner: NewGonumSolver()}
+	_, err := NewIntentEngine(solver).SolveObserved(ctx, skewedModel(t), func(event OptimizationStageEvent) {
+		if event.Stage == StageMinimizeMainProfileDeviation && event.State == "progress" && event.Probe == 5 {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want context.Canceled", err)
+	}
+	if solver.afterCancelling != 0 {
+		t.Fatalf("%d solves started after cancellation", solver.afterCancelling)
+	}
+}
+
+// TestBisectionLockCertificateIsContradiction: a lock that is provably
+// infeasible although a witness exists is an INTERNAL_ERROR, never a hard
+// infeasibility.
+func TestBisectionLockCertificateIsContradiction(t *testing.T) {
+	compiled := skewedModel(t)
+	run := NewIntentEngine(NewGonumSolver()).newRun(compiled, nil)
+	_, _, _, failure, err := run.bisect(context.Background(), bisectSpec{
+		stage: StageMinimizeMainProfileDeviation, origin: ObjectiveMainProfileProbe,
+		metric: metricMainProfileDeviation, minimize: true, feasibleEnd: 2, otherEnd: 0, iterations: 60,
+		build: func(delta float64) (LinearProblem, error) { return BuildMainProfileDeviationProblem(compiled, delta) },
+		lock:  func(float64) float64 { return 0 }, // δ = 0 is infeasible (δ* = 0.4)
 	})
 	if err != nil {
-		t.Fatalf("SolveObserved: %v", err)
+		t.Fatal(err)
 	}
-	solver.assertConsumed()
-	if result.Status != StatusOptimal {
-		t.Fatalf("Status=%q diagnostics=%+v", result.Status, result.Diagnostics)
+	if failure == nil || failure.solution.Status != StatusInternalError {
+		t.Fatalf("failure=%+v", failure)
 	}
-	main := result.MainGroupInternalVisibilityOptimization
-	if !main.Applicable || main.Probes != 4 || main.Objective != string(StageMaximizeMainGroupInternalVisibility) || main.Metric != metricMainGroupInternalVisibility {
-		t.Fatalf("Main Group visibility report=%+v", main)
+}
+
+// TestIntentEngineTheoreticalEndpointSkipsBisection: ρ = 1 feasible stops
+// after the two endpoint probes with a zero-width bracket.
+func TestIntentEngineTheoreticalEndpointSkipsBisection(t *testing.T) {
+	compiled := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, evidenceFixtureClass(0, 1))
+	solution, err := NewIntentEngine(NewGonumSolver()).Solve(context.Background(), compiled)
+	if err != nil {
+		t.Fatal(err)
 	}
-	assertNear(t, "main visibility lower", main.Lower, 0.25)
-	assertNear(t, "main visibility upper", main.Upper, 0.5)
-	assertNear(t, "main visibility fixed", main.FixedValue, 0.24)
-	if !reflect.DeepEqual(result.PhaseA, result.MainProfileOptimization) || !reflect.DeepEqual(result.PhaseB, result.OtherBucketVisibilityOptimization) {
+	main := solution.MainGroupInternalVisibilityOptimization
+	if solution.Status != StatusOptimal || main.Probes != 2 || main.Lower != 1 || main.Upper != 1 || main.StopReason != StopEndpoint ||
+		main.FixedValue != 1-compiled.Prepared.Plan.EngineOptions.VisibilityTolerance {
+		t.Fatalf("status=%s Main Group visibility=%+v", solution.Status, main)
+	}
+}
+
+// TestIntentEngineStageEventsAndReports: every stage starts once and ends
+// once in declaration order; deprecated aliases mirror the canonical reports.
+func TestIntentEngineStageEventsAndReports(t *testing.T) {
+	var events []OptimizationStageEvent
+	solution, err := NewIntentEngine(NewGonumSolver()).SolveObserved(context.Background(), skewedModel(t), func(event OptimizationStageEvent) {
+		events = append(events, event)
+	})
+	if err != nil || solution.Status != StatusOptimal {
+		t.Fatalf("status=%s err=%v", solution.Status, err)
+	}
+	if !reflect.DeepEqual(solution.PhaseA, solution.MainProfileOptimization) || !reflect.DeepEqual(solution.PhaseB, solution.OtherBucketVisibilityOptimization) {
 		t.Fatal("deprecated EngineSolution aliases differ from canonical reports")
 	}
-
-	wantTerminal := []struct {
-		stage OptimizationStageID
-		state string
-	}{
-		{StageProveHardFeasibility, "completed"},
-		{StageMinimizeMainProfileDeviation, "completed"},
-		{StageMaximizeOtherBucketVisibility, "skipped"},
-		{StageMaximizeMainGroupInternalVisibility, "completed"},
-		{StageSelectCanonicalBucketProbabilities, "completed"},
-	}
-	var terminal []struct {
-		stage OptimizationStageID
-		state string
-	}
-	started := make(map[OptimizationStageID]int)
+	want := []OptimizationStageID{StageProveHardFeasibility, StageMinimizeMainProfileDeviation, StageMaximizeOtherBucketVisibility,
+		StageMaximizeMainGroupInternalVisibility, StageSelectCanonicalBucketProbabilities}
+	var terminal []OptimizationStageID
+	started := map[OptimizationStageID]int{}
 	for _, event := range events {
 		if strings.Contains(string(event.Stage), "phase-") {
 			t.Fatalf("semantic stage leaked legacy phase name: %q", event.Stage)
 		}
-		if event.State == "started" {
+		switch event.State {
+		case "started":
 			started[event.Stage]++
-		}
-		if event.State == "completed" || event.State == "skipped" || event.State == "failed" {
-			terminal = append(terminal, struct {
-				stage OptimizationStageID
-				state string
-			}{event.Stage, event.State})
+		case "completed", "skipped", "failed":
+			terminal = append(terminal, event.Stage)
+		case "progress":
+			if event.Status != "FEASIBLE" && event.Status != "INFEASIBLE" && event.Status != "UNKNOWN" && event.Stage != StageSelectCanonicalBucketProbabilities {
+				t.Fatalf("progress status=%q, want an evidence class", event.Status)
+			}
 		}
 	}
-	if !reflect.DeepEqual(terminal, wantTerminal) {
-		t.Fatalf("terminal events=%v want=%v", terminal, wantTerminal)
+	if !reflect.DeepEqual(terminal, want) {
+		t.Fatalf("terminal events=%v want=%v", terminal, want)
 	}
-	for _, item := range wantTerminal {
-		if started[item.stage] != 1 {
-			t.Fatalf("stage %q started %d times", item.stage, started[item.stage])
+	for _, stage := range want {
+		if started[stage] != 1 {
+			t.Fatalf("stage %q started %d times", stage, started[stage])
 		}
 	}
 }
 
-func TestIntentEngineMainGroupVisibilityRhoOneSkipsIntermediateBisection(t *testing.T) {
-	solver := &scriptedSolver{t: t, steps: []solverStep{
-		{origin: ObjectiveHardFeasibility, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-		{origin: ObjectiveIntentRefinement, status: SolveOptimal},
-		{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveOptimal}, // rho=0 is an actual solve
-		{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveOptimal}, // rho=1
-		{origin: ObjectiveIntentRefinement, status: SolveOptimal},
-		{origin: ObjectiveCanonicalBucketProbability, status: SolveOptimal},
-	}}
-	result, err := NewIntentEngine(solver).Solve(context.Background(), engineTestMainGroupModel(7))
+// TestSigmaEndpointsNeverCallSolver is A26: a coupling decision calls the
+// backend only for the per-Class witnesses; both σ endpoints of every Class
+// come from the exact simplex.
+func TestSigmaEndpointsNeverCallSolver(t *testing.T) {
+	compiled := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, evidenceFixtureClass(0, .5), evidenceSkewedClass(1, .5))
+	solver := &countingSolver{inner: NewGonumSolver()}
+	run := NewIntentEngine(solver).newRun(compiled, nil)
+	decision, err := run.decideJoint(context.Background(), compiled.Hard, StageProveHardFeasibility, ObjectiveHardFeasibility, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	solver.assertConsumed()
-	main := result.MainGroupInternalVisibilityOptimization
-	if main.Probes != 2 || main.Lower != 1 || main.Upper != 1 || main.FixedValue != 0.99 {
-		t.Fatalf("rho=1 Main Group visibility report=%+v", main)
+	if decision.class != evidenceFeasible || solver.calls != 2 || run.counters.SigmaEndpoints != 4 {
+		t.Fatalf("class=%s backend calls=%d σ endpoints=%d (%s)", decision.class, solver.calls, run.counters.SigmaEndpoints, decision.reasonText())
 	}
 }
 
-func TestIntentEngineMainGroupVisibilityLockFailureIsNotHardInfeasibility(t *testing.T) {
-	solver := &scriptedSolver{t: t, steps: []solverStep{
-		{origin: ObjectiveHardFeasibility, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-		{origin: ObjectiveIntentRefinement, status: SolveOptimal},
-		{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveOptimal},
-		{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveOptimal},
-		{origin: ObjectiveIntentRefinement, status: SolveInfeasible},
-	}}
-	result, err := NewIntentEngine(solver).Solve(context.Background(), engineTestMainGroupModel(2))
-	if err != nil {
-		t.Fatal(err)
+// TestSigmaEndpointsSolveSavedGonumHangs is A26: the σ-endpoint LPs on which
+// Gonum did not return (problab-p00 contract experiments) are solved by the
+// exact simplex within budget, accepted by the internal set.
+func TestSigmaEndpointsSolveSavedGonumHangs(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("testdata", "stuck-sigma-lp", "*.json"))
+	if err != nil || len(paths) != 4 {
+		t.Fatalf("saved LPs: %v %v", paths, err)
 	}
-	solver.assertConsumed()
-	if result.Status != StatusNumericalFailure || result.Status == StatusInfeasibleModel {
-		t.Fatalf("Main Group visibility lock failure status=%q diagnostics=%+v", result.Status, result.Diagnostics)
-	}
-}
-
-func TestIntentEngineClassifiesMainGroupVisibilityProbeFailures(t *testing.T) {
-	tests := []struct {
-		name       string
-		mainSteps  []solverStep
-		wantStatus Status
-	}{
-		{
-			name:       "rho zero known-witness contradiction",
-			mainSteps:  []solverStep{{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveInfeasible}},
-			wantStatus: StatusNumericalFailure,
-		},
-		{
-			name: "rho one numerical failure",
-			mainSteps: []solverStep{
-				{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveOptimal},
-				{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveNumericalFailure},
-			},
-			wantStatus: StatusNumericalFailure,
-		},
-		{
-			name: "rho one unbounded",
-			mainSteps: []solverStep{
-				{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveOptimal},
-				{origin: ObjectiveMainGroupInternalVisibilityProbe, status: SolveUnbounded},
-			},
-			wantStatus: StatusInternalError,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			steps := []solverStep{
-				{origin: ObjectiveHardFeasibility, status: SolveOptimal},
-				{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-				{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-				{origin: ObjectiveIntentRefinement, status: SolveOptimal},
-			}
-			steps = append(steps, test.mainSteps...)
-			solver := &scriptedSolver{t: t, steps: steps}
-			result, err := NewIntentEngine(solver).Solve(context.Background(), engineTestMainGroupModel(2))
-			if err != nil {
-				t.Fatal(err)
-			}
-			solver.assertConsumed()
-			if result.Status != test.wantStatus || result.Status == StatusInfeasibleModel {
-				t.Fatalf("status=%q want=%q diagnostics=%+v", result.Status, test.wantStatus, result.Diagnostics)
-			}
-		})
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record slowSolveRecord
+		if err := json.Unmarshal(raw, &record); err != nil {
+			t.Fatal(err)
+		}
+		problem, err := record.Problem.Problem()
+		if err != nil {
+			t.Fatal(err)
+		}
+		objective, err := record.Objective.Objective()
+		if err != nil {
+			t.Fatal(err)
+		}
+		tau, err := decodeFloat64(record.Options["feasibility_tolerance"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := NewIntentEngine(statusSolver{SolveNumericalFailure}).newRun(CompiledModel{}, nil)
+		run.useTolerance(tau)
+		index := map[VariableID]int{}
+		for j, v := range problem.Variables {
+			index[v.ID] = j
+		}
+		coefficients := map[int]*big.Rat{}
+		for _, term := range objective.Terms {
+			coefficients[index[term.Variable]] = ratOf(term.Coeff)
+		}
+		x, err := run.sigmaEndpoint(context.Background(), problem, coefficients, objective.Sense)
+		if err != nil || x == nil || !replayWithRule(problem, x, internalRule(tau)) {
+			t.Fatalf("%s: endpoint=%v err=%v", path, x, err)
+		}
+		if run.counters.BudgetExhausted != 0 || run.counters.MaxExactPivots > 100 {
+			t.Fatalf("%s: exact usage %+v", path, run.counters)
+		}
 	}
 }

@@ -25,6 +25,9 @@ import (
 type exactBudget struct {
 	maxPivots int
 	maxBits   int
+	// usage, when set, records the largest pivot count and number size seen
+	// so reports can show how much of the budget real models consume.
+	usage *EvidenceCounters
 }
 
 var defaultExactBudget = exactBudget{maxPivots: 20000, maxBits: 1 << 14}
@@ -153,8 +156,18 @@ func (t *exactTableau) maxBits() int {
 }
 
 // solve runs primal simplex from a feasible identity basis.
-func (t *exactTableau) solve(ctx context.Context, budget exactBudget) (exactStatus, []*big.Rat, int) {
-	pivots := 0
+func (t *exactTableau) solve(ctx context.Context, budget exactBudget) (status exactStatus, x []*big.Rat, pivots int) {
+	if budget.usage != nil {
+		defer func() {
+			budget.usage.ExactCalls++
+			if pivots > budget.usage.MaxExactPivots {
+				budget.usage.MaxExactPivots = pivots
+			}
+			if bits := t.maxBits(); bits > budget.usage.MaxExactBits {
+				budget.usage.MaxExactBits = bits
+			}
+		}()
+	}
 	for {
 		if ctx.Err() != nil {
 			return exactCanceled, nil, pivots

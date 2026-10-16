@@ -56,7 +56,7 @@ var (
 	smallestNormal  = math.Float64frombits(0x0010000000000000) // 2⁻¹⁰²²
 )
 
-func ratOf(value float64) *big.Rat { return new(big.Rat).SetFloat64(value) }
+func ratOf(value float64) *big.Rat  { return new(big.Rat).SetFloat64(value) }
 func ratAdd(a, b *big.Rat) *big.Rat { return new(big.Rat).Add(a, b) }
 func ratSub(a, b *big.Rat) *big.Rat { return new(big.Rat).Sub(a, b) }
 func ratMul(a, b *big.Rat) *big.Rat { return new(big.Rat).Mul(a, b) }
@@ -74,14 +74,14 @@ func ratMax(values ...*big.Rat) *big.Rat {
 	return out
 }
 
-// effectiveTau returns τ'' = τ(1+u)/(1−u) exactly.
+// effectiveTau returns τ” = τ(1+u)/(1−u) exactly.
 func effectiveTau(tau float64) *big.Rat {
 	return ratQuo(ratMul(ratOf(tau), ratAdd(ratOne, ratUnitRoundoff)), ratSub(ratOne, ratUnitRoundoff))
 }
 
 // validateEvidenceTolerance enforces the two preconditions of the envelope
 // derivation on the configured feasibility tolerance: τ is a normal float64
-// and τ'' < 1.
+// and τ” < 1.
 func validateEvidenceTolerance(tau float64) error {
 	if !isFinite(tau) || tau < smallestNormal {
 		return fmt.Errorf("must be a normal float64 (at least 2^-1022) for verified LP evidence")
@@ -152,35 +152,158 @@ type envelopeKind struct {
 	fixedUpper     []*big.Rat
 }
 
-// buildEnvelope constructs the outer envelope M̄ for replay tolerance tau.
+// acceptanceRule is the replay rule a point is judged by: rowTau is the row
+// tolerance and boundTau the bound tolerance (0 = bounds must hold exactly).
+// The production replay {τ, τ} is the external set; internalRule is the
+// stricter engine-internal set (techspec §4.6).
+type acceptanceRule struct {
+	rowTau   float64
+	boundTau float64
+}
+
+// internalRuleVersion names internalRule in reports and evidence.
+const internalRuleVersion = "rows-tau-over-3/bounds-exact/v1"
+
+func productRule(tau float64) acceptanceRule { return acceptanceRule{rowTau: tau, boundTau: tau} }
+
+// internalRule accepts rows within τ/3 and bounds exactly. One sum
+// normalization at materialization then keeps the relative row residual
+// within 2τₑ/(1−τₑ) ≈ 2τ/3 (exact Class weights, before float and alias
+// error), leaving room under the external replay(τ).
+func internalRule(tau float64) acceptanceRule { return acceptanceRule{rowTau: tau / 3} }
+
+// version is the rule's identifier for evidence; the external set is the
+// production replay.
+func (rule acceptanceRule) version() string {
+	if rule.rowTau == rule.boundTau {
+		return "replay-semantic-solution"
+	}
+	return internalRuleVersion
+}
+
+// buildEnvelope constructs the outer envelope M̄ for the production replay
+// rule with tolerance tau.
 func buildEnvelope(problem LinearProblem, tau float64) (exactModel, envelopeReport, error) {
-	if err := validateEvidenceTolerance(tau); err != nil {
+	return buildEnvelopeRule(problem, productRule(tau))
+}
+
+// buildEnvelopeRule constructs the outer envelope of every point accepted by
+// rule. A zero bound tolerance needs no bound allowance: replay then accepts
+// only fl(l−x) ≤ 0, which holds exactly when x ≥ l.
+func buildEnvelopeRule(problem LinearProblem, rule acceptanceRule) (exactModel, envelopeReport, error) {
+	if err := validateEvidenceTolerance(rule.rowTau); err != nil {
 		return exactModel{}, envelopeReport{}, err
 	}
-	tauEff := effectiveTau(tau)
+	rowEff := effectiveTau(rule.rowTau)
+	boundAllowance := func(*big.Rat) *big.Rat { return new(big.Rat) }
+	if rule.boundTau > 0 {
+		if err := validateEvidenceTolerance(rule.boundTau); err != nil {
+			return exactModel{}, envelopeReport{}, err
+		}
+		boundEff := effectiveTau(rule.boundTau)
+		boundAllowance = func(scale *big.Rat) *big.Rat { return ratMul(boundEff, scale) }
+	}
 	return buildExactModel(problem, envelopeKind{
-		boundAllowance: func(scale *big.Rat) *big.Rat { return ratMul(tauEff, scale) },
-		rowSlack:       func(c *big.Rat) *big.Rat { return ratQuo(ratMul(tauEff, c), ratSub(ratOne, tauEff)) },
+		boundAllowance: boundAllowance,
+		rowSlack:       func(c *big.Rat) *big.Rat { return ratQuo(ratMul(rowEff, c), ratSub(ratOne, rowEff)) },
 		rounding:       true,
 	})
 }
 
-// buildInnerModel is the diagnostic polyhedron slightly inside the replay
-// set (slack τ(1−η')·max(1,|·|), no rounding allowance). Points found in it
-// are candidates only and always go through replay. +Inf upper bounds reuse
-// the envelope's derived bounds, which every replay-accepted point satisfies.
+// buildInnerModel is the production-rule inner model.
 func buildInnerModel(problem LinearProblem, tau float64) (exactModel, error) {
-	outer, _, err := buildEnvelope(problem, tau)
+	return buildInnerModelRule(problem, productRule(tau))
+}
+
+// buildInnerModelRule is the polyhedron slightly inside the set accepted by
+// rule (slack tolerance·(1−10⁻⁴)·max(1,|·|), no rounding allowance). Points
+// found in it are candidates only and always go through replay. +Inf upper
+// bounds reuse the envelope's derived bounds, which every accepted point
+// satisfies.
+func buildInnerModelRule(problem LinearProblem, rule acceptanceRule) (exactModel, error) {
+	outer, _, err := buildEnvelopeRule(problem, rule)
 	if err != nil {
 		return exactModel{}, err
 	}
-	shrunk := ratMul(ratOf(tau), ratSub(ratOne, big.NewRat(1, 10000)))
+	shrink := ratSub(ratOne, big.NewRat(1, 10000))
+	rowShrunk := ratMul(ratOf(rule.rowTau), shrink)
+	boundShrunk := ratMul(ratOf(rule.boundTau), shrink)
 	model, _, err := buildExactModel(problem, envelopeKind{
-		boundAllowance: func(scale *big.Rat) *big.Rat { return ratMul(shrunk, scale) },
-		rowSlack:       func(c *big.Rat) *big.Rat { return ratMul(shrunk, c) },
+		boundAllowance: func(scale *big.Rat) *big.Rat { return ratMul(boundShrunk, scale) },
+		rowSlack:       func(c *big.Rat) *big.Rat { return ratMul(rowShrunk, c) },
 		fixedUpper:     outer.upper,
 	})
 	return model, err
+}
+
+// buildCandidateModels returns the polyhedra exact candidate points are taken
+// from, inner first: the inner model of rule, then the unrelaxed model (every
+// row holds exactly). Taking the unrelaxed model first would leave a gap of
+// about τ/slope between a bracket's witness end and its certificate end.
+// Both reuse the envelope's derived bounds for +Inf variables.
+func buildCandidateModels(problem LinearProblem, rule acceptanceRule) ([]exactModel, error) {
+	inner, err := buildInnerModelRule(problem, rule)
+	if err != nil {
+		return nil, err
+	}
+	zero := func(*big.Rat) *big.Rat { return new(big.Rat) }
+	exact, _, err := buildExactModel(problem, envelopeKind{boundAllowance: zero, rowSlack: zero, fixedUpper: inner.upper})
+	if err != nil {
+		return []exactModel{inner}, nil
+	}
+	return []exactModel{inner, exact}, nil
+}
+
+// replayWithRule is replaySemanticSolution with separate row and bound
+// tolerances (boundTau 0: bounds must hold exactly). Non-finite intermediates
+// are rejected as in the production replay.
+func replayWithRule(problem LinearProblem, values []float64, rule acceptanceRule) bool {
+	if len(values) != len(problem.Variables) {
+		return false
+	}
+	if rule.rowTau == rule.boundTau {
+		_, _, ok := replaySemanticSolution(problem, values, rule.rowTau)
+		return ok
+	}
+	indices := make(map[VariableID]int, len(problem.Variables))
+	for i, variable := range problem.Variables {
+		indices[variable.ID] = i
+		value := values[i]
+		if !isFinite(value) {
+			return false
+		}
+		violation := math.Max(variable.Lower-value, 0)
+		if !math.IsInf(variable.Upper, 1) {
+			violation = math.Max(violation, value-variable.Upper)
+		}
+		allowed := 0.0
+		if rule.boundTau > 0 {
+			allowed = scaledTolerance(rule.boundTau, variable.Lower, variable.Upper)
+		}
+		if !isFinite(violation) || violation > allowed {
+			return false
+		}
+	}
+	for _, row := range problem.Rows {
+		lhs := 0.0
+		for _, term := range row.Terms {
+			lhs += term.Coeff * values[indices[term.Variable]]
+		}
+		violation := 0.0
+		switch row.Sense {
+		case SenseEQ:
+			violation = math.Abs(lhs - row.RHS)
+		case SenseLE:
+			violation = math.Max(lhs-row.RHS, 0)
+		case SenseGE:
+			violation = math.Max(row.RHS-lhs, 0)
+		}
+		allowed := scaledTolerance(rule.rowTau, lhs, row.RHS)
+		if !isFinite(lhs) || !isFinite(violation) || !isFinite(allowed) || violation > allowed {
+			return false
+		}
+	}
+	return true
 }
 
 func buildExactModel(problem LinearProblem, kind envelopeKind) (exactModel, envelopeReport, error) {

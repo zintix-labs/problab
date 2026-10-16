@@ -172,9 +172,10 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 		intent.Overall.ClassWeightBase = &base
 		intent.Classes[0].Weight = int(base)
 	}
-	options.ProfileBisectionIterations = 12
-	options.OtherVisibilityBisectionIterations = 12
-	options.MainGroupInternalVisibilityBisectionIterations = 12
+	// 28 halvings of [0,2] reach the 1e-8 completion precision (techspec §8.1).
+	options.ProfileBisectionIterations = 30
+	options.OtherVisibilityBisectionIterations = 30
+	options.MainGroupInternalVisibilityBisectionIterations = 30
 	outputDirectory := t.TempDir()
 	config := Config{
 		Version: ConfigVersion,
