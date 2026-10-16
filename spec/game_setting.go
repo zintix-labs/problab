@@ -56,7 +56,7 @@ func (gs *GameSetting) valid() error {
 			return errs.NewFatal(fmt.Sprintf("game_name: %s err:invalid bet unit", gs.GameName))
 		}
 		if gs.MaxWinLimit < b {
-			return errs.NewFatal(fmt.Sprintf("game_name: %s err:empty game mode settings", gs.GameName))
+			return errs.NewFatal(fmt.Sprintf("game_name: %s err: max_win_limit (%d) must be >= every bet unit (got %d)", gs.GameName, gs.MaxWinLimit, b))
 		}
 	}
 	if err := gs.OptimalSetting.valid(); err != nil {
