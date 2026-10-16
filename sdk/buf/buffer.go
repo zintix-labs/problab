@@ -74,7 +74,7 @@ func (s *SpinResult) End() {
 	s.IsGameEnd = true
 }
 
-// Reset 重置累積資料，保留已配置的內部切片容量。
+// Reset 清除本次結果與輸出狀態，保留結果切片容量及 State 物件。
 func (s *SpinResult) Reset() {
 	s.TotalWin = 0
 	s.Bet = 0
@@ -83,6 +83,11 @@ func (s *SpinResult) Reset() {
 	s.GameModeCount = 0
 	s.GameModeList = s.GameModeList[:0]
 	s.IsGameEnd = false
+	if s.State != nil {
+		s.State.StartCoreSnap = nil
+		s.State.AfterCoreSnap = nil
+		s.State.Checkpoint = nil
+	}
 }
 
 // Game Mode
