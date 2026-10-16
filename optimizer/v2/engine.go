@@ -56,6 +56,12 @@ const (
 // signal, or a contradiction after a known feasible witness exists.
 type IntentEngine struct {
 	solver Solver
+
+	// Operational knobs; zero values select the documented defaults. They
+	// never change the mathematics and are not configuration intent.
+	evidenceDirectory  string
+	slowSolveThreshold time.Duration
+	slowSolveHeartbeat time.Duration
 }
 
 // NewIntentEngine constructs the deterministic v2 engine with an injectable

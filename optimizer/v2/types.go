@@ -867,6 +867,33 @@ type OptimizationStageEvent struct {
 	Status     string
 	Message    string
 	Duration   time.Duration
+
+	// Per-LP fields, set only for the Solve* lifecycle states (solve_watch.go).
+	SolveIndex  int    // 1-based LP counter within the engine run
+	SolveSource string // e.g. "plain", "gap", "sigma-min", "diagnostic"
+	Class       int    // 1-based Class position; 0 for joint problems
+	ClassCount  int
+	Variables   int
+	Rows        int
+	Path        string // saved slow-solve record, when one exists
+}
+
+// EvidenceCounters records how a stage obtained its evidence. Each kind of
+// exact work is counted and timed separately so reports never fold objective
+// bounds into infeasibility-certificate time.
+type EvidenceCounters struct {
+	Solves                       int            `json:"solves"`
+	SlowSolves                   int            `json:"slow_solves"`
+	WitnessAttempts              map[string]int `json:"witness_attempts,omitempty"`
+	WitnessFound                 map[string]int `json:"witness_found,omitempty"`
+	InfeasibilityCertificates    int            `json:"infeasibility_certificates"`
+	InfeasibilityCertificateTime time.Duration  `json:"infeasibility_certificate_ns"`
+	ExactBounds                  int            `json:"exact_bounds"`
+	ExactBoundTime               time.Duration  `json:"exact_bound_ns"`
+	ExactWitnesses               int            `json:"exact_witnesses"`
+	ExactWitnessTime             time.Duration  `json:"exact_witness_ns"`
+	SigmaEndpointImprovements    int            `json:"sigma_endpoint_improvements"`
+	BudgetExhausted              int            `json:"budget_exhausted"`
 }
 
 // OptimizationStageObserver receives synchronous, declaration-ordered engine

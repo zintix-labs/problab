@@ -85,6 +85,14 @@ type StageEvent struct {
 	DuplicateRate          float64
 	DuplicateClasses       []CollectionClassDuplicateReport
 	DuplicateOrigins       []CollectionDuplicateOriginReport
+
+	// Per-LP watcher fields mirrored from OptimizationStageEvent.
+	SolveIndex  int
+	SolveSource string
+	Class       int
+	ClassCount  int
+	Variables   int
+	Rows        int
 }
 
 // ClassCollectionProgress is one immutable snapshot of a Class quota. Reporter
@@ -665,7 +673,9 @@ func (t *Tuner) solveStage(ctx context.Context, compiled CompiledModel, betMode 
 				Objective: event.Objective, Metric: event.Metric, Probe: event.Probe, Total: event.Total,
 				Lower: cloneFloatPointer(event.Lower), Upper: cloneFloatPointer(event.Upper),
 				FixedValue: cloneFloatPointer(event.FixedValue), Status: event.Status,
-				Duration: event.Duration,
+				Duration: event.Duration, Path: event.Path,
+				SolveIndex: event.SolveIndex, SolveSource: event.SolveSource,
+				Class: event.Class, ClassCount: event.ClassCount, Variables: event.Variables, Rows: event.Rows,
 			})
 		}
 		switch event.State {

@@ -24,7 +24,10 @@ import (
 	"gonum.org/v1/gonum/optimize/convex/lp"
 )
 
-const gonumTransformVersion = "intent-lp-v2/gonum-standard-form-v2"
+const (
+	gonumTransformVersion = "intent-lp-v2/gonum-standard-form-v2"
+	gonumBackendVersion   = "gonum.org/v1/gonum/v0.16.0"
+)
 
 var errInconsistentDependentEquality = errors.New("semantic equalities are linearly dependent with inconsistent right-hand sides")
 
@@ -76,7 +79,7 @@ func (s *GonumSolver) Solve(
 		if errors.Is(err, errInconsistentDependentEquality) {
 			return SolveResult{Status: SolveInfeasible, Evidence: SolverEvidence{
 				Objective: string(objective.Name),
-				Backend:   "gonum/lp.Simplex", BackendVersion: "gonum.org/v1/gonum/v0.16.0",
+				Backend:   "gonum/lp.Simplex", BackendVersion: gonumBackendVersion,
 				BackendCode: "inconsistent_dependent_equality", TransformVersion: gonumTransformVersion,
 				SemanticColumns: len(problem.Variables), Rows: len(problem.Rows),
 			}}, nil
@@ -86,7 +89,7 @@ func (s *GonumSolver) Solve(
 	evidence := SolverEvidence{
 		Objective:        string(objective.Name),
 		Backend:          "gonum/lp.Simplex",
-		BackendVersion:   "gonum.org/v1/gonum/v0.16.0",
+		BackendVersion:   gonumBackendVersion,
 		TransformVersion: gonumTransformVersion,
 		SemanticColumns:  form.semanticColumns,
 		Rows:             len(problem.Rows),

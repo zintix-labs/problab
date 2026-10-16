@@ -124,8 +124,11 @@ func runV2(arguments []string, _ io.Writer, stderr io.Writer) (int, error) {
 		return 1, fmt.Errorf("construct Problab: %w", err)
 	}
 	defer func() { _ = lab.Close() }()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	ctx, release := watchInterrupts(signals, stderr, os.Exit)
+	defer release()
 	return optimizercli.Run(ctx, optimizercli.Options{
 		Config:          raw,
 		ConfigSource:    fmt.Sprintf("embedded %q", embeddedConfigName),
@@ -134,4 +137,40 @@ func runV2(arguments []string, _ io.Writer, stderr io.Writer) (int, error) {
 		CollectionTags:  gameTags,
 		ResultConverter: useConverter,
 	})
+}
+
+// interruptExitCode is the conventional status for termination by SIGINT.
+const interruptExitCode = 130
+
+// watchInterrupts implements the two-stage Ctrl+C contract. The first signal
+// cancels the returned context: optimizer/v2 starts no new work, waits for the
+// Gonum solve that is already running (it cannot be interrupted in-process),
+// and then returns its cancellation error. A second signal exits the whole
+// process immediately through exit. Signal handling lives only here; the SDK
+// never intercepts signals or calls os.Exit. release stops the watcher.
+func watchInterrupts(signals <-chan os.Signal, stderr io.Writer, exit func(int)) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		select {
+		case <-signals:
+		case <-done:
+			return
+		}
+		_, _ = fmt.Fprintln(stderr, "\ncmd/opt: cancellation requested; waiting for the current uninterruptible Gonum solve to return (press Ctrl+C again to exit immediately)")
+		cancel()
+		select {
+		case <-signals:
+			_, _ = fmt.Fprintln(stderr, "cmd/opt: second interrupt; exiting immediately")
+			exit(interruptExitCode)
+		case <-done:
+		}
+	}()
+	return ctx, func() {
+		close(done)
+		<-finished
+		cancel()
+	}
 }
