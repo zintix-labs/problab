@@ -67,6 +67,7 @@ type engineRun struct {
 	solveIndex  int
 	slowSolves  int
 	evidenceDir string
+	options     SolveOptions
 	counters    EvidenceCounters
 }
 
@@ -75,7 +76,13 @@ func (e *IntentEngine) newRun(compiled CompiledModel, observer OptimizationStage
 	if dir == "" && compiled.Prepared.Plan.Plan.Output.Directory != "" {
 		dir = filepath.Join(compiled.Prepared.Plan.Plan.Output.Directory, evidenceSubdirectory)
 	}
-	return &engineRun{engine: e, compiled: compiled, observer: observer, evidenceDir: dir}
+	return &engineRun{engine: e, compiled: compiled, observer: observer, evidenceDir: dir,
+		options: SolveOptions{
+			FeasibilityTolerance: compiled.Prepared.Plan.EngineOptions.FeasibilityTolerance,
+			OptimalityTolerance:  compiled.Prepared.Plan.EngineOptions.OptimalityTolerance,
+		},
+		counters: EvidenceCounters{WitnessAttempts: map[string]int{}, WitnessFound: map[string]int{}},
+	}
 }
 
 // emit serializes every observer call (engine thread and watcher goroutines)

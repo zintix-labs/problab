@@ -62,6 +62,7 @@ type IntentEngine struct {
 	evidenceDirectory  string
 	slowSolveThreshold time.Duration
 	slowSolveHeartbeat time.Duration
+	exactBudget        *exactBudget // nil selects defaultExactBudget
 }
 
 // NewIntentEngine constructs the deterministic v2 engine with an injectable
