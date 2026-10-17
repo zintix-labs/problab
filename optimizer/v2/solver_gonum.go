@@ -24,7 +24,10 @@ import (
 	"gonum.org/v1/gonum/optimize/convex/lp"
 )
 
-const gonumTransformVersion = "intent-lp-v2/gonum-standard-form-v2"
+const (
+	gonumTransformVersion = "intent-lp-v2/gonum-standard-form-v2"
+	gonumBackendVersion   = "gonum.org/v1/gonum/v0.16.0"
+)
 
 var errInconsistentDependentEquality = errors.New("semantic equalities are linearly dependent with inconsistent right-hand sides")
 
@@ -76,7 +79,7 @@ func (s *GonumSolver) Solve(
 		if errors.Is(err, errInconsistentDependentEquality) {
 			return SolveResult{Status: SolveInfeasible, Evidence: SolverEvidence{
 				Objective: string(objective.Name),
-				Backend:   "gonum/lp.Simplex", BackendVersion: "gonum.org/v1/gonum/v0.16.0",
+				Backend:   "gonum/lp.Simplex", BackendVersion: gonumBackendVersion,
 				BackendCode: "inconsistent_dependent_equality", TransformVersion: gonumTransformVersion,
 				SemanticColumns: len(problem.Variables), Rows: len(problem.Rows),
 			}}, nil
@@ -86,7 +89,7 @@ func (s *GonumSolver) Solve(
 	evidence := SolverEvidence{
 		Objective:        string(objective.Name),
 		Backend:          "gonum/lp.Simplex",
-		BackendVersion:   "gonum.org/v1/gonum/v0.16.0",
+		BackendVersion:   gonumBackendVersion,
 		TransformVersion: gonumTransformVersion,
 		SemanticColumns:  form.semanticColumns,
 		Rows:             len(problem.Rows),
@@ -359,8 +362,15 @@ func replaySemanticSolution(problem LinearProblem, values []float64, tolerance f
 		if !math.IsInf(variable.Upper, 1) {
 			violation = math.Max(violation, value-variable.Upper)
 		}
+		allowed := scaledTolerance(tolerance, variable.Lower, variable.Upper)
+		if !isFinite(violation) || !isFinite(allowed) {
+			// A non-finite intermediate is never acceptance (techspec §4.1).
+			maxBoundViolation = math.Inf(1)
+			pass = false
+			continue
+		}
 		maxBoundViolation = math.Max(maxBoundViolation, violation)
-		if violation > scaledTolerance(tolerance, variable.Lower, variable.Upper) {
+		if violation > allowed {
 			pass = false
 		}
 	}
@@ -379,8 +389,18 @@ func replaySemanticSolution(problem LinearProblem, values []float64, tolerance f
 		case SenseGE:
 			violation = math.Max(row.RHS-lhs, 0)
 		}
+		allowed := scaledTolerance(tolerance, lhs, row.RHS)
+		if !isFinite(lhs) || !isFinite(violation) || !isFinite(allowed) {
+			// An overflowed sum (+Inf, or NaN from Inf−Inf, possibly hidden by
+			// a fused multiply-add) must not pass as satisfied: every accepted
+			// point then has finite intermediates, which the evidence envelope
+			// relies on (techspec §4.1).
+			maxRowViolation = math.Inf(1)
+			pass = false
+			continue
+		}
 		maxRowViolation = math.Max(maxRowViolation, violation)
-		if violation > scaledTolerance(tolerance, lhs, row.RHS) {
+		if violation > allowed {
 			pass = false
 		}
 	}

@@ -59,44 +59,70 @@ func minimumCVToy(t *testing.T, n int, floor float64) CompiledModel {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := addRow(&compiled.Hard, LinearRow{ID: "cv-floor", Sense: SenseGE, RHS: floor, Terms: terms}); err != nil {
+		// Production CV rows are the only Class-free rows (techspec §6.1).
+		if err := addRow(&compiled.Hard, LinearRow{ID: cvMinRowID, Sense: SenseGE, RHS: floor, Terms: terms}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return compiled
 }
 
+// minimumCVRun runs the Step 5 selection of techspec §7.3 on c.Hard.
+func minimumCVRun(solver Solver, c CompiledModel, start []float64, observer OptimizationStageObserver) ([]float64, CanonicalizationReport, *stageFailure, error) {
+	run := NewIntentEngine(solver).newRun(c, observer)
+	run.options.OptimalityTolerance = 1e-9
+	run.useTolerance(1e-9)
+	return run.selectMinimumCV(context.Background(), c.Hard, start)
+}
+
 func minimumCVSelect(t *testing.T, c CompiledModel) (SolveResult, CanonicalizationReport) {
 	t.Helper()
-	_, r, report, failure, err := NewIntentEngine(NewGonumSolver()).selectCanonicalBucketProbabilities(context.Background(), c, c.Hard, SolveResult{}, SolveOptions{FeasibilityTolerance: 1e-9, OptimalityTolerance: 1e-9}, nil)
-	if err != nil || failure.Status.Valid() {
+	values, report, failure, err := minimumCVRun(NewGonumSolver(), c, nil, nil)
+	if err != nil || failure != nil {
 		t.Fatalf("selection: %v %+v", err, failure)
 	}
-	return r, report
+	return SolveResult{Status: SolveOptimal, Values: values}, report
+}
+
+// assertInternal compares a selected value with the exact optimum of the
+// unrelaxed model. The selection is optimal over the internal set, where
+// every row may move by τ/3 of its scale at once, so a value may differ from
+// the exact optimum by a few τ; the tests allow the delivery precision 1e-8.
+func assertInternal(t *testing.T, name string, got, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 1e-8*math.Max(1, math.Abs(want)) {
+		t.Fatalf("%s = %.17g, want %.17g within the internal set", name, got, want)
+	}
 }
 
 func TestMinimumCVSelectionKnownOptimum(t *testing.T) {
 	c := minimumCVToy(t, 3, 0)
 	r, report := minimumCVSelect(t, c)
-	if !reflect.DeepEqual(r.Values, []float64{0, 1, 0}) || report.Method != "min_cv" || report.Solves != 1 || !report.CVDefined || *report.CV != 0 || *report.SecondMoment != 1 {
+	if report.Method != "per-class-decomposition" || report.Solves < 1 || !report.CVDefined ||
+		report.GapUnit != "second_moment" || report.OptimalityGap == nil || *report.OptimalityGap > *report.RequiredGap {
 		t.Fatalf("%+v %+v", r, report)
 	}
+	for i, want := range []float64{0, 1, 0} {
+		assertInternal(t, "probability", r.Values[i], want)
+	}
+	assertInternal(t, "second moment", *report.SecondMoment, 1)
+	assertInternal(t, "CV", *report.CV, 0)
 }
 func TestMinimumCVSelectionRespectsCVFloor(t *testing.T) {
 	c := minimumCVToy(t, 3, 1.5)
 	r, report := minimumCVSelect(t, c)
 	for i, want := range []float64{.25, .5, .25} {
-		assertNear(t, "probability", r.Values[i], want)
+		assertInternal(t, "probability", r.Values[i], want)
 	}
 	assertNear(t, "CV", *report.CV, math.Sqrt(.5))
 }
 func TestMinimumCVSelectionRespectsRefinementLocks(t *testing.T) {
 	c := minimumCVToy(t, 3, 0)
-	if err := addRow(&c.Hard, LinearRow{ID: "locked-visibility", Sense: SenseGE, RHS: .2, Terms: []LinearTerm{{Variable: c.Primary[0].ID, Coeff: 1}}}); err != nil {
+	if err := addRow(&c.Hard, LinearRow{ID: "locked-visibility", ClassID: c.Prepared.Classes[0].ID, Sense: SenseGE, RHS: .2, Terms: []LinearTerm{{Variable: c.Primary[0].ID, Coeff: 1}}}); err != nil {
 		t.Fatal(err)
 	}
 	_, report := minimumCVSelect(t, c)
-	assertNear(t, "second", *report.SecondMoment, 1.4)
+	assertInternal(t, "second", *report.SecondMoment, 1.4)
 }
 func floatBits(values []float64) []uint64 {
 	bits := make([]uint64, len(values))
@@ -136,24 +162,20 @@ func TestMinimumCVSelectionMultiOptimumRepeatable(t *testing.T) {
 	}
 }
 
-func TestMinimumCVSelectionUsesOneSolve(t *testing.T) {
+// Step 5 now runs on the per-Class decomposition (techspec §7.3, amending
+// single-pass-minimum-cv-selection's one-Solve acceptance): it must still
+// leave the supplied model untouched and report its real solve count.
+func TestMinimumCVSelectionDoesNotMutateModel(t *testing.T) {
 	c := minimumCVToy(t, 4, 3.5)
 	before := cloneLinearProblem(c.Hard)
 	calls := 0
 	solver := minimumCVSolverFunc(func(ctx context.Context, p LinearProblem, o LinearObjective, opts SolveOptions) (SolveResult, error) {
 		calls++
-		terms, _, err := buildSecondMomentExpression(c)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if o.Sense != Minimize || !reflect.DeepEqual(o.Terms, terms) || !reflect.DeepEqual(p, before) {
-			t.Fatal("wrong selection model/objective")
-		}
 		return NewGonumSolver().Solve(ctx, p, o, opts)
 	})
-	p, _, report, failure, err := NewIntentEngine(solver).selectCanonicalBucketProbabilities(context.Background(), c, c.Hard, SolveResult{}, SolveOptions{FeasibilityTolerance: 1e-9, OptimalityTolerance: 1e-9}, nil)
-	if err != nil || failure.Status.Valid() || calls != 1 || report.Solves != 1 || !reflect.DeepEqual(p, before) || !reflect.DeepEqual(c.Hard, before) {
-		t.Fatalf("calls=%d failure=%+v err=%v", calls, failure, err)
+	_, report, failure, err := minimumCVRun(solver, c, nil, nil)
+	if err != nil || failure != nil || report.Solves != calls || calls == 0 || !reflect.DeepEqual(c.Hard, before) {
+		t.Fatalf("calls=%d solves=%d failure=%+v err=%v", calls, report.Solves, failure, err)
 	}
 }
 
@@ -254,8 +276,8 @@ func TestMinimumCVRequiresFixedExpectation(t *testing.T) {
 				calls++
 				return SolveResult{}, nil
 			})
-			_, _, _, failure, err := NewIntentEngine(solver).selectCanonicalBucketProbabilities(context.Background(), c, c.Hard, SolveResult{}, SolveOptions{FeasibilityTolerance: 1e-9, OptimalityTolerance: 1e-9}, nil)
-			if err != nil || calls != 0 || failure.Status != StatusInternalError {
+			_, _, failure, err := minimumCVRun(solver, c, nil, nil)
+			if err != nil || calls != 0 || failure == nil || failure.solution.Status != StatusInternalError {
 				t.Fatalf("calls=%d err=%v failure=%+v", calls, err, failure)
 			}
 		})
@@ -276,6 +298,9 @@ func TestMinimumCVRequiresFixedExpectation(t *testing.T) {
 	}
 }
 
+// The backend's status is never evidence (techspec §2): a backend that
+// reports failure or returns garbage cannot stop the selection, because the
+// exact witness takes over; a backend error or cancellation is propagated.
 func TestMinimumCVSelectionFailureAndCancellation(t *testing.T) {
 	stop := errors.New("backend IO")
 	tests := []struct {
@@ -301,16 +326,24 @@ func TestMinimumCVSelectionFailureAndCancellation(t *testing.T) {
 				calls++
 				return test.result, test.err
 			})
-			_, _, report, failure, err := NewIntentEngine(solver).selectCanonicalBucketProbabilities(context.Background(), c, c.Hard, SolveResult{Status: SolveOptimal, Values: []float64{0, 1, 0}}, SolveOptions{FeasibilityTolerance: 1e-9, OptimalityTolerance: 1e-9}, func(e OptimizationStageEvent) { events = append(events, e) })
-			if calls != 1 || report.SecondMoment != nil || len(events) != 2 || events[1].State != "failed" {
-				t.Fatalf("calls=%d events=%v report=%+v", calls, events, report)
+			values, report, failure, err := minimumCVRun(solver, c, []float64{0, 1, 0}, func(e OptimizationStageEvent) { events = append(events, e) })
+			if calls == 0 || len(events) == 0 || events[0].State != "started" {
+				t.Fatalf("calls=%d events=%v", calls, events)
 			}
+			last := events[len(events)-1]
 			if test.err != nil {
-				if !errors.Is(err, test.err) {
-					t.Fatalf("error %v", err)
+				if !errors.Is(err, test.err) || report.SecondMoment != nil || last.State != "failed" {
+					t.Fatalf("error %v last=%+v report=%+v", err, last, report)
 				}
-			} else if err != nil || !failure.Status.Valid() || failure.Status == StatusInfeasibleModel || failure.Status == StatusOptimal {
-				t.Fatalf("failure=%+v err=%v", failure, err)
+				return
+			}
+			if err != nil || failure != nil || last.State != "completed" || report.SecondMoment == nil {
+				t.Fatalf("failure=%+v err=%v last=%+v report=%+v", failure, err, last, report)
+			}
+			// The exact witness is an exact optimum rounded to float64.
+			assertInternal(t, "second moment", *report.SecondMoment, 1)
+			for i, want := range []float64{0, 1, 0} {
+				assertInternal(t, "probability", values[i], want)
 			}
 		})
 	}
@@ -320,7 +353,7 @@ func TestMinimumCVZeroAndFixedCases(t *testing.T) {
 	// Zero mean with nonempty primary: exactly one zero-objective solve.
 	c := minimumCVToy(t, 1, 0)
 	_, r := minimumCVSelect(t, c)
-	if r.Solves != 1 || r.CVDefined || r.CV != nil || *r.SecondMoment != 0 {
+	if r.Solves < 1 || r.CVDefined || r.CV != nil || *r.SecondMoment != 0 {
 		t.Fatalf("%+v", r)
 	}
 	fixed := modelTestFixedClass(0, "fixed", 1, 0, 0)
@@ -334,8 +367,8 @@ func TestMinimumCVZeroAndFixedCases(t *testing.T) {
 	for i := range c.Prepared.Classes[0].Buckets {
 		c.Prepared.Classes[0].Buckets[i].SecondMoment = 0
 	}
-	_, _, _, failure, err := NewIntentEngine(NewGonumSolver()).selectCanonicalBucketProbabilities(context.Background(), c, c.Hard, SolveResult{}, SolveOptions{FeasibilityTolerance: 1e-9, OptimalityTolerance: 1e-9}, nil)
-	if err != nil || !failure.Status.Valid() || failure.Status == StatusOptimal {
+	_, _, failure, err := minimumCVRun(NewGonumSolver(), c, nil, nil)
+	if err != nil || failure == nil || failure.solution.Status == StatusOptimal {
 		t.Fatal("invalid variance accepted")
 	}
 }
@@ -360,14 +393,16 @@ func TestSecondMomentExpressionMatchesHardCVRows(t *testing.T) {
 		t.Fatal("wrong second moment weighting")
 	}
 	r, report := minimumCVSelect(t, c)
-	if r.Values[0] != 1 || *report.SecondMoment != 2.625 {
+	assertInternal(t, "controlled probability", r.Values[0], 1)
+	assertInternal(t, "second moment", *report.SecondMoment, 2.625)
+	if false {
 		t.Fatalf("%v %+v", r.Values, report)
 	}
 	b, err := json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "\"method\":\"min_cv\"") || !report.CVDefined {
+	if !strings.Contains(string(b), "\"method\":\"per-class-decomposition\"") || !report.CVDefined {
 		t.Fatal(string(b))
 	}
 	c.Prepared.Classes[0].Buckets[0].SecondMoment = math.Inf(1)
@@ -388,7 +423,7 @@ func TestMinimumCVSelectionReport(t *testing.T) {
 		mean += p * float64(i)
 		second += p * float64(i*i)
 	}
-	assertNear(t, "sum", sum, 1)
+	assertInternal(t, "sum", sum, 1)
 	assertNear(t, "mean", mean, c.Prepared.ExpectedRTP())
 	assertNear(t, "second", *report.SecondMoment, second)
 	assertNear(t, "CV", *report.CV, math.Sqrt(second-mean*mean)/mean)
@@ -403,7 +438,7 @@ func TestMinimumCVSelectionReport(t *testing.T) {
 }
 
 func TestMinimumCVVersionAndConfigCompatibility(t *testing.T) {
-	if engineImplementationVersion != "intent-lp-v2.9.0" {
+	if engineImplementationVersion != "intent-lp-v2.10.0" {
 		t.Fatal(engineImplementationVersion)
 	}
 	if _, err := ParseConfig([]byte(validConfigYAML)); err != nil {

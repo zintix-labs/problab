@@ -619,18 +619,23 @@ engine_options:
   # bucket-probability tolerance.
   visibility_tolerance: 1.0e-8
 
-  # Positive fixed intermediate-probe budget after endpoint checks for common
-  # Main-profile delta. If delta=0 is feasible, no intermediate bisection runs;
-  # otherwise the engine performs exactly this many midpoint probes.
+  # Positive maximum number of midpoint probes after the endpoint checks for
+  # common Main-profile delta. If delta=0 is feasible, no intermediate bisection
+  # runs. Otherwise the search stops as soon as the verified bracket width
+  # reaches 1e-8, and never runs more than this many probes. Halving [0, 2]
+  # needs 28 probes to reach 1e-8; a smaller value ends in PrecisionUnproven.
   profile_bisection_iterations: 40
 
-  # Positive fixed intermediate-probe budget after rho=0 and rho=1 checks for
-  # common normalized Other-bucket visibility. An infeasible probe only tightens
-  # the bracket and never changes the Run's hard-feasibility status.
+  # Positive maximum number of midpoint probes after the rho=0 and rho=1 checks
+  # for common normalized Other-bucket visibility. The search stops as soon as
+  # the verified bracket width reaches 1e-8 (27 probes on [0, 1]). An infeasible
+  # probe only tightens the bracket and never changes the Run's hard-feasibility
+  # status.
   other_visibility_bisection_iterations: 40
 
-  # Positive fixed intermediate-probe budget after rho=0 and rho=1 checks for
-  # common normalized visibility among supported siblings inside eligible Main
-  # Groups. If no Group has at least two supported buckets, the stage is reported
-  # as inapplicable and does not call the solver.
+  # Positive maximum number of midpoint probes after the rho=0 and rho=1 checks
+  # for common normalized visibility among supported siblings inside eligible
+  # Main Groups. The search stops as soon as the verified bracket width reaches
+  # 1e-8 (27 probes on [0, 1]). If no Group has at least two supported buckets,
+  # the stage is reported as inapplicable and does not call the solver.
   main_group_internal_visibility_bisection_iterations: 40

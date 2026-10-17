@@ -17,6 +17,8 @@ package v2
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -383,6 +385,10 @@ func TestDeprecatedModelWrappersMatchCanonicalBuilders(t *testing.T) {
 
 // modelTestPrepared assembles prepared Class fixtures under production engine
 // defaults while normalizing their indexes to deterministic declaration order.
+// modelTestOutputDirectory keeps engine evidence files written by model tests
+// out of the source tree; it is fixed so fixture digests stay reproducible.
+var modelTestOutputDirectory = filepath.Join(os.TempDir(), "problab-model-test-output")
+
 func modelTestPrepared(overall OverallIntent, classes ...PreparedClass) PreparedProblem {
 	for i := range classes {
 		classes[i].Index = i
@@ -400,7 +406,7 @@ func modelTestPrepared(overall OverallIntent, classes ...PreparedClass) Prepared
 					Evaluator:     "none",
 					MaxCandidates: 1,
 				},
-				Output: OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: "model-test-output"},
+				Output: OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: modelTestOutputDirectory},
 			},
 			Intent: MathIntent{
 				Overall: overall,

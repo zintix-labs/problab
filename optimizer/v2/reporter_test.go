@@ -26,13 +26,7 @@ type recordingReporter struct {
 }
 
 func TestSolveStageBridgesOrderedSemanticSubstagesAndKeepsParentDuration(t *testing.T) {
-	solver := &scriptedSolver{t: t, steps: []solverStep{
-		{origin: ObjectiveHardFeasibility, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-		{origin: ObjectiveMainProfileProbe, status: SolveOptimal},
-		{origin: ObjectiveIntentRefinement, status: SolveOptimal},
-		{origin: ObjectiveCanonicalBucketProbability, status: SolveOptimal},
-	}}
+	solver := NewGonumSolver()
 	recorder := &recordingReporter{}
 	tuner := &Tuner{engine: NewIntentEngine(solver), reporter: recorder}
 	report := RunReport{}
@@ -43,7 +37,6 @@ func TestSolveStageBridgesOrderedSemanticSubstagesAndKeepsParentDuration(t *test
 	if solution.Status != StatusOptimal {
 		t.Fatalf("solution=%+v", solution)
 	}
-	solver.assertConsumed()
 	canonicalProgress := 0
 	for _, event := range recorder.events {
 		if event.Substage == StageSelectCanonicalBucketProbabilities && event.State == "progress" {
@@ -89,7 +82,7 @@ func TestSolveStageBridgesOrderedSemanticSubstagesAndKeepsParentDuration(t *test
 
 func TestRunReportUsesMainGroupVisibilityEngineVersion(t *testing.T) {
 	report := newRunReport(ResolvedPlan{}, RunOverrides{})
-	if report.Engine.Version != "intent-lp-v2.9.0" {
+	if report.Engine.Version != "intent-lp-v2.10.0" {
 		t.Fatalf("engine version=%q", report.Engine.Version)
 	}
 	if !reflect.DeepEqual(report.Engine.SemanticAxioms, []string{MainSemanticAxiomVersion}) {

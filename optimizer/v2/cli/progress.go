@@ -71,7 +71,22 @@ type cliProgressReporter struct {
 	// interactive terminal. The source header remains permanent; only the
 	// indented counters beneath it are refreshed in place.
 	replayInline bool
+	// Slow-solve hint state. slowLine is the temporary row beneath the pending
+	// sub-step line on a terminal; slowPermanent records that a permanent line
+	// (such as a save failure) was printed beneath the sub-step since then, so
+	// the cleanup cannot simply move back up one row. slowLogged holds the
+	// last logged elapsed time per LP for the 60-second log cadence.
+	slowLine      bool
+	slowPermanent bool
+	slowLogged    map[int]time.Duration
+	stepSlow      int
+	stepLongest   time.Duration
+	runSlow       int
 }
+
+// slowSolveLogPeriod is the append-only cadence for a long solve on a
+// non-terminal destination.
+const slowSolveLogPeriod = 60 * time.Second
 
 // newCLIProgressReporter refreshes only a real terminal supplied directly as
 // *os.File. Files, pipes, wrapped writers and failed probes use append-only logs.
@@ -157,6 +172,7 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 		}
 		if strings.HasPrefix(event.Stage, "solve[") {
 			r.substepIndex = 0
+			r.runSlow = 0
 		}
 		header := cliStageLabel(event.Stage) + cliModeSuffix(event.BetMode)
 		if event.Message != "" {
@@ -172,6 +188,9 @@ func (r *cliProgressReporter) Report(event optimizerv2.StageEvent) {
 	case "completed":
 		r.closePendingSubstep()
 		_, _ = fmt.Fprintf(r.output, "success (%s)\n", formatStageDuration(event.Duration))
+		if strings.HasPrefix(event.Stage, "solve[") && r.runSlow > 0 {
+			_, _ = fmt.Fprintf(r.output, "  slow LPs in this solve: %d\n", r.runSlow)
+		}
 		r.clearPending()
 	case "failed":
 		r.closePendingSubstep()
@@ -248,8 +267,15 @@ func (r *cliProgressReporter) reportOptimizationSubstage(event optimizerv2.Stage
 	label := cliOptimizationStageLabel(event.Substage)
 	mode := cliModeSuffix(event.BetMode)
 	switch event.State {
+	case optimizerv2.SolveEventStarted:
+		return
+	case optimizerv2.SolveEventSlow, optimizerv2.SolveEventRunning, optimizerv2.SolveEventSaved,
+		optimizerv2.SolveEventSaveFailed, optimizerv2.SolveEventFinished:
+		r.reportSlowSolve(event)
+		return
 	case "started":
 		r.substepIndex++
+		r.stepSlow, r.stepLongest = 0, 0
 		r.pendingBody = fmt.Sprintf("step %d %s%s", r.substepIndex, label, mode)
 		r.pendingInline = false
 		if r.interactive {
@@ -272,7 +298,7 @@ func (r *cliProgressReporter) reportOptimizationSubstage(event optimizerv2.Stage
 		if r.pendingInline {
 			_, _ = fmt.Fprint(r.output, "\r\x1b[2K")
 		}
-		_, _ = fmt.Fprintf(r.output, "  %s ... %s (%s)\n", body, outcome, formatStageDuration(event.Duration))
+		_, _ = fmt.Fprintf(r.output, "  %s ... %s (%s)%s\n", body, outcome, formatStageDuration(event.Duration), r.slowSummary())
 		r.clearPending()
 	case "failed":
 		body := r.stageBody(fmt.Sprintf("step %d %s%s", r.substepIndex, label, mode))
@@ -280,11 +306,145 @@ func (r *cliProgressReporter) reportOptimizationSubstage(event optimizerv2.Stage
 			_, _ = fmt.Fprint(r.output, "\r\x1b[2K")
 		}
 		if event.Message == "" {
-			_, _ = fmt.Fprintf(r.output, "  %s ... failed\n", body)
+			_, _ = fmt.Fprintf(r.output, "  %s ... failed%s\n", body, r.slowSummary())
 		} else {
-			_, _ = fmt.Fprintf(r.output, "  %s ... failed: %s\n", body, event.Message)
+			_, _ = fmt.Fprintf(r.output, "  %s ... failed: %s%s\n", body, event.Message, r.slowSummary())
 		}
 		r.clearPending()
+	}
+}
+
+// reportSlowSolve renders the temporary "still solving" row for one LP that
+// passed the slow-solve hint threshold. On a terminal the row sits beneath the
+// pending sub-step line and is erased when that LP finishes; a save failure is
+// printed as a permanent line so it survives the cleanup. Redirected output
+// logs the threshold, the save result, every 60 seconds, and the finish.
+func (r *cliProgressReporter) reportSlowSolve(event optimizerv2.StageEvent) {
+	if r.slowLogged == nil {
+		r.slowLogged = make(map[int]time.Duration)
+	}
+	_, slow := r.slowLogged[event.SolveIndex]
+	switch event.State {
+	case optimizerv2.SolveEventFinished:
+		if !slow {
+			return
+		}
+		delete(r.slowLogged, event.SolveIndex)
+		r.stepSlow++
+		r.runSlow++
+		if event.Duration > r.stepLongest {
+			r.stepLongest = event.Duration
+		}
+		if r.interactive {
+			r.clearSlowLine()
+			return
+		}
+		_, _ = fmt.Fprintf(r.output, "    finished %s\n", slowSolveText(event))
+		return
+	case optimizerv2.SolveEventSlow:
+		r.slowLogged[event.SolveIndex] = event.Duration
+	default:
+		if !slow {
+			return
+		}
+	}
+	if event.State == optimizerv2.SolveEventSaveFailed {
+		message := fmt.Sprintf("    could not save slow-solve input: %s", event.Message)
+		if r.interactive {
+			r.openSlowLine()
+			_, _ = fmt.Fprintf(r.output, "\r\x1b[2K%s\n", message)
+			r.slowPermanent = true
+			_, _ = fmt.Fprintf(r.output, "    still solving %s", slowSolveText(event))
+			return
+		}
+		_, _ = fmt.Fprintln(r.output, message)
+		return
+	}
+	if r.interactive {
+		r.openSlowLine()
+		_, _ = fmt.Fprintf(r.output, "\r\x1b[2K    still solving %s", slowSolveText(event))
+		return
+	}
+	switch event.State {
+	case optimizerv2.SolveEventSlow:
+		_, _ = fmt.Fprintf(r.output, "    still solving %s\n", slowSolveText(event))
+	case optimizerv2.SolveEventSaved:
+		_, _ = fmt.Fprintf(r.output, "    saved slow-solve input: %s\n", event.Path)
+	case optimizerv2.SolveEventRunning:
+		if event.Duration-r.slowLogged[event.SolveIndex] >= slowSolveLogPeriod {
+			r.slowLogged[event.SolveIndex] = event.Duration
+			_, _ = fmt.Fprintf(r.output, "    still solving %s\n", slowSolveText(event))
+		}
+	}
+}
+
+// openSlowLine moves below the pending sub-step line the first time a slow
+// row is drawn for it.
+func (r *cliProgressReporter) openSlowLine() {
+	if r.slowLine {
+		return
+	}
+	_, _ = fmt.Fprint(r.output, "\n")
+	r.slowLine = true
+	r.slowPermanent = false
+	r.pendingInline = false
+}
+
+// clearSlowLine erases the temporary row and restores the pending sub-step
+// line exactly as it was, so the step's own completion rewrites it in place.
+func (r *cliProgressReporter) clearSlowLine() {
+	if !r.slowLine {
+		return
+	}
+	_, _ = fmt.Fprint(r.output, "\r\x1b[2K")
+	if !r.slowPermanent {
+		_, _ = fmt.Fprint(r.output, "\x1b[1A")
+	}
+	if r.pendingBody != "" {
+		_, _ = fmt.Fprintf(r.output, "\r\x1b[2K  %s ... ", r.pendingBody)
+		r.pendingInline = true
+	}
+	r.slowLine, r.slowPermanent = false, false
+}
+
+func (r *cliProgressReporter) slowSummary() string {
+	if r.stepSlow == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" [slow LPs: %d, longest %s]", r.stepSlow, formatStageDuration(r.stepLongest))
+}
+
+// slowSolveText is the location and elapsed time of one slow LP. There is no
+// backend progress, so no percentage or remaining time is ever shown.
+func slowSolveText(event optimizerv2.StageEvent) string {
+	elapsed := event.Duration.Truncate(time.Second)
+	where := "joint"
+	if event.Class > 0 {
+		where = fmt.Sprintf("Class %d/%d", event.Class, event.ClassCount)
+	}
+	text := fmt.Sprintf("%02d:%02d | %s | %s | %d vars / %d rows | LP #%d",
+		int(elapsed/time.Minute), int(elapsed%time.Minute/time.Second),
+		cliShortStageLabel(event.Substage), where, event.Variables, event.Rows, event.SolveIndex)
+	if event.Path != "" {
+		text += " | saved " + event.Path
+	}
+	return text
+}
+
+func cliShortStageLabel(stage optimizerv2.OptimizationStageID) string {
+	switch stage {
+	case optimizerv2.StageProveHardFeasibility:
+		return "Hard feasibility"
+	case optimizerv2.StageMinimizeMainProfileDeviation:
+		return "Main profile"
+	case optimizerv2.StageMaximizeOtherBucketVisibility:
+		return "Other visibility"
+	case optimizerv2.StageMaximizeMainGroupInternalVisibility:
+		return "Main visibility"
+	case optimizerv2.StageSelectCanonicalBucketProbabilities:
+		return "Minimum CV"
+	default:
+		return string(stage)
 	}
 }
 

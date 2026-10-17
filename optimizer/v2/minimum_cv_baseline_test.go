@@ -100,13 +100,14 @@ func TestMinimumCVSelectionPreservesEarlierStages(t *testing.T) {
 				}
 				return
 			}
-			// Captured on the unmodified e05a4cd checkout, not regenerated from min-CV.
+			// PRD 0010 rewrote stages 1–4 (per-Class decomposition with verified
+			// evidence), superseding the e05a4cd trace. Re-captured on darwin/arm64
+			// at intent-lp-v2.10.0; other platforms need their own capture.
 			want := map[string]map[string]string{
-				"darwin/arm64": {"other": "875df0a9c2a561a8f2dd4015b50d5f65113d664e49788132c05d486d3f1a2b1c", "main": "89df49ec7b55f5bda346f963f0124fb8a02a58f7352d56a9a48a3df8577a33d3"},
-				"linux/amd64":  {"other": "4b9a277748d85c333c41d3b2c11e4064327f7b1bb816d2532b9c08f7273fdb2b", "main": "89df49ec7b55f5bda346f963f0124fb8a02a58f7352d56a9a48a3df8577a33d3"},
+				"darwin/arm64": {"other": "bef3ff0de7f5e95992e2c0ab42d01a1005dd6a78e71ec545840ded634722dba2", "main": "c36f06de654d9e596c4d77052c0e6166aeac7a04106f4761d83cec96bbb3bda9"},
 			}[runtime.GOOS+"/"+runtime.GOARCH][test.name]
 			if want == "" {
-				t.Skipf("no pre-change trace for %s", runtime.GOARCH)
+				t.Skipf("no captured trace for %s/%s", runtime.GOOS, runtime.GOARCH)
 			}
 			if fmt.Sprintf("%x", sha256.Sum256(b)) != want {
 				t.Fatalf("first four stages changed: %x", sha256.Sum256(b))

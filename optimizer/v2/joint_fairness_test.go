@@ -120,20 +120,39 @@ func TestRealSolverMainGroupVisibilityPreventsCanonicalZeroing(t *testing.T) {
 	firstHash, err := hashCanonicalJSON(struct {
 		Primary []float64
 		Intent  IntentQualityReport
-	}{solution.Primary, BuildIntentQualityReport(compiled, solution)})
+	}{solution.Primary, withoutEvidenceTiming(BuildIntentQualityReport(compiled, solution))})
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondHash, err := hashCanonicalJSON(struct {
 		Primary []float64
 		Intent  IntentQualityReport
-	}{again.Primary, BuildIntentQualityReport(compiled, again)})
+	}{again.Primary, withoutEvidenceTiming(BuildIntentQualityReport(compiled, again))})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if firstHash != secondHash {
 		t.Fatalf("same input/backend produced different solution report hashes: %s != %s", firstHash, secondHash)
 	}
+}
+
+// withoutEvidenceTiming clears the operational durations of the evidence
+// counters; every other report field must be reproducible.
+func withoutEvidenceTiming(report IntentQualityReport) IntentQualityReport {
+	clear := func(c *EvidenceCounters) *EvidenceCounters {
+		if c == nil {
+			return nil
+		}
+		out := *c
+		out.InfeasibilityCertificateTime, out.ExactBoundTime, out.ExactWitnessTime, out.SigmaEndpointTime = 0, 0, 0, 0
+		return &out
+	}
+	for _, r := range []*BisectionReport{&report.MainProfileOptimization, &report.OtherBucketVisibilityOptimization,
+		&report.MainGroupInternalVisibilityOptimization, &report.PhaseA, &report.PhaseB} {
+		r.Evidence = clear(r.Evidence)
+	}
+	report.CanonicalBucketProbabilitySelection.Evidence = clear(report.CanonicalBucketProbabilitySelection.Evidence)
+	return report
 }
 
 func TestRealSolverMainGroupVisibilityUsesWorstEligibleGroupAcrossClasses(t *testing.T) {
@@ -204,7 +223,7 @@ func fixedMultiGroupVisibilityModel() CompiledModel {
 			compiled.VariableIndex[id] = len(compiled.Hard.Variables)
 			compiled.Hard.Variables = append(compiled.Hard.Variables, LinearVariable{ID: id, Lower: 0, Upper: 1})
 			compiled.Hard.Rows = append(compiled.Hard.Rows, LinearRow{
-				ID: RowID(fmt.Sprintf("fixed:%04d:%04d", classIndex, bucketIndex)), Family: "test_fixed_mass",
+				ID: RowID(fmt.Sprintf("fixed:%04d:%04d", classIndex, bucketIndex)), ClassID: class.ID, Family: "test_fixed_mass",
 				Origin: OriginSystemInvariant, Sense: SenseEQ, RHS: fixed[classIndex][bucketIndex],
 				Terms: []LinearTerm{{Variable: id, Coeff: 1}},
 			})
@@ -212,8 +231,8 @@ func fixedMultiGroupVisibilityModel() CompiledModel {
 			compiled.Primary = append(compiled.Primary, PrimaryVariable{ID: id, ClassIndex: classIndex, BucketIndex: bucketIndex})
 		}
 		compiled.Hard.Rows = append(compiled.Hard.Rows,
-			LinearRow{ID: RowID(fmt.Sprintf("class:%04d:normalization", classIndex)), Sense: SenseEQ, RHS: 1, Terms: norm},
-			LinearRow{ID: RowID(fmt.Sprintf("class:%04d:mean", classIndex)), Sense: SenseEQ},
+			LinearRow{ID: RowID(fmt.Sprintf("class:%04d:normalization", classIndex)), ClassID: class.ID, Sense: SenseEQ, RHS: 1, Terms: norm},
+			LinearRow{ID: RowID(fmt.Sprintf("class:%04d:mean", classIndex)), ClassID: class.ID, Sense: SenseEQ},
 		)
 	}
 	return compiled

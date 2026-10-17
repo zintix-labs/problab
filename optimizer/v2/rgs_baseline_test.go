@@ -25,18 +25,22 @@ func TestRGSNativePreChangeBaseline(t *testing.T) {
 		t.Errorf("collection hash=%s want=%s", r.Report.Collection.Bank.SHA256, bankHash)
 	}
 	modelHash := "6581871339c863041655a023a1670ed20d31850c6e84b8246eb885dd8110fe1f"
-	solutionHash := "1b5e48254dd3fef67ea4eab2b33b1392e24c481bbea233f12d8752c5dd00fa07"
+	solutionHash := "18bace80e28ca49b1fe303595bf307b5657ceee4ddf9410521f8e2141ec5364c"
 	want := map[string]string{
-		"manifest.json":    "85ffaedeae4ee122965970c5c3660b85db51dbd77978930eedef97a9f32b27eb",
-		"gacha_0.json.zst": "927a461737e819f1d9bd7860a4b8b70758129877ce6d08488b8c7b403279ba58",
+		"manifest.json":    "96e873359f245083e0c1fbf4d4627b57f56f5583e2553a10ac5682e3b35ca6b7",
+		"gacha_0.json.zst": "d9aa63522fc4dd3ee68d160a1ec49531f64392190170033a888beceea7abdba3",
 		"seed_bank_0.bin":  "f12afcc525d4d4b5c29970d3710e62f5674175a8b80e49bbb3ade8244d3b3ade",
-		"mode_0.json":      "74ca31cb3b1dfeabc212043f8c4d239ed7ac30983267ee825e36eb87e3879397",
-		"prob_0.bin":       "1a46cf28730fdbcf9d8af2dd2a2794ae19021b8e9a93eab950e526f8c65e10c6",
+		"mode_0.json":      "9acfe0b9bb1b4a17ae032d0b89dad2ec5d385ee30ba865f650e59d6b99561826",
+		"prob_0.bin":       "2272eb5f466e5e500903203e3950e2e04309b526a12946df65909a358dc3c326",
 		"aliases_0.bin":    "f9a6d985846761cfe2444158273b90f0862238f8545c9785892212b3266a5067",
 	}
 	switch runtime.GOARCH {
-	case "arm64": // Original golden remains unchanged.
+	case "arm64":
+		// PRD 0010 (intent-lp-v2.10.0) changed the selected point: solution,
+		// manifest, gacha, mode and prob bytes re-captured on darwin/arm64;
+		// model, collection, seed bank and alias bytes are unchanged.
 	case "amd64":
+		t.Skip("amd64 golden predates PRD 0010 (intent-lp-v2.10.0) and needs re-capture on amd64")
 		modelHash = "31bb020f3e3475099658e7f66b26c0d1381e5be910900115c0dacce32bffd0f1"
 		solutionHash = "98534e5980bc99338e03472a87bc2fd4848f7eb58855de23f3c1e6b02e009727"
 		want["manifest.json"] = "c19d8d2ba45bb55797ebb96816435d76e63cec8e053d7b3c4465aaffebd44342"

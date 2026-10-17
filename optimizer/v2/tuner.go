@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	engineImplementationVersion = "intent-lp-v2.9.0"
+	engineImplementationVersion = "intent-lp-v2.10.0"
 	// Replay banks contribute in configured source/record order, fresh samples
 	// follow worker/local acceptance order, and persisted bytes serialize Classes
 	// in declaration order while preserving each Class's Sequence order.
@@ -85,6 +85,14 @@ type StageEvent struct {
 	DuplicateRate          float64
 	DuplicateClasses       []CollectionClassDuplicateReport
 	DuplicateOrigins       []CollectionDuplicateOriginReport
+
+	// Per-LP watcher fields mirrored from OptimizationStageEvent.
+	SolveIndex  int
+	SolveSource string
+	Class       int
+	ClassCount  int
+	Variables   int
+	Rows        int
 }
 
 // ClassCollectionProgress is one immutable snapshot of a Class quota. Reporter
@@ -389,6 +397,10 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (out RunResult, run
 	if err != nil {
 		return RunResult{}, fmt.Errorf("hash optimizer v2 semantic model for mode %d: %w", betMode, err)
 	}
+	// Anchor evidence before solving: a failed run must still let its
+	// evidence files be checked against the report (techspec §9.3).
+	report.Intent.EvidenceBase = evidenceBaseReport(compiled)
+	report.Intent.AcceptanceRules = acceptanceRulesReport(compiled.Prepared.Plan.EngineOptions.FeasibilityTolerance)
 	solution, err := t.solveStage(ctx, compiled, betMode, &report)
 	if err != nil {
 		return RunResult{}, err
@@ -665,7 +677,9 @@ func (t *Tuner) solveStage(ctx context.Context, compiled CompiledModel, betMode 
 				Objective: event.Objective, Metric: event.Metric, Probe: event.Probe, Total: event.Total,
 				Lower: cloneFloatPointer(event.Lower), Upper: cloneFloatPointer(event.Upper),
 				FixedValue: cloneFloatPointer(event.FixedValue), Status: event.Status,
-				Duration: event.Duration,
+				Duration: event.Duration, Path: event.Path,
+				SolveIndex: event.SolveIndex, SolveSource: event.SolveSource,
+				Class: event.Class, ClassCount: event.ClassCount, Variables: event.Variables, Rows: event.Rows,
 			})
 		}
 		switch event.State {
