@@ -95,6 +95,7 @@ type scalingResult struct {
 	TotalSeconds     float64
 	StageSeconds     map[string]float64
 	Probes           map[string]int
+	Brackets         map[string]string // stage bracket, verified width, stop reason
 	Evidence         map[string]*EvidenceCounters
 	GonumSolves      int
 	MaxGonumSeconds  float64
@@ -110,6 +111,8 @@ type scalingResult struct {
 	ClassMaxPivots            int
 	ClassMaxBits              int
 	ClassBudgetExhausted      int
+	// ρ_main CV-conflict calibration (PROBLAB_SCALING_CONFLICT=1).
+	Calibration *scalingCalibration `json:",omitempty"`
 	// Probe outcomes per stage (FEASIBLE, INFEASIBLE, UNKNOWN) and the
 	// selected point, as a baseline for later engine changes.
 	ProbeOutcomes map[string]map[string]int
@@ -138,6 +141,105 @@ func scalingSizes(t *testing.T) (string, []int) {
 		sizes[i] = buckets
 	}
 	return "", sizes
+}
+
+// scalingConflictClass makes every Class feasible on its own at δ = 0,
+// ρ_other = 1 and ρ_main = 1: the fixed mean is the mean of a reference point
+// with Main mass 0.9 split by the prefer shares, every Group uniform inside
+// and the Others uniform; the median is left unconstrained. Only the global
+// CV maximum can then hold ρ_main back.
+func scalingConflictClass(class *PreparedClass) {
+	const mainMass = 0.9
+	mean := 0.0
+	for _, group := range class.Groups {
+		for _, b := range group.BucketIndexes {
+			mean += mainMass * group.PreferShare / float64(len(group.BucketIndexes)) * class.Buckets[b].Mean
+		}
+	}
+	for _, b := range class.Others {
+		mean += (1 - mainMass) / float64(len(class.Others)) * class.Buckets[b].Mean
+	}
+	class.Design.Exp = mean
+	class.Design.Median = ClosedInterval{0, 100}
+	for j := range class.Buckets {
+		class.Buckets[j].CDFBeforeLower, class.Buckets[j].CDFAtUpper = 0, 1
+	}
+}
+
+// scalingCalibration records how the ρ_main CV-conflict model was built.
+type scalingCalibration struct {
+	DeltaLock, OtherLock           float64
+	ClassesInfeasibleAtRho1        int
+	SigmaMinAtRho0, SigmaMinAtRho1 float64
+	UpperT, CVMax                  float64
+	CalibrationSeconds             float64
+}
+
+// scalingConflictModel builds the ρ_main stress case: every Class stays
+// feasible on its own for the whole ρ_main range, but the global CV maximum
+// lies between Σσ_min at ρ_main = 0 and at ρ_main = 1, so infeasible probes
+// can only be proved by disjoint σ intervals (type C) after every Class's
+// interval is computed.
+func scalingConflictModel(t *testing.T, build func(NumericRange) CompiledModel, result *scalingResult) CompiledModel {
+	started := time.Now()
+	wide := build(NumericRange{Min: 0, Max: 10})
+	solution, err := NewIntentEngine(NewGonumSolver()).Solve(context.Background(), wide)
+	if err != nil || solution.Status != StatusOptimal {
+		t.Fatalf("calibration run: %s %v", solution.Status, err)
+	}
+	calibration := &scalingCalibration{DeltaLock: solution.MainProfileOptimization.FixedValue, OtherLock: solution.OtherBucketVisibilityOptimization.FixedValue}
+	base, err := BuildMainProfileDeviationProblem(wide, calibration.DeltaLock)
+	if err == nil && solution.OtherBucketVisibilityOptimization.Applicable {
+		base, err = AddOtherBucketVisibilityRows(base, wide, calibration.OtherLock)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := NewIntentEngine(NewGonumSolver()).newRun(wide, nil)
+	sigmaMin := func(rho float64) (float64, int) {
+		problem, err := AddMainGroupInternalVisibilityRows(base, wide, rho)
+		if err != nil {
+			t.Fatal(err)
+		}
+		subs, _, err := splitByClass(problem, wide.Prepared.Classes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sigma := run.sigmaOf(problem)
+		total, infeasible := 0.0, 0
+		for _, sub := range subs {
+			where := solveContext{stage: StageMaximizeMainGroupInternalVisibility, class: sub.position, classCount: len(subs)}
+			witness, err := run.classify(context.Background(), sub.problem, where, ObjectiveMainGroupInternalVisibilityProbe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if witness.class != evidenceFeasible {
+				infeasible++
+				continue
+			}
+			interval, err := run.classInterval(context.Background(), sub, sigma, witness.witness, where)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value, _ := interval.loIn.Float64()
+			total += value
+		}
+		return total, infeasible
+	}
+	calibration.SigmaMinAtRho0, _ = sigmaMin(0)
+	calibration.SigmaMinAtRho1, calibration.ClassesInfeasibleAtRho1 = sigmaMin(1)
+	calibration.UpperT = calibration.SigmaMinAtRho0 + 0.5*(calibration.SigmaMinAtRho1-calibration.SigmaMinAtRho0)
+	_, fixed, err := buildSecondMomentExpression(wide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu := wide.Prepared.ExpectedRTP()
+	calibration.CVMax = math.Sqrt((fixed+calibration.UpperT)/(mu*mu) - 1)
+	calibration.CalibrationSeconds = time.Since(started).Seconds()
+	result.Calibration = calibration
+	t.Logf("calibration: δ lock %g, ρ_other lock %g, Classes infeasible at ρ_main=1: %d, Σσ_min %g → %g, CV max %g (%.1fs)",
+		calibration.DeltaLock, calibration.OtherLock, calibration.ClassesInfeasibleAtRho1, calibration.SigmaMinAtRho0, calibration.SigmaMinAtRho1, calibration.CVMax, calibration.CalibrationSeconds)
+	return build(NumericRange{Min: 0, Max: calibration.CVMax})
 }
 
 // sigmaRangeByClass is the achievable range of T = Σσ_k: only the CV rows
@@ -174,12 +276,16 @@ func TestClassScalingWorker(t *testing.T) {
 	}
 	mix, sizes := scalingSizes(t)
 	classCount, buckets := len(sizes), sizes[0]
-	result := scalingResult{Mix: mix, Classes: classCount, Buckets: buckets, StageSeconds: map[string]float64{}, Probes: map[string]int{},
+	result := scalingResult{Mix: mix, Classes: classCount, Buckets: buckets, StageSeconds: map[string]float64{}, Probes: map[string]int{}, Brackets: map[string]string{},
 		Evidence: map[string]*EvidenceCounters{}, ProbeOutcomes: map[string]map[string]int{}}
+	conflict := os.Getenv("PROBLAB_SCALING_CONFLICT") == "1"
 	build := func(cv NumericRange) CompiledModel {
 		classes := make([]PreparedClass, classCount)
 		for i := range classes {
 			classes[i] = scalingClass(i, sizes[i], 1/float64(classCount))
+			if conflict {
+				scalingConflictClass(&classes[i])
+			}
 		}
 		return evidenceCompile(t, cv, classes...)
 	}
@@ -194,6 +300,9 @@ func TestClassScalingWorker(t *testing.T) {
 	}
 	target := fixed + lo + 0.5*(hi-lo)
 	compiled := build(NumericRange{Min: math.Sqrt(target/(mu*mu) - 1), Max: 10})
+	if os.Getenv("PROBLAB_SCALING_CONFLICT") == "1" {
+		compiled = scalingConflictModel(t, build, &result)
+	}
 
 	// Single Class subproblem of the hard model.
 	run := NewIntentEngine(NewGonumSolver()).newRun(compiled, nil)
@@ -253,6 +362,7 @@ func TestClassScalingWorker(t *testing.T) {
 		for name, report := range map[string]BisectionReport{"delta": solution.MainProfileOptimization,
 			"rho_other": solution.OtherBucketVisibilityOptimization, "rho_main": solution.MainGroupInternalVisibilityOptimization} {
 			result.Probes[name] = report.Probes
+			result.Brackets[name] = fmt.Sprintf("[%s, %s] width %.3g %s", encodeFloat64(report.Lower), encodeFloat64(report.Upper), report.VerifiedBound, report.StopReason)
 			if report.Evidence != nil {
 				result.Evidence[name] = report.Evidence
 			}
@@ -276,6 +386,9 @@ func TestClassScalingWorker(t *testing.T) {
 	name := fmt.Sprintf("c%d-b%d", classCount, buckets)
 	if mix != "" {
 		name = "mix-" + strings.ReplaceAll(mix, ",", "_")
+	}
+	if result.Calibration != nil {
+		name += "-conflict"
 	}
 	if err := os.WriteFile(filepath.Join(out, name+".json"), raw, 0o644); err != nil {
 		t.Fatal(err)
