@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -66,8 +67,13 @@ type engineRun struct {
 	current     solveContext
 	solveIndex  int
 	evidenceDir string
-	options     SolveOptions
-	counters    EvidenceCounters
+	// runDir is this run's own subdirectory of evidenceDir, created on the
+	// first write so runs sharing an output directory never overwrite each
+	// other's evidence (slow-solve records and evidence files).
+	runDirMu sync.Mutex
+	runDir   string
+	options  SolveOptions
+	counters EvidenceCounters
 
 	// The two sets of techspec §4.6: accept (internal) judges every
 	// witness and is what probe and lock certificates prove empty;
@@ -249,7 +255,30 @@ func (r *engineRun) saveSlowSolve(index int, meta solveContext, problem LinearPr
 	if err != nil {
 		return "", err
 	}
-	return writeFileAtomic(r.evidenceDir, fmt.Sprintf("slow-solve-%s-%06d.json", meta.stage, index), append(raw, '\n'))
+	dir, err := r.evidenceRunDir()
+	if err != nil {
+		return "", err
+	}
+	return writeFileAtomic(dir, fmt.Sprintf("slow-solve-%s-%06d.json", meta.stage, index), append(raw, '\n'))
+}
+
+// evidenceRunDir returns this run's evidence subdirectory, creating it with
+// a unique name (UTC start time plus a random suffix) on first use.
+func (r *engineRun) evidenceRunDir() (string, error) {
+	r.runDirMu.Lock()
+	defer r.runDirMu.Unlock()
+	if r.runDir != "" {
+		return r.runDir, nil
+	}
+	if err := os.MkdirAll(r.evidenceDir, 0o755); err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp(r.evidenceDir, "run-"+time.Now().UTC().Format("20060102T150405Z")+"-")
+	if err != nil {
+		return "", err
+	}
+	r.runDir = dir
+	return dir, nil
 }
 
 func (e *IntentEngine) slowThreshold() time.Duration {

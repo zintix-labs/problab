@@ -120,7 +120,11 @@ func (r *engineRun) writeEvidence(name string, value any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return writeFileAtomic(r.evidenceDir, name, raw)
+	dir, err := r.evidenceRunDir()
+	if err != nil {
+		return "", err
+	}
+	return writeFileAtomic(dir, name, raw)
 }
 
 // attachEvidence writes value and records its path, or the failure, on the
@@ -158,8 +162,11 @@ func VerifyNumericalEvidence(file NumericalEvidence) error {
 	}
 	switch file.Code {
 	case DiagnosticEvidenceUnavailable:
-		_, err := openSnapshot(file.Problem, file.ProblemSHA256)
-		return err
+		problem, err := openSnapshot(file.Problem, file.ProblemSHA256)
+		if err != nil || file.Probe == "" {
+			return err
+		}
+		return verifyProbeBinding(file.Stage, problem, file.Probe)
 	case DiagnosticPrecisionUnproven:
 		if file.MinimumCV != nil {
 			return verifyMinimumCVEvidence(file, rule)
@@ -191,11 +198,17 @@ func verifyBracketEvidence(file NumericalEvidence, rule acceptanceRule) error {
 	if !replayWithRule(problem, witness, rule) {
 		return errors.New("feasible-end witness fails the recorded rule")
 	}
-	feasible, err := decodeFloat64(file.FeasibleEnd)
+	if _, ok := probeFamily[file.Stage]; !ok {
+		return fmt.Errorf("stage %q has no bisection", file.Stage)
+	}
+	if err := verifyProbeBinding(file.Stage, problem, file.FeasibleEnd); err != nil {
+		return fmt.Errorf("feasible end: %w", err)
+	}
+	feasible, err := decodeFinite(file.FeasibleEnd, "feasible end")
 	if err != nil {
 		return err
 	}
-	bound, err := decodeFloat64(file.BoundEnd)
+	bound, err := decodeFinite(file.BoundEnd, "bound end")
 	if err != nil {
 		return err
 	}
@@ -209,11 +222,20 @@ func verifyBracketEvidence(file NumericalEvidence, rule acceptanceRule) error {
 			return fmt.Errorf("theoretical endpoint %s is not %g", file.BoundEnd, theoretical)
 		}
 	case BasisVerifiedCertificate:
-		if file.BoundEvidence == nil || file.BoundEvidence.Probe != file.BoundEnd || file.BoundEvidence.Rule != file.Rule {
-			return errors.New("bound certificate missing or bound to another probe or rule")
+		evidence := file.BoundEvidence
+		if evidence == nil || evidence.Probe != file.BoundEnd || evidence.Stage != file.Stage || evidence.Rule != file.Rule {
+			return errors.New("bound certificate missing or bound to another probe, stage or rule")
 		}
-		if err := VerifyInfeasibilityEvidence(*file.BoundEvidence); err != nil {
+		// VerifyInfeasibilityEvidence also binds the probe label to the matrix.
+		if err := VerifyInfeasibilityEvidence(*evidence); err != nil {
 			return fmt.Errorf("bound certificate: %w", err)
+		}
+		boundProblem, err := evidence.Problem.Problem()
+		if err != nil {
+			return err
+		}
+		if err := verifySameExceptProbe(file.Stage, problem, boundProblem); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("unknown bound basis %q", file.BoundBasis)
@@ -248,6 +270,9 @@ func verifyMinimumCVEvidence(file NumericalEvidence, rule acceptanceRule) error 
 	if err != nil {
 		return err
 	}
+	if err := finiteTerms(terms); err != nil {
+		return err
+	}
 	sigma := map[VariableID]float64{}
 	for _, term := range terms {
 		sigma[term.Variable] += term.Coeff
@@ -263,7 +288,7 @@ func verifyMinimumCVEvidence(file NumericalEvidence, rule acceptanceRule) error 
 			}
 		}
 	}
-	fixed, err := decodeFloat64(cv.FixedSecond)
+	fixed, err := decodeFinite(cv.FixedSecond, "fixed second moment")
 	if err != nil {
 		return err
 	}

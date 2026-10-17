@@ -200,6 +200,11 @@ func VerifyInfeasibilityEvidence(bundle InfeasibilityBundle) error {
 	if err != nil {
 		return err
 	}
+	if bundle.Probe != "" {
+		if err := verifyProbeBinding(bundle.Stage, problem, bundle.Probe); err != nil {
+			return err
+		}
+	}
 	switch bundle.Kind {
 	case evidenceKindFarkas:
 		sub, err := classSubproblemOf(problem, bundle.ClassIDs, bundle.Class)
@@ -242,6 +247,11 @@ func VerifyObjectiveBound(bundle ObjectiveBoundBundle) error {
 	if err != nil {
 		return err
 	}
+	if bundle.Probe != "" {
+		if err := verifyProbeBinding(bundle.Stage, problem, bundle.Probe); err != nil {
+			return err
+		}
+	}
 	sub, err := classSubproblemOf(problem, bundle.ClassIDs, bundle.Class)
 	if err != nil {
 		return err
@@ -276,17 +286,20 @@ func (h EvidenceHeader) open() (LinearProblem, acceptanceRule, error) {
 // rule decodes the acceptance rule and checks it is one the engine defines
 // for the header's τ.
 func (h EvidenceHeader) rule() (acceptanceRule, error) {
-	tau, err := decodeFloat64(h.Tolerance)
+	tau, err := decodeFinite(h.Tolerance, "tolerance")
 	if err != nil {
-		return acceptanceRule{}, fmt.Errorf("tolerance: %w", err)
+		return acceptanceRule{}, err
 	}
-	row, err := decodeFloat64(h.Rule.RowTolerance)
-	if err != nil {
-		return acceptanceRule{}, fmt.Errorf("row tolerance: %w", err)
+	if err := validateEvidenceTolerance(tau); err != nil {
+		return acceptanceRule{}, fmt.Errorf("tolerance %s: %w", h.Tolerance, err)
 	}
-	bound, err := decodeFloat64(h.Rule.BoundTolerance)
+	row, err := decodeFinite(h.Rule.RowTolerance, "row tolerance")
 	if err != nil {
-		return acceptanceRule{}, fmt.Errorf("bound tolerance: %w", err)
+		return acceptanceRule{}, err
+	}
+	bound, err := decodeFinite(h.Rule.BoundTolerance, "bound tolerance")
+	if err != nil {
+		return acceptanceRule{}, err
 	}
 	rule := acceptanceRule{rowTau: row, boundTau: bound}
 	var want acceptanceRule
@@ -347,6 +360,9 @@ func multiplierVector(problem LinearProblem, model exactModel, multipliers []Row
 // verifyBound recomputes a type-D bound and returns it when it equals the
 // claimed value.
 func verifyBound(problem LinearProblem, rule acceptanceRule, terms []LinearTerm, direction string, multipliers []RowMultiplier, claimed string) (*big.Rat, error) {
+	if err := finiteTerms(terms); err != nil {
+		return nil, err
+	}
 	model, _, err := buildEnvelopeRule(problem, rule)
 	if err != nil {
 		return nil, fmt.Errorf("rebuild envelope: %w", err)

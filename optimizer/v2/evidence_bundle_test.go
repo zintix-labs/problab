@@ -373,3 +373,182 @@ func TestReportCarriesEvidenceFields(t *testing.T) {
 		t.Fatalf("acceptance rules=%+v", rules)
 	}
 }
+
+// TestBracketEvidenceBindsProbeValues: relabelling either bracket end,
+// moving the certificate to another stage, or pairing ends that do not share
+// their common constraints fails (review finding: a label of 0.4374 kept the
+// certificate of 0.4375 although 0.4374 is feasible).
+func TestBracketEvidenceBindsProbeValues(t *testing.T) {
+	compiled := skewedModel(t)
+	compiled.Prepared.Plan.EngineOptions.ProfileBisectionIterations = 5
+	solution := solveWithEvidence(t, compiled, nil)
+	var file NumericalEvidence
+	readEvidence(t, solution.Diagnostics[0].EvidencePath, &file)
+	if err := VerifyNumericalEvidence(file); err != nil {
+		t.Fatal(err)
+	}
+	feasible, _ := decodeFloat64(file.FeasibleEnd)
+	relabelled := encodeFloat64(feasible - 0.0001)
+	cases := map[string]func(*NumericalEvidence){
+		"bound label": func(f *NumericalEvidence) {
+			bundle := *f.BoundEvidence
+			f.BoundEnd, bundle.Probe = relabelled, relabelled
+			f.BoundEvidence = &bundle
+		},
+		"feasible label": func(f *NumericalEvidence) { f.FeasibleEnd = encodeFloat64(feasible + 0.01) },
+		"bound stage": func(f *NumericalEvidence) {
+			bundle := *f.BoundEvidence
+			bundle.Stage = string(StageProveHardFeasibility)
+			f.BoundEvidence = &bundle
+		},
+		"common constraints": func(f *NumericalEvidence) {
+			bundle := *f.BoundEvidence
+			rebind(t, &bundle.EvidenceHeader, func(p *LinearProblem) {
+				p.Rows = append(p.Rows, LinearRow{ID: "review:extra", ClassID: compiled.Prepared.Classes[0].ID, Sense: SenseGE, RHS: 2,
+					Terms: []LinearTerm{{Variable: compiled.Primary[0].ID, Coeff: 1}}})
+			})
+			f.BoundEvidence = &bundle
+		},
+	}
+	for name, tamper := range cases {
+		copied := file
+		tamper(&copied)
+		if err := VerifyNumericalEvidence(copied); err == nil {
+			t.Fatalf("%s: tampered bracket verified", name)
+		}
+	}
+	// The relabelled value really is feasible: the certificate cannot move.
+	probe := feasible - 0.0001
+	problem, err := BuildMainProfileDeviationProblem(compiled, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := NewIntentEngine(NewGonumSolver()).newRun(compiled, nil)
+	if decision, err := run.decideJoint(context.Background(), problem, StageMinimizeMainProfileDeviation, ObjectiveMainProfileProbe, &probe, false, nil); err != nil || decision.class != evidenceFeasible {
+		t.Fatalf("fixture: %g should be feasible, got %s %v", probe, decision.class, err)
+	}
+}
+
+// TestProbeBindingMatchesBuilders: each stage's probe rows bind exactly the
+// value the builder was called with, including ρ = 0 where zero coefficients
+// are dropped, and reject the neighbouring float64.
+func TestProbeBindingMatchesBuilders(t *testing.T) {
+	compiled := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, evidenceFixtureClass(0, .5), evidenceFixtureClass(1, .5))
+	builders := map[OptimizationStageID]func(float64) (LinearProblem, error){
+		StageMinimizeMainProfileDeviation: func(v float64) (LinearProblem, error) { return BuildMainProfileDeviationProblem(compiled, v) },
+		StageMaximizeOtherBucketVisibility: func(v float64) (LinearProblem, error) {
+			return AddOtherBucketVisibilityRows(compiled.Hard, compiled, v)
+		},
+		StageMaximizeMainGroupInternalVisibility: func(v float64) (LinearProblem, error) {
+			return AddMainGroupInternalVisibilityRows(compiled.Hard, compiled, v)
+		},
+	}
+	for stage, build := range builders {
+		for _, value := range []float64{0, 1.0 / 3, 0.4375, 0.75, 1, 1e-300} {
+			problem, err := build(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyProbeBinding(string(stage), problem, encodeFloat64(value)); err != nil {
+				t.Fatalf("%s at %v: %v", stage, value, err)
+			}
+			// The neighbouring float64 must be rejected unless the builder
+			// produces the very same matrix for it (ρ/k can underflow to 0).
+			next := math.Nextafter(value, 2)
+			other, err := build(next)
+			if err != nil { // above the parameter range: use the value below
+				next = math.Nextafter(value, -1)
+				if other, err = build(next); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a, _ := SnapshotProblem(problem).SHA256()
+			b, _ := SnapshotProblem(other).SHA256()
+			if err := verifyProbeBinding(string(stage), problem, encodeFloat64(next)); err == nil && a != b {
+				t.Fatalf("%s: problem at %v verified as %v", stage, value, next)
+			}
+		}
+	}
+}
+
+// TestVerifiersRejectNonFiniteNumbers: every public verifier returns an
+// error, never panics, on non-finite numbers.
+func TestVerifiersRejectNonFiniteNumbers(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("verifier panicked: %v", r)
+		}
+	}()
+	run := NewIntentEngine(NewGonumSolver()).newRun(skewedModel(t), nil)
+	header, err := run.evidenceHeader(oneVarProblem(0, 1), productRule(1e-9), StageProveHardFeasibility, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, coeff := range []string{"+Inf", "-Inf", "NaN"} {
+		bundle := ObjectiveBoundBundle{EvidenceHeader: header, Terms: []TermSnapshot{{Variable: "x", Coeff: coeff}}, Direction: "upper", Value: "0"}
+		if err := VerifyObjectiveBound(bundle); err == nil {
+			t.Fatalf("objective coefficient %s accepted", coeff)
+		}
+	}
+	bad := header
+	bad.Tolerance = "+Inf"
+	if err := VerifyObjectiveBound(ObjectiveBoundBundle{EvidenceHeader: bad, Direction: "upper", Value: "0"}); err == nil {
+		t.Fatal("non-finite tolerance accepted")
+	}
+
+	compiled := skewedModel(t)
+	compiled.Prepared.Plan.EngineOptions.ProfileBisectionIterations = 5
+	solution := solveWithEvidence(t, compiled, nil)
+	var file NumericalEvidence
+	readEvidence(t, solution.Diagnostics[0].EvidencePath, &file)
+	for _, value := range []string{"+Inf", "NaN"} {
+		for name, tamper := range map[string]func(*NumericalEvidence){
+			"bound end":    func(f *NumericalEvidence) { f.BoundEnd = value },
+			"feasible end": func(f *NumericalEvidence) { f.FeasibleEnd = value },
+			"tolerance":    func(f *NumericalEvidence) { f.Tolerance = value },
+		} {
+			copied := file
+			tamper(&copied)
+			if err := VerifyNumericalEvidence(copied); err == nil {
+				t.Fatalf("%s %s accepted", name, value)
+			}
+		}
+	}
+	cvFile := NumericalEvidence{Version: numericalEvidenceVersion, Code: DiagnosticPrecisionUnproven, Tolerance: file.Tolerance, Rule: file.Rule,
+		Problem: file.FeasibleProblem, ProblemSHA256: file.FeasibleSHA256,
+		MinimumCV: &MinimumCVEvidence{FixedSecond: "+Inf", Witness: file.Witness, SigmaTerms: []TermSnapshot{{Variable: compiled.Primary[0].ID, Coeff: "NaN"}}}}
+	if err := VerifyNumericalEvidence(cvFile); err == nil {
+		t.Fatal("non-finite minimum-CV numbers accepted")
+	}
+}
+
+// TestEvidenceIsNotOverwrittenAcrossRuns: two runs sharing an output
+// directory keep separate evidence (review finding).
+func TestEvidenceIsNotOverwrittenAcrossRuns(t *testing.T) {
+	compiled := skewedModel(t)
+	compiled.Hard = cloneLinearProblem(compiled.Hard)
+	compiled.Prepared.Plan.Plan.Output.Directory = t.TempDir()
+	compiled.Hard.Rows = append(compiled.Hard.Rows, LinearRow{ID: "review:impossible", ClassID: compiled.Prepared.Classes[0].ID,
+		Sense: SenseGE, RHS: 2, Terms: []LinearTerm{{Variable: compiled.Primary[0].ID, Coeff: 1}}})
+	engine := NewIntentEngine(NewGonumSolver())
+	first, err := engine.Solve(context.Background(), compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(first.Diagnostics[0].EvidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled.Hard.Rows[len(compiled.Hard.Rows)-1].RHS = 3
+	second, err := engine.Solve(context.Background(), compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Diagnostics[0].EvidencePath == first.Diagnostics[0].EvidencePath {
+		t.Fatal("two runs share one evidence path")
+	}
+	after, err := os.ReadFile(first.Diagnostics[0].EvidencePath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("first run's evidence changed: %v", err)
+	}
+}
