@@ -247,15 +247,6 @@ func solveStatusName(status SolveStatus) string {
 	}
 }
 
-// contradictionFromKnownWitness converts any non-optimal refinement result to
-// numerical or internal failure without erasing the previously proved witness.
-func contradictionFromKnownWitness(message string, result SolveResult) EngineSolution {
-	if result.Status == SolveUnbounded {
-		return internalEngineFailure(message+": unexpected unbounded model", result.Evidence)
-	}
-	return numericalEngineFailure(message, result.Evidence)
-}
-
 // numericalEngineFailure constructs the stable NUMERICAL_FAILURE value result.
 func numericalEngineFailure(message string, evidence SolverEvidence) EngineSolution {
 	diagnostic := Diagnostic{

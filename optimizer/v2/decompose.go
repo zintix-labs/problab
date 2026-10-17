@@ -189,14 +189,6 @@ func (d jointDecision) gapMet() bool {
 	return d.class == evidenceFeasible && d.gapS != nil && d.requiredS != nil && d.gapS.Cmp(d.requiredS) <= 0
 }
 
-// betterGap reports whether d has a proven gap strictly smaller than other's.
-func (d jointDecision) betterGap(other jointDecision) bool {
-	if d.class != evidenceFeasible || d.gapS == nil {
-		return false
-	}
-	return other.class != evidenceFeasible || other.gapS == nil || d.gapS.Cmp(other.gapS) < 0
-}
-
 // decideJoint decides one joint problem by Class decomposition (techspec
 // §6.2–§6.3). With minCV it also computes the exact minimum-CV candidate,
 // safe lower bound and gap of §7.3, starting from the given witness.
