@@ -169,7 +169,7 @@ func TestObjectiveBoundEvidenceReverifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	where := solveContext{stage: StageMinimizeMainProfileDeviation, class: 2, classCount: 2}
+	where := solveContext{stage: StageProveHardFeasibility, class: 2, classCount: 2}
 	witness, err := run.classify(context.Background(), subs[1].problem, where, ObjectiveMainProfileProbe)
 	if err != nil || witness.class != evidenceFeasible {
 		t.Fatalf("witness: %+v %v", witness, err)
@@ -265,6 +265,21 @@ func TestPrecisionUnprovenEvidenceReverifies(t *testing.T) {
 // truly farther from the safe lower bound than required verifies; the same
 // file with the optimal candidate does not.
 func TestMinimumCVEvidenceReverifies(t *testing.T) {
+	file, optimal := validMinimumCVEvidence(t)
+	best := file
+	cv := *file.MinimumCV
+	cv.Witness = encodeValues(optimal.witness)
+	cv.CandidateSecond, cv.RequiredGap = optimal.candidateS.RatString(), optimal.requiredS.RatString()
+	best.MinimumCV = &cv
+	if err := VerifyNumericalEvidence(best); err == nil {
+		t.Fatal("an optimal candidate verified as PrecisionUnproven")
+	}
+}
+
+// validMinimumCVEvidence is a verified Step 5 PrecisionUnproven file and the
+// optimal decision of the same lock problem.
+func validMinimumCVEvidence(t *testing.T) (NumericalEvidence, jointDecision) {
+	t.Helper()
 	compiled := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, evidenceFixtureClass(0, .5), evidenceFixtureClass(1, .5))
 	run := NewIntentEngine(NewGonumSolver()).newRun(compiled, nil)
 	run.evidenceDir = t.TempDir()
@@ -324,14 +339,7 @@ func TestMinimumCVEvidenceReverifies(t *testing.T) {
 	if err := VerifyNumericalEvidence(file); err != nil {
 		t.Fatal(err)
 	}
-	best := file
-	cv := *file.MinimumCV
-	cv.Witness = encodeValues(optimal.witness)
-	cv.CandidateSecond, cv.RequiredGap = optimal.candidateS.RatString(), optimal.requiredS.RatString()
-	best.MinimumCV = &cv
-	if err := VerifyNumericalEvidence(best); err == nil {
-		t.Fatal("an optimal candidate verified as PrecisionUnproven")
-	}
+	return file, optimal
 }
 
 // TestEvidenceUnavailableFileReproduces is A21: the file loads, and the
@@ -565,65 +573,158 @@ func TestProbeBindingMatchesBuilders(t *testing.T) {
 	}
 }
 
+// expectRejected requires err to be a rejection for the intended reason.
+// NaN is refused already by the number decoder.
+func expectRejected(t *testing.T, name string, err error, reason string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s: accepted", name)
+	}
+	if !strings.Contains(err.Error(), reason) && !(strings.HasSuffix(name, "NaN") && strings.Contains(err.Error(), "NaN is not a valid encoded")) {
+		t.Fatalf("%s: rejected for another reason: %v (want %q)", name, err, reason)
+	}
+}
+
 // TestVerifiersRejectNonFiniteNumbers: every public verifier returns an
-// error, never panics, on non-finite numbers.
+// error, never panics, on non-finite numbers. Each case changes one field of
+// otherwise valid evidence and checks the rejection reason.
 func TestVerifiersRejectNonFiniteNumbers(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("verifier panicked: %v", r)
 		}
 	}()
-	run := NewIntentEngine(NewGonumSolver()).newRun(skewedModel(t), nil)
-	header, err := run.evidenceHeader(oneVarProblem(0, 1), productRule(1e-9), StageProveHardFeasibility, nil)
+	compiled := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, evidenceFixtureClass(0, .5), evidenceSkewedClass(1, .5))
+	run := NewIntentEngine(NewGonumSolver()).newRun(compiled, nil)
+	subs, _, err := splitByClass(compiled.Hard, compiled.Prepared.Classes)
 	if err != nil {
 		t.Fatal(err)
 	}
+	where := solveContext{stage: StageProveHardFeasibility, class: 1, classCount: 2}
+	witness, err := run.classify(context.Background(), subs[0].problem, where, ObjectiveHardFeasibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interval, err := run.classInterval(context.Background(), subs[0], run.sigmaOf(compiled.Hard), witness.witness, where)
+	if err != nil || interval.hiOut == nil {
+		t.Fatalf("interval: %+v %v", interval, err)
+	}
+	bound, err := run.objectiveBoundBundle(compiled.Hard, 1, *interval.hiOut, StageProveHardFeasibility, nil)
+	if err != nil || VerifyObjectiveBound(bound) != nil {
+		t.Fatalf("valid type D bound: %v", err)
+	}
 	for _, coeff := range []string{"+Inf", "-Inf", "NaN"} {
-		bundle := ObjectiveBoundBundle{EvidenceHeader: header, Terms: []TermSnapshot{{Variable: "x", Coeff: coeff}}, Direction: "upper", Value: "0"}
-		if err := VerifyObjectiveBound(bundle); err == nil {
-			t.Fatalf("objective coefficient %s accepted", coeff)
+		copied := bound
+		copied.Terms = append([]TermSnapshot(nil), bound.Terms...)
+		copied.Terms[0].Coeff = coeff
+		expectRejected(t, "objective coefficient "+coeff, VerifyObjectiveBound(copied), "not finite")
+	}
+	copied := bound
+	copied.Tolerance = "+Inf"
+	expectRejected(t, "type D tolerance", VerifyObjectiveBound(copied), "not finite")
+
+	bracket := skewedModel(t)
+	bracket.Prepared.Plan.EngineOptions.ProfileBisectionIterations = 5
+	solution := solveWithEvidence(t, bracket, nil)
+	var file NumericalEvidence
+	readEvidence(t, solution.Diagnostics[0].EvidencePath, &file)
+	for _, value := range []string{"+Inf", "NaN"} {
+		for name, test := range map[string]struct {
+			tamper func(*NumericalEvidence)
+			reason string
+		}{
+			"bound end":    {func(f *NumericalEvidence) { f.BoundEnd = value }, "bound end is not finite"},
+			"feasible end": {func(f *NumericalEvidence) { f.FeasibleEnd = value }, "is not finite"},
+			"tolerance":    {func(f *NumericalEvidence) { f.Tolerance = value }, "tolerance is not finite"},
+		} {
+			copied := file
+			test.tamper(&copied)
+			expectRejected(t, name+" "+value, VerifyNumericalEvidence(copied), test.reason)
 		}
 	}
-	bad := header
-	bad.Tolerance = "+Inf"
-	if err := VerifyObjectiveBound(ObjectiveBoundBundle{EvidenceHeader: bad, Direction: "upper", Value: "0"}); err == nil {
-		t.Fatal("non-finite tolerance accepted")
-	}
 
+	cvFile, _ := validMinimumCVEvidence(t)
+	for name, test := range map[string]struct {
+		tamper func(*MinimumCVEvidence)
+		reason string
+	}{
+		"fixed second": {func(cv *MinimumCVEvidence) { cv.FixedSecond = "+Inf" }, "fixed second moment is not finite"},
+		"σ coefficient NaN": {func(cv *MinimumCVEvidence) {
+			cv.SigmaTerms = append([]TermSnapshot(nil), cv.SigmaTerms...)
+			cv.SigmaTerms[0].Coeff = "NaN"
+		}, "σ terms"},
+		// Review finding: two finite 1e308 terms on one variable used to sum
+		// to +Inf; duplicates are rejected before any arithmetic.
+		"σ duplicate": {func(cv *MinimumCVEvidence) {
+			first := cv.SigmaTerms[0]
+			first.Coeff = "1e308"
+			cv.SigmaTerms = append([]TermSnapshot{first, first}, cv.SigmaTerms[1:]...)
+		}, "σ terms"},
+	} {
+		copied := cvFile
+		cv := *cvFile.MinimumCV
+		test.tamper(&cv)
+		copied.MinimumCV = &cv
+		expectRejected(t, name, VerifyNumericalEvidence(copied), test.reason)
+	}
+}
+
+// TestBracketEvidenceBindsStageSemantics: the stage fixes direction,
+// theoretical endpoint, required precision and acceptance rule; a file that
+// states otherwise fails (review finding: δ relabelled as maximize toward 1
+// accepted [0.4375, 1] although δ = 0.41 is feasible).
+func TestBracketEvidenceBindsStageSemantics(t *testing.T) {
 	compiled := skewedModel(t)
 	compiled.Prepared.Plan.EngineOptions.ProfileBisectionIterations = 5
 	solution := solveWithEvidence(t, compiled, nil)
 	var file NumericalEvidence
 	readEvidence(t, solution.Diagnostics[0].EvidencePath, &file)
-	for _, value := range []string{"+Inf", "NaN"} {
-		for name, tamper := range map[string]func(*NumericalEvidence){
-			"bound end":    func(f *NumericalEvidence) { f.BoundEnd = value },
-			"feasible end": func(f *NumericalEvidence) { f.FeasibleEnd = value },
-			"tolerance":    func(f *NumericalEvidence) { f.Tolerance = value },
-		} {
-			copied := file
-			tamper(&copied)
-			if err := VerifyNumericalEvidence(copied); err == nil {
-				t.Fatalf("%s %s accepted", name, value)
-			}
-		}
+	for name, test := range map[string]struct {
+		tamper func(*NumericalEvidence)
+		reason string
+	}{
+		"direction": {func(f *NumericalEvidence) {
+			f.Direction, f.BoundBasis, f.BoundEnd, f.BoundEvidence = "maximize", BasisTheoreticalEndpoint, "1", nil
+		}, "is a minimize stage"},
+		"theoretical endpoint": {func(f *NumericalEvidence) {
+			f.BoundBasis, f.BoundEnd, f.BoundEvidence = BasisTheoreticalEndpoint, "0.25", nil
+		}, "theoretical endpoint"},
+		"required precision": {func(f *NumericalEvidence) { f.RequiredPrecision = "0" }, "not the engine's"},
+		"external rule":      {func(f *NumericalEvidence) { f.Rule = encodeEvidenceRule(productRule(1e-9)) }, "internal acceptance rule"},
+	} {
+		copied := file
+		test.tamper(&copied)
+		expectRejected(t, name, VerifyNumericalEvidence(copied), test.reason)
 	}
-	cvFile := NumericalEvidence{Version: numericalEvidenceVersion, Code: DiagnosticPrecisionUnproven, Tolerance: file.Tolerance, Rule: file.Rule,
-		Problem: file.FeasibleProblem, ProblemSHA256: file.FeasibleSHA256,
-		MinimumCV: &MinimumCVEvidence{FixedSecond: "+Inf", Witness: file.Witness, SigmaTerms: []TermSnapshot{{Variable: compiled.Primary[0].ID, Coeff: "NaN"}}}}
-	if err := VerifyNumericalEvidence(cvFile); err == nil {
-		t.Fatal("non-finite minimum-CV numbers accepted")
-	}
-	// Review finding: two finite 1e308 terms on one variable used to sum to
-	// +Inf; duplicate σ terms are now rejected before any arithmetic.
-	overflow := NumericalEvidence{Version: numericalEvidenceVersion, Code: DiagnosticPrecisionUnproven, Tolerance: "1e-09", Rule: encodeEvidenceRule(internalRule(1e-9)),
-		MinimumCV: &MinimumCVEvidence{FixedSecond: "0", Witness: []string{"1"}, CandidateSecond: "0", RequiredGap: "1/100000000",
-			SigmaTerms: []TermSnapshot{{Variable: "x", Coeff: "1e308"}, {Variable: "x", Coeff: "1e308"}}}}
-	if err := setProblem(&overflow.Problem, &overflow.ProblemSHA256, oneVarProblem(0, 1)); err != nil {
+	// A probe certificate stated for the external set, or a hard certificate
+	// for the internal set, is bound to the wrong stage set.
+	external := *file.BoundEvidence
+	external.Rule = encodeEvidenceRule(productRule(1e-9))
+	expectRejected(t, "probe certificate on the external set", VerifyInfeasibilityEvidence(external), "must use rule")
+}
+
+// TestFailedRunReportAnchorsEvidence: a run that fails in the engine still
+// records evidence_base and the acceptance rules (review finding).
+func TestFailedRunReportAnchorsEvidence(t *testing.T) {
+	base := runCompleteProductionPipeline(t, Int64Seed(4127483647), "failed-anchor")
+	tuner := rgsTestTuner(t, base, []OutputFormat{OutputOptimalArtifactV1})
+	tuner.engine.solver = falseInfeasibleSolver{}
+	tuner.engine.exactBudget = &exactBudget{maxPivots: 0, maxBits: 1 << 14}
+	result, err := tuner.Run(context.Background(), RunRequest{PlanID: base.Report.Plan.Plan.ID})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyNumericalEvidence(overflow); err == nil {
-		t.Fatal("duplicate σ terms accepted")
+	if result.Status != StatusNumericalFailure || len(result.Diagnostics) == 0 || result.Diagnostics[0].EvidencePath == "" {
+		t.Fatalf("status=%s diagnostics=%+v", result.Status, result.Diagnostics)
+	}
+	anchor := result.Report.Intent.EvidenceBase
+	if anchor == nil || anchor.HardSHA256 != base.Report.Intent.EvidenceBase.HardSHA256 || result.Report.Intent.AcceptanceRules == nil {
+		t.Fatalf("failed run report anchor=%+v rules=%+v", anchor, result.Report.Intent.AcceptanceRules)
+	}
+	var file NumericalEvidence
+	readEvidence(t, result.Diagnostics[0].EvidencePath, &file)
+	if file.Base == nil || file.Base.HardSHA256 != anchor.HardSHA256 || file.Base.StructureSHA256 != anchor.StructureSHA256 {
+		t.Fatalf("evidence base %+v does not match the report anchor %+v", file.Base, anchor)
 	}
 }
 

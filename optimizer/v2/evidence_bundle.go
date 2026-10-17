@@ -290,9 +290,17 @@ func (h EvidenceHeader) open() (LinearProblem, acceptanceRule, error) {
 	return problem, rule, err
 }
 
-// verifyProbe binds a probe label to the header problem: a bisection probe
-// must be exactly the stage chain rebuilt at that value.
+// verifyProbe binds the header to its stage: the acceptance rule must be the
+// stage's set, and a bisection probe must be exactly the stage chain rebuilt
+// at its value.
 func (h EvidenceHeader) verifyProbe(problem LinearProblem) error {
+	tau, err := decodeFinite(h.Tolerance, "tolerance")
+	if err != nil {
+		return err
+	}
+	if h.Rule != encodeEvidenceRule(stageRule(h.Stage, tau)) {
+		return fmt.Errorf("stage %q evidence must use rule %q", h.Stage, stageRule(h.Stage, tau).version())
+	}
 	if !probeStages[h.Stage] {
 		if h.Probe != "" {
 			return fmt.Errorf("stage %q has no probe", h.Stage)

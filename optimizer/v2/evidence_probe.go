@@ -76,6 +76,28 @@ var stageFamilies = map[string]bool{
 	"other_bucket_visibility": true, "main_group_internal_visibility": true,
 }
 
+// stageDirection is each bisection stage's fixed direction and theoretical
+// endpoint: δ is minimized toward 0, both ρ are maximized toward 1.
+func stageDirection(stage string) (direction string, theoretical float64, ok bool) {
+	switch stage {
+	case string(StageMinimizeMainProfileDeviation):
+		return "minimize", 0, true
+	case string(StageMaximizeOtherBucketVisibility), string(StageMaximizeMainGroupInternalVisibility):
+		return "maximize", 1, true
+	}
+	return "", 0, false
+}
+
+// stageRule is the acceptance set evidence of a stage must be stated for:
+// hard certificates refute the external set (INFEASIBLE_MODEL), every other
+// stage works on the internal set.
+func stageRule(stage string, tau float64) acceptanceRule {
+	if stage == string(StageProveHardFeasibility) {
+		return productRule(tau)
+	}
+	return internalRule(tau)
+}
+
 // probeStages are the stages whose problems carry a probe value.
 var probeStages = map[string]bool{
 	string(StageMinimizeMainProfileDeviation):        true,

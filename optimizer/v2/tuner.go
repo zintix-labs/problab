@@ -397,6 +397,10 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (out RunResult, run
 	if err != nil {
 		return RunResult{}, fmt.Errorf("hash optimizer v2 semantic model for mode %d: %w", betMode, err)
 	}
+	// Anchor evidence before solving: a failed run must still let its
+	// evidence files be checked against the report (techspec §9.3).
+	report.Intent.EvidenceBase = evidenceBaseReport(compiled)
+	report.Intent.AcceptanceRules = acceptanceRulesReport(compiled.Prepared.Plan.EngineOptions.FeasibilityTolerance)
 	solution, err := t.solveStage(ctx, compiled, betMode, &report)
 	if err != nil {
 		return RunResult{}, err

@@ -173,6 +173,14 @@ func VerifyNumericalEvidence(file NumericalEvidence) error {
 	if err != nil {
 		return err
 	}
+	// Every stage after hard works on the internal set.
+	tau, err := decodeFinite(file.Tolerance, "tolerance")
+	if err != nil {
+		return err
+	}
+	if file.Code == DiagnosticPrecisionUnproven && rule != internalRule(tau) {
+		return errors.New("PrecisionUnproven evidence must use the internal acceptance rule")
+	}
 	switch file.Code {
 	case DiagnosticEvidenceUnavailable:
 		problem, err := openSnapshot(file.Problem, file.ProblemSHA256)
@@ -224,8 +232,12 @@ func verifyBracketEvidence(file NumericalEvidence, rule acceptanceRule) error {
 	if !replayWithRule(problem, witness, rule) {
 		return errors.New("feasible-end witness fails the recorded rule")
 	}
-	if !probeStages[file.Stage] {
+	direction, theoretical, ok := stageDirection(file.Stage)
+	if !ok {
 		return fmt.Errorf("stage %q has no bisection", file.Stage)
+	}
+	if file.Direction != direction {
+		return fmt.Errorf("stage %s is a %s stage, not %q", file.Stage, direction, file.Direction)
 	}
 	if err := verifyStageProblem(file.Base, file.Stage, file.FeasibleEnd, problem); err != nil {
 		return fmt.Errorf("feasible end: %w", err)
@@ -240,10 +252,6 @@ func verifyBracketEvidence(file NumericalEvidence, rule acceptanceRule) error {
 	}
 	switch file.BoundBasis {
 	case BasisTheoreticalEndpoint:
-		theoretical := 1.0
-		if file.Direction == "minimize" {
-			theoretical = 0
-		}
 		if bound != theoretical {
 			return fmt.Errorf("theoretical endpoint %s is not %g", file.BoundEnd, theoretical)
 		}
@@ -264,14 +272,14 @@ func verifyBracketEvidence(file NumericalEvidence, rule acceptanceRule) error {
 	default:
 		return fmt.Errorf("unknown bound basis %q", file.BoundBasis)
 	}
-	if (file.Direction == "minimize" && bound > feasible) || (file.Direction == "maximize" && bound < feasible) {
+	if (direction == "minimize" && bound > feasible) || (direction == "maximize" && bound < feasible) {
 		return errors.New("bound lies on the wrong side of the feasible end")
 	}
-	required, ok := new(big.Rat).SetString(file.RequiredPrecision)
-	if !ok {
-		return fmt.Errorf("required precision %q is not rational", file.RequiredPrecision)
+	// The required precision is the engine constant, not a file field.
+	if file.RequiredPrecision != requiredParameterPrecision.RatString() {
+		return fmt.Errorf("required precision %q is not the engine's %s", file.RequiredPrecision, requiredParameterPrecision.RatString())
 	}
-	if ratAbs(ratSub(ratOf(bound), ratOf(feasible))).Cmp(required) <= 0 {
+	if ratAbs(ratSub(ratOf(bound), ratOf(feasible))).Cmp(requiredParameterPrecision) <= 0 {
 		return errors.New("the verified bracket is within the required precision")
 	}
 	return nil
