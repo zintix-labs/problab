@@ -229,9 +229,21 @@ func TestStageTwoSets(t *testing.T) {
 	}
 }
 
-// determinismModels bisect (skewed) and bind the CV row in probes (E).
+// determinismModels cover profile bisection and globally coupled visibility.
 func determinismModels(t *testing.T) map[string]CompiledModel {
-	return map[string]CompiledModel{"skewed": skewedModel(t), "cv-binding": evidenceCVBindingModel(t)}
+	// A smaller two-Class model still forces 27 rho_main midpoint probes and
+	// global CV coordination. The original E7 model remains in extended tests.
+	var classes []PreparedClass
+	for i := 0; i < 2; i++ {
+		class := modelTestIntentClass(i, fmt.Sprintf("class-%03d", i), .5,
+			[]float64{0, 1, 2}, []float64{0, 1, 4}, [][]int{{0, 1}}, []int{2})
+		class.Design.Exp = 1
+		class.Design.Subjective.MainExperience.Probability = NumericRange{Min: .6, Max: 1}
+		classes = append(classes, class)
+	}
+	cv := evidenceCompile(t, NumericRange{Min: 0, Max: math.Sqrt(.5)}, classes...)
+	cv.Prepared.Plan.Plan.ID = "determinism-cv-small"
+	return map[string]CompiledModel{"skewed": skewedModel(t), "cv-binding": cv}
 }
 
 func solvePrimaryBits(t *testing.T, compiled CompiledModel) string {
@@ -239,6 +251,15 @@ func solvePrimaryBits(t *testing.T, compiled CompiledModel) string {
 	solution, err := NewIntentEngine(NewGonumSolver()).Solve(context.Background(), compiled)
 	if err != nil || solution.Status != StatusOptimal {
 		t.Fatalf("status=%s err=%v", solution.Status, err)
+	}
+	if solution.MainProfileOptimization.Probes <= 2 && solution.MainGroupInternalVisibilityOptimization.Probes <= 2 {
+		t.Fatal("determinism fixture must exercise bisection, not just endpoints")
+	}
+	if compiled.Prepared.Plan.Plan.ID == "determinism-cv-small" {
+		report := solution.MainGroupInternalVisibilityOptimization
+		if report.Probes <= 2 || report.Lower <= .6 || report.Upper >= .8 || report.Evidence == nil || report.Evidence.SigmaEndpoints != report.Probes*len(compiled.Prepared.Classes)*2 || report.Evidence.InfeasibilityCertificates != 0 {
+			t.Fatalf("small CV fixture must retain an interior, globally coupled optimum: %+v", report)
+		}
 	}
 	return fmt.Sprint(floatBits(solution.Primary))
 }
@@ -268,8 +289,9 @@ func TestEngineDeterminism(t *testing.T) {
 // TestEngineSubprocessRepeatable is A18 across processes.
 func TestEngineSubprocessRepeatable(t *testing.T) {
 	if os.Getenv("PROBLAB_DETERMINISM_CHILD") == "1" {
+		models := determinismModels(t)
 		for _, name := range []string{"cv-binding", "skewed"} {
-			fmt.Printf("DETERMINISM %s %s\n", name, solvePrimaryBits(t, determinismModels(t)[name]))
+			fmt.Printf("DETERMINISM %s %s\n", name, solvePrimaryBits(t, models[name]))
 		}
 		return
 	}

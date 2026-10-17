@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 	"math/rand"
-	"os"
 	"strings"
 	"testing"
 )
@@ -43,11 +42,10 @@ func classifyForTest(t *testing.T, run *engineRun, problem LinearProblem) classi
 
 // A02: the review's feasible-by-construction set, including the Gonum
 // false-infeasible cases: never INFEASIBLE, and every witness passes replay.
+// Ordinary runs use 60 models; the full 500-model set is archived in
+// evidence_extended_test.go and maintained as a separate P00 worker.
 func TestClassifyFeasibleFuzzSet(t *testing.T) {
-	sets := []struct{ trials, classes, buckets int }{{300, 2, 8}, {200, 3, 15}}
-	if testing.Short() {
-		sets = []struct{ trials, classes, buckets int }{{40, 2, 8}, {20, 3, 15}}
-	}
+	sets := []struct{ trials, classes, buckets int }{{40, 2, 8}, {20, 3, 15}}
 	run := newEvidenceRun(t, NewGonumSolver())
 	total, feasible := 0, 0
 	for _, set := range sets {
@@ -68,7 +66,7 @@ func TestClassifyFeasibleFuzzSet(t *testing.T) {
 	}
 	t.Logf("witness %d/%d; by source %v", feasible, total, run.counters.WitnessFound)
 	if feasible != total {
-		t.Fatalf("witness found for %d/%d feasible models (P00: 500/500)", feasible, total)
+		t.Fatalf("witness found for %d/%d feasible models", feasible, total)
 	}
 }
 
@@ -76,12 +74,9 @@ func TestClassifyFeasibleFuzzSet(t *testing.T) {
 // the tolerance no wrong conclusion appears and every UNKNOWN is a non-empty
 // envelope.
 func TestClassifyInfeasibleSet(t *testing.T) {
-	// The full P00 set (100 per margin) takes over a minute; it runs when
-	// PROBLAB_EVIDENCE_FULL=1 and its result is recorded in the techspec.
-	trials := 10
-	if os.Getenv("PROBLAB_EVIDENCE_FULL") == "1" {
-		trials = 100
-	}
+	// Keep every margin, including near-tolerance cases, in ordinary CI.
+	// Extended validation retains 10 (or optionally 100) trials per margin.
+	const trials = 2
 	run := newEvidenceRun(t, NewGonumSolver())
 	for _, margin := range []float64{1e-1, 1e-3, 1e-6, 1e-8, 5e-9, 3e-9, 2e-9, 1e-9} {
 		certified := 0

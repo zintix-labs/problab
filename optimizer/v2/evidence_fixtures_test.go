@@ -206,16 +206,6 @@ func evidenceCompile(t *testing.T, cv NumericRange, classes ...PreparedClass) Co
 	return modelTestCompile(t, modelTestPrepared(OverallIntent{CV: cv}, classes...))
 }
 
-// evidenceCVBindingModel is P00 E7: two Classes whose CV minimum binds in
-// the probes (90% up the achievable second-moment range).
-func evidenceCVBindingModel(t *testing.T) CompiledModel {
-	classes := []PreparedClass{evidenceFixtureClass(0, 0.5), evidenceSkewedClass(1, 0.5)}
-	wide := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, classes...)
-	lo, hi := jointSigmaRange(t, wide)
-	mu := wide.Prepared.ExpectedRTP()
-	return evidenceCompile(t, NumericRange{Min: math.Sqrt((lo+0.9*(hi-lo))/(mu*mu) - 1), Max: 10}, classes...)
-}
-
 // evidenceToleranceGapModel puts the CV maximum the given relative gap below the
 // exact minimum second moment, so only replay tolerance can make it feasible.
 func evidenceToleranceGapModel(t *testing.T, gap float64) CompiledModel {

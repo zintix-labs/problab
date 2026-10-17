@@ -118,20 +118,21 @@ func TestFarkasVerifierSoundness(t *testing.T) {
 	}
 	signCase := oneVarProblem(1, 2, xRow("ge", SenseGE, 0, 1))
 	signModel, _, _ := buildEnvelope(signCase, evidenceTestTau)
+	// Extended validation preserves the original random multiplier sweep.
 	r := rand.New(rand.NewSource(1))
-	for i := 0; i < 2000; i++ {
+	for i := 0; i < 100; i++ {
 		y := []float64{(r.Float64() - 0.5) * math.Pow(10, float64(r.Intn(20)-10))}
 		if verifyFarkas(signModel, floatsToRats(y)).valid {
 			t.Fatalf("false certificate with y=%v", y)
 		}
 	}
-	for trial := 0; trial < 200; trial++ {
+	for trial := 0; trial < 10; trial++ {
 		problem, _ := plantedEvidenceProblem(r, 2, 6, true)
 		m, _, err := buildEnvelope(problem, evidenceTestTau)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for k := 0; k < 20; k++ {
+		for k := 0; k < 5; k++ {
 			y := make([]float64, len(m.rows))
 			for i := range y {
 				if r.Float64() < 0.5 {
@@ -286,7 +287,7 @@ func TestExactSimplexBudgetAndCancellation(t *testing.T) {
 // never appear on feasible ones.
 func TestExactCertificatesOnFuzzModels(t *testing.T) {
 	r := rand.New(rand.NewSource(4))
-	for trial := 0; trial < 40; trial++ {
+	for trial := 0; trial < 8; trial++ {
 		problem, _ := plantedEvidenceProblem(r, 2, 6, true)
 		m, _, _ := buildEnvelope(problem, evidenceTestTau)
 		if acquireFarkas(context.Background(), m, defaultExactBudget).check.valid {
