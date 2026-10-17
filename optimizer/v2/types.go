@@ -937,6 +937,9 @@ type IntentQualityReport struct {
 	// AcceptanceRules names the two sets of techspec §4.6: brackets and the
 	// minimum-CV gap are relative to Internal; final replay uses External.
 	AcceptanceRules *AcceptanceRulesReport `json:"acceptance_rules,omitempty"`
+	// EvidenceBase is what every stage evidence file's base must match: the
+	// hard model snapshot and the stage-builder structure (techspec §9.3).
+	EvidenceBase *EvidenceBaseReport `json:"evidence_base,omitempty"`
 
 	// Deprecated: use MainProfileOptimization.
 	PhaseA BisectionReport `json:"phase_a_profile"`

@@ -55,6 +55,7 @@ func (r *engineRun) solveStages(ctx context.Context) (EngineSolution, error) {
 	if err != nil || failure != nil {
 		return failureOrError(failure, err)
 	}
+	r.locks.Delta = encodeFloat64(profileReport.FixedValue)
 	other, otherWitness, otherReport := profile, profileWitness, BisectionReport{}
 	if hasEligibleOthers(compiled.Prepared) {
 		other, otherWitness, otherReport, failure, err = r.bisect(ctx, bisectSpec{
@@ -70,6 +71,7 @@ func (r *engineRun) solveStages(ctx context.Context) (EngineSolution, error) {
 		if err != nil || failure != nil {
 			return failureOrError(failure, err)
 		}
+		r.locks.OtherRho = encodeFloat64(otherReport.FixedValue)
 	} else {
 		otherReport = r.skippedStage(StageMaximizeOtherBucketVisibility, metricOtherBucketVisibility, reasonNoSupportedOtherBuckets)
 	}
@@ -90,6 +92,7 @@ func (r *engineRun) solveStages(ctx context.Context) (EngineSolution, error) {
 		if err != nil || failure != nil {
 			return failureOrError(failure, err)
 		}
+		r.locks.MainRho = encodeFloat64(groupReport.FixedValue)
 	} else {
 		groupReport = r.skippedStage(StageMaximizeMainGroupInternalVisibility, metricMainGroupInternalVisibility, reasonNoMainGroupWithMultipleSupport)
 	}

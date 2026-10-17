@@ -72,6 +72,9 @@ type engineRun struct {
 	// other's evidence (slow-solve records and evidence files).
 	runDirMu sync.Mutex
 	runDir   string
+	// locks are the fixed values of the stages completed so far; evidence
+	// of later stage problems records them (ProbeBase).
+	locks    ProbeLocks
 	options  SolveOptions
 	counters EvidenceCounters
 

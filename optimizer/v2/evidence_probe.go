@@ -15,22 +15,282 @@
 package v2
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 )
 
-// A probe label means nothing unless the matrix carries it. These checks
-// bind a bisection probe value to its problem snapshot: the stage's probe
-// rows must hold exactly the coefficients the model builders compute for that
-// value (same float64 operations), so a certificate of one probe cannot be
-// presented as the certificate of another.
+// A probe label means nothing unless the matrix carries it, and which
+// variables a probe row must contain (Main membership, Group membership,
+// supported buckets, Others) is not visible in a LinearProblem. Evidence of
+// a stage problem therefore carries the builder inputs (ProbeStructure) and
+// the earlier stages' lock values; the verifier strips every stage-added
+// variable and row to recover the hard model, rebuilds the stage chain with
+// the production builders, and requires the snapshot to match bit for bit.
 
-// probeFamily is the row family each bisection stage adds per probe.
-var probeFamily = map[string]string{
-	string(StageMinimizeMainProfileDeviation):        "main_profile_deviation_lock",
-	string(StageMaximizeOtherBucketVisibility):       "other_bucket_visibility",
-	string(StageMaximizeMainGroupInternalVisibility): "main_group_internal_visibility",
+// ProbeStructure is the part of the prepared model the stage builders read.
+type ProbeStructure struct {
+	Intent  string       `json:"intent"` // plan intent name, part of row YAML paths
+	Classes []ProbeClass `json:"classes"`
+}
+
+// ProbeClass is one prepared Class as the builders see it.
+type ProbeClass struct {
+	ID        string       `json:"id"`
+	Intent    bool         `json:"intent"`
+	Variables []VariableID `json:"variables"` // ClassVariables, bucket order
+	Supported []bool       `json:"supported"`
+	Groups    []ProbeGroup `json:"groups,omitempty"`
+	Others    []int        `json:"others,omitempty"`
+}
+
+// ProbeGroup is one Main Group.
+type ProbeGroup struct {
+	Index       int    `json:"index"`
+	Buckets     []int  `json:"buckets"`
+	PreferShare string `json:"prefer_share"`
+}
+
+// ProbeLocks are the fixed values of the stages before the bound one.
+type ProbeLocks struct {
+	Delta    string `json:"delta,omitempty"`
+	OtherRho string `json:"other_rho,omitempty"`
+	MainRho  string `json:"main_rho,omitempty"`
+}
+
+// ProbeBase binds a stage problem to the hard model and the builders.
+type ProbeBase struct {
+	Structure       ProbeStructure `json:"structure"`
+	StructureSHA256 string         `json:"structure_sha256"`
+	HardSHA256      string         `json:"hard_sha256"` // snapshot SHA-256 of the hard model
+	Locks           ProbeLocks     `json:"locks"`
+}
+
+// stageFamilies are the row families the stage builders add.
+var stageFamilies = map[string]bool{
+	"main_profile_deviation": true, "main_profile_deviation_lock": true,
+	"other_bucket_visibility": true, "main_group_internal_visibility": true,
+}
+
+// probeStages are the stages whose problems carry a probe value.
+var probeStages = map[string]bool{
+	string(StageMinimizeMainProfileDeviation):        true,
+	string(StageMaximizeOtherBucketVisibility):       true,
+	string(StageMaximizeMainGroupInternalVisibility): true,
+}
+
+func probeStructure(compiled CompiledModel) ProbeStructure {
+	structure := ProbeStructure{Intent: compiled.Prepared.Plan.Plan.Intent}
+	for i, class := range compiled.Prepared.Classes {
+		pc := ProbeClass{ID: class.ID, Intent: class.Intent, Others: append([]int(nil), class.Others...)}
+		if i < len(compiled.ClassVariables) {
+			pc.Variables = append([]VariableID(nil), compiled.ClassVariables[i]...)
+		}
+		for _, bucket := range class.Buckets {
+			pc.Supported = append(pc.Supported, bucket.Supported())
+		}
+		for _, group := range class.Groups {
+			pc.Groups = append(pc.Groups, ProbeGroup{Index: group.Index, Buckets: append([]int(nil), group.BucketIndexes...), PreferShare: encodeFloat64(group.PreferShare)})
+		}
+		structure.Classes = append(structure.Classes, pc)
+	}
+	return structure
+}
+
+// SHA256 is the hex digest of the structure's JSON encoding.
+func (s ProbeStructure) SHA256() (string, error) {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// compiled rebuilds the minimal CompiledModel the builders read, with hard
+// as its hard model.
+func (s ProbeStructure) compiled(hard LinearProblem) (CompiledModel, error) {
+	compiled := CompiledModel{Hard: hard, VariableIndex: map[VariableID]int{}}
+	compiled.Prepared.Plan.Plan.Intent = s.Intent
+	for i, pc := range s.Classes {
+		if len(pc.Supported) != len(pc.Variables) {
+			return CompiledModel{}, fmt.Errorf("class %q: %d buckets but %d variables", pc.ID, len(pc.Supported), len(pc.Variables))
+		}
+		class := PreparedClass{ID: pc.ID, Index: i, Intent: pc.Intent, Others: pc.Others}
+		for b, supported := range pc.Supported {
+			bucket := PreparedBucket{Index: b}
+			if supported {
+				bucket.Samples = []CollectedSample{{}}
+			}
+			class.Buckets = append(class.Buckets, bucket)
+		}
+		for _, group := range pc.Groups {
+			share, err := decodeFinite(group.PreferShare, "prefer share")
+			if err != nil {
+				return CompiledModel{}, err
+			}
+			for _, b := range group.Buckets {
+				if b < 0 || b >= len(pc.Variables) {
+					return CompiledModel{}, fmt.Errorf("class %q group %d: bucket %d out of range", pc.ID, group.Index, b)
+				}
+			}
+			class.Groups = append(class.Groups, PreparedGroup{Index: group.Index, BucketIndexes: group.Buckets, PreferShare: share})
+		}
+		for _, b := range pc.Others {
+			if b < 0 || b >= len(pc.Variables) {
+				return CompiledModel{}, fmt.Errorf("class %q: Other bucket %d out of range", pc.ID, b)
+			}
+		}
+		compiled.Prepared.Classes = append(compiled.Prepared.Classes, class)
+		compiled.ClassVariables = append(compiled.ClassVariables, pc.Variables)
+	}
+	return compiled, nil
+}
+
+// EvidenceBaseReport is the run-report anchor of every ProbeBase.
+type EvidenceBaseReport struct {
+	HardSHA256      string `json:"hard_sha256"`
+	StructureSHA256 string `json:"structure_sha256"`
+}
+
+func evidenceBaseReport(compiled CompiledModel) *EvidenceBaseReport {
+	hard, err := SnapshotProblem(compiled.Hard).SHA256()
+	if err != nil {
+		return nil
+	}
+	structure, err := probeStructure(compiled).SHA256()
+	if err != nil {
+		return nil
+	}
+	return &EvidenceBaseReport{HardSHA256: hard, StructureSHA256: structure}
+}
+
+// probeBase records the builder inputs of this run and the locks so far.
+func (r *engineRun) probeBase() (*ProbeBase, error) {
+	structure := probeStructure(r.compiled)
+	sum, err := structure.SHA256()
+	if err != nil {
+		return nil, err
+	}
+	hard, err := SnapshotProblem(r.compiled.Hard).SHA256()
+	if err != nil {
+		return nil, err
+	}
+	return &ProbeBase{Structure: structure, StructureSHA256: sum, HardSHA256: hard, Locks: r.locks}, nil
+}
+
+// stripStages removes every stage-added variable and row, leaving the hard
+// model (stage builders only append).
+func stripStages(problem LinearProblem) LinearProblem {
+	var hard LinearProblem
+	for _, v := range problem.Variables {
+		if !strings.HasPrefix(string(v.ID), "d:main:") {
+			hard.Variables = append(hard.Variables, v)
+		}
+	}
+	for _, row := range problem.Rows {
+		if !stageFamilies[row.Family] {
+			hard.Rows = append(hard.Rows, row)
+		}
+	}
+	return hard
+}
+
+// verifyStageProblem checks that problem is exactly the production stage
+// chain: hard model, δ problem at the δ lock (or probe), Other visibility at
+// its lock (or probe), Main Group visibility at its probe or lock. stage is
+// the stage the problem belongs to; label is its probe value, or "" for the
+// minimum-CV lock problem, which uses every applicable lock.
+func verifyStageProblem(base *ProbeBase, stage, label string, problem LinearProblem) error {
+	if base == nil {
+		return errors.New("stage evidence lacks its probe base")
+	}
+	if sum, err := base.Structure.SHA256(); err != nil || sum != base.StructureSHA256 {
+		return errors.New("probe structure does not match its SHA-256")
+	}
+	hard := stripStages(problem)
+	if sum, err := SnapshotProblem(hard).SHA256(); err != nil || sum != base.HardSHA256 {
+		return errors.New("stage problem is not built on the recorded hard model")
+	}
+	compiled, err := base.Structure.compiled(hard)
+	if err != nil {
+		return err
+	}
+	value := func(own, lock, name string) (float64, error) {
+		text := lock
+		if stage == own {
+			text = label
+		}
+		if text == "" {
+			return 0, fmt.Errorf("missing %s value", name)
+		}
+		return decodeFinite(text, name)
+	}
+	delta, err := value(string(StageMinimizeMainProfileDeviation), base.Locks.Delta, "δ")
+	if err != nil {
+		return err
+	}
+	rebuilt, err := BuildMainProfileDeviationProblem(compiled, delta)
+	if err != nil {
+		return err
+	}
+	if stage != string(StageMinimizeMainProfileDeviation) {
+		if hasEligibleOthers(compiled.Prepared) {
+			rho, err := value(string(StageMaximizeOtherBucketVisibility), base.Locks.OtherRho, "ρ_other")
+			if err != nil {
+				return err
+			}
+			if rebuilt, err = AddOtherBucketVisibilityRows(rebuilt, compiled, rho); err != nil {
+				return err
+			}
+		} else if stage == string(StageMaximizeOtherBucketVisibility) || base.Locks.OtherRho != "" {
+			return errors.New("Other visibility does not apply to this structure")
+		}
+	}
+	if stage != string(StageMinimizeMainProfileDeviation) && stage != string(StageMaximizeOtherBucketVisibility) {
+		if hasEligibleMainGroupInternalVisibility(compiled.Prepared) {
+			rho, err := value(string(StageMaximizeMainGroupInternalVisibility), base.Locks.MainRho, "ρ_main")
+			if err != nil {
+				return err
+			}
+			if rebuilt, err = AddMainGroupInternalVisibilityRows(rebuilt, compiled, rho); err != nil {
+				return err
+			}
+		} else if stage == string(StageMaximizeMainGroupInternalVisibility) || base.Locks.MainRho != "" {
+			return errors.New("Main Group visibility does not apply to this structure")
+		}
+	}
+	want, err := SnapshotProblem(rebuilt).SHA256()
+	if err != nil {
+		return err
+	}
+	got, err := SnapshotProblem(problem).SHA256()
+	if err != nil {
+		return err
+	}
+	if want != got {
+		label := label
+		if label == "" {
+			label = "the recorded locks"
+		}
+		return fmt.Errorf("problem is not the %s problem at %s", stage, label)
+	}
+	return nil
+}
+
+// sameProbeBase requires two pieces of evidence to share one base.
+func sameProbeBase(a, b *ProbeBase) error {
+	if a == nil || b == nil {
+		return errors.New("missing probe base")
+	}
+	if a.StructureSHA256 != b.StructureSHA256 || a.HardSHA256 != b.HardSHA256 || a.Locks != b.Locks {
+		return errors.New("the two bracket ends have different probe bases")
+	}
+	return nil
 }
 
 // decodeFinite decodes a float64 field that must be finite.
@@ -45,169 +305,6 @@ func decodeFinite(text, what string) (float64, error) {
 	return value, nil
 }
 
-// verifyProbeBinding checks that problem is the probe problem of stage at
-// the labelled value. Stages without probe rows need no binding.
-func verifyProbeBinding(stage string, problem LinearProblem, label string) error {
-	family, ok := probeFamily[stage]
-	if !ok {
-		return nil
-	}
-	value, err := decodeFinite(label, "probe")
-	if err != nil {
-		return err
-	}
-	var rows []LinearRow
-	for _, row := range problem.Rows {
-		if row.Family == family {
-			rows = append(rows, row)
-		}
-	}
-	if len(rows) == 0 {
-		return fmt.Errorf("stage %s: problem has no %s rows", stage, family)
-	}
-	switch stage {
-	case string(StageMinimizeMainProfileDeviation):
-		return verifyDeltaRows(rows, value)
-	case string(StageMaximizeOtherBucketVisibility):
-		return verifyOtherVisibilityRows(rows, value)
-	default:
-		return verifyMainVisibilityRows(rows, value)
-	}
-}
-
-// verifyDeltaRows: Σ d ≤ δ·(Main mass), written as Σ d − δ·p ≤ 0
-// (BuildMainProfileDeviationProblem).
-func verifyDeltaRows(rows []LinearRow, delta float64) error {
-	for _, row := range rows {
-		if row.Sense != SenseLE || row.RHS != 0 {
-			return fmt.Errorf("row %q is not a δ lock row", row.ID)
-		}
-		mainTerms := 0
-		for _, term := range row.Terms {
-			want := -delta
-			if strings.HasPrefix(string(term.Variable), "d:main:") {
-				want = 1
-			} else {
-				mainTerms++
-			}
-			if term.Coeff != want {
-				return fmt.Errorf("row %q: coefficient %v of %q does not match δ = %v", row.ID, term.Coeff, term.Variable, delta)
-			}
-		}
-		// δ = 0 drops the Main terms; any other δ must carry them.
-		if delta != 0 && mainTerms == 0 {
-			return fmt.Errorf("row %q has no Main terms for δ = %v", row.ID, delta)
-		}
-	}
-	return nil
-}
-
-// verifyOtherVisibilityRows: per Class with k supported Others, share = ρ/k;
-// each row is p_other + share·(Main mass) ≥ share (AddOtherBucketVisibilityRows).
-func verifyOtherVisibilityRows(rows []LinearRow, rho float64) error {
-	perClass := map[string]int{}
-	for _, row := range rows {
-		perClass[row.ClassID]++
-	}
-	for _, row := range rows {
-		share := rho / float64(perClass[row.ClassID])
-		if row.Sense != SenseGE || row.RHS != share {
-			return fmt.Errorf("row %q: RHS %v does not match ρ = %v", row.ID, row.RHS, rho)
-		}
-		ones := 0
-		for _, term := range row.Terms {
-			switch term.Coeff {
-			case share:
-			case 1:
-				ones++
-			default:
-				return fmt.Errorf("row %q: coefficient %v of %q does not match ρ = %v", row.ID, term.Coeff, term.Variable, rho)
-			}
-		}
-		if share != 1 && ones != 1 { // with share = 1 the Other term is indistinguishable
-			return fmt.Errorf("row %q has %d Other bucket terms", row.ID, ones)
-		}
-	}
-	return nil
-}
-
-// verifyMainVisibilityRows: per Main Group with k supported buckets,
-// share = ρ/k; each row is (1 − share)·p_self − share·Σ p_sibling ≥ 0
-// (AddMainGroupInternalVisibilityRows; 1 − share is computed as 1 + (−share)).
-func verifyMainVisibilityRows(rows []LinearRow, rho float64) error {
-	group := func(id RowID) string {
-		text := string(id)
-		if i := strings.LastIndex(text, ":bucket-"); i >= 0 {
-			return text[:i]
-		}
-		return text
-	}
-	perGroup := map[string]int{}
-	for _, row := range rows {
-		perGroup[group(row.ID)]++
-	}
-	for _, row := range rows {
-		k := perGroup[group(row.ID)]
-		share := rho / float64(k)
-		self := 1 + (-share)
-		if row.Sense != SenseGE || row.RHS != 0 || k < 2 {
-			return fmt.Errorf("row %q is not a Main Group visibility row", row.ID)
-		}
-		selves, siblings := 0, 0
-		for _, term := range row.Terms {
-			switch term.Coeff {
-			case self:
-				selves++
-			case -share:
-				siblings++
-			default:
-				return fmt.Errorf("row %q: coefficient %v of %q does not match ρ = %v", row.ID, term.Coeff, term.Variable, rho)
-			}
-		}
-		wantSiblings := k - 1
-		if share == 0 {
-			wantSiblings = 0 // zero coefficients are dropped
-		}
-		if selves != 1 || siblings != wantSiblings {
-			return fmt.Errorf("row %q has %d self and %d sibling terms for %d buckets", row.ID, selves, siblings, k)
-		}
-	}
-	return nil
-}
-
-// verifySameExceptProbe checks that two probe problems of one stage share
-// every variable and every row except the stage's probe rows (the common
-// constraints of the bracket).
-func verifySameExceptProbe(stage string, a, b LinearProblem) error {
-	family := probeFamily[stage]
-	strip := func(problem LinearProblem) (ProblemSnapshot, []RowID) {
-		out := LinearProblem{Variables: problem.Variables}
-		var ids []RowID
-		for _, row := range problem.Rows {
-			if row.Family == family {
-				ids = append(ids, row.ID)
-				continue
-			}
-			out.Rows = append(out.Rows, row)
-		}
-		return SnapshotProblem(out), ids
-	}
-	sa, ia := strip(a)
-	sb, ib := strip(b)
-	ha, err := sa.SHA256()
-	if err != nil {
-		return err
-	}
-	hb, err := sb.SHA256()
-	if err != nil {
-		return err
-	}
-	if ha != hb || fmt.Sprint(ia) != fmt.Sprint(ib) {
-		return fmt.Errorf("the two bracket ends do not share their common constraints")
-	}
-	return nil
-}
-
 // finiteTerms rejects objective terms that cannot be converted exactly.
 func finiteTerms(terms []LinearTerm) error {
 	for _, term := range terms {
@@ -216,4 +313,11 @@ func finiteTerms(terms []LinearTerm) error {
 		}
 	}
 	return nil
+}
+
+// validateEvidenceProblem applies the solver's structural contract to a
+// decoded snapshot: unique IDs, finite RHS and coefficients, known
+// variables, strictly sorted (so unique) terms.
+func validateEvidenceProblem(problem LinearProblem) error {
+	return validateLinearProblem(problem, LinearObjective{Origin: ObjectiveDiagnostic}, SolveOptions{FeasibilityTolerance: 1, OptimalityTolerance: 1})
 }

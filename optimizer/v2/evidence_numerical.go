@@ -41,6 +41,8 @@ type NumericalEvidence struct {
 	RequiredPrecision   string         `json:"required_precision,omitempty"` // exact rational
 	Budget              EvidenceBudget `json:"budget"`
 	ClassIDs            []string       `json:"class_ids"`
+	// Base binds the file's problems to the hard model and the stage builders.
+	Base *ProbeBase `json:"base,omitempty"`
 
 	// Bisection (PrecisionUnproven of δ, ρ_other, ρ_main).
 	Probes          []EvidenceProbe      `json:"probes,omitempty"`
@@ -97,7 +99,18 @@ func (r *engineRun) numericalEvidence(code DiagnosticCode, stage OptimizationSta
 		Stage: string(stage), Tolerance: encodeFloat64(r.tau()), OptimalityTolerance: encodeFloat64(r.options.OptimalityTolerance),
 		Rule: encodeEvidenceRule(r.accept), Budget: EvidenceBudget{ExactPivots: budget.maxPivots, ExactBits: budget.maxBits},
 		ClassIDs: preparedClassIDs(r.compiled.Prepared.Classes),
+		// probeBase fails only if plain data cannot be JSON-encoded; a nil
+		// base would make verification fail visibly.
+		Base: r.mustProbeBase(),
 	}
+}
+
+func (r *engineRun) mustProbeBase() *ProbeBase {
+	base, err := r.probeBase()
+	if err != nil {
+		return nil
+	}
+	return base
 }
 
 func setProblem(snapshot **ProblemSnapshot, sum *string, problem LinearProblem) error {
@@ -163,10 +176,16 @@ func VerifyNumericalEvidence(file NumericalEvidence) error {
 	switch file.Code {
 	case DiagnosticEvidenceUnavailable:
 		problem, err := openSnapshot(file.Problem, file.ProblemSHA256)
-		if err != nil || file.Probe == "" {
+		if err != nil {
 			return err
 		}
-		return verifyProbeBinding(file.Stage, problem, file.Probe)
+		switch {
+		case probeStages[file.Stage]:
+			return verifyStageProblem(file.Base, file.Stage, file.Probe, problem)
+		case file.Stage == string(StageSelectCanonicalBucketProbabilities):
+			return verifyStageProblem(file.Base, file.Stage, "", problem)
+		}
+		return nil
 	case DiagnosticPrecisionUnproven:
 		if file.MinimumCV != nil {
 			return verifyMinimumCVEvidence(file, rule)
@@ -183,7 +202,14 @@ func openSnapshot(snapshot *ProblemSnapshot, sum string) (LinearProblem, error) 
 	if digest, err := snapshot.SHA256(); err != nil || digest != sum {
 		return LinearProblem{}, errors.New("problem snapshot does not match its SHA-256")
 	}
-	return snapshot.Problem()
+	problem, err := snapshot.Problem()
+	if err != nil {
+		return LinearProblem{}, err
+	}
+	if err := validateEvidenceProblem(problem); err != nil {
+		return LinearProblem{}, fmt.Errorf("problem snapshot: %w", err)
+	}
+	return problem, nil
 }
 
 func verifyBracketEvidence(file NumericalEvidence, rule acceptanceRule) error {
@@ -198,10 +224,10 @@ func verifyBracketEvidence(file NumericalEvidence, rule acceptanceRule) error {
 	if !replayWithRule(problem, witness, rule) {
 		return errors.New("feasible-end witness fails the recorded rule")
 	}
-	if _, ok := probeFamily[file.Stage]; !ok {
+	if !probeStages[file.Stage] {
 		return fmt.Errorf("stage %q has no bisection", file.Stage)
 	}
-	if err := verifyProbeBinding(file.Stage, problem, file.FeasibleEnd); err != nil {
+	if err := verifyStageProblem(file.Base, file.Stage, file.FeasibleEnd, problem); err != nil {
 		return fmt.Errorf("feasible end: %w", err)
 	}
 	feasible, err := decodeFinite(file.FeasibleEnd, "feasible end")
@@ -226,16 +252,14 @@ func verifyBracketEvidence(file NumericalEvidence, rule acceptanceRule) error {
 		if evidence == nil || evidence.Probe != file.BoundEnd || evidence.Stage != file.Stage || evidence.Rule != file.Rule {
 			return errors.New("bound certificate missing or bound to another probe, stage or rule")
 		}
-		// VerifyInfeasibilityEvidence also binds the probe label to the matrix.
+		// One base for both ends: same hard model, structure and earlier
+		// locks, so the ends differ only in the probe value.
+		if err := sameProbeBase(file.Base, evidence.Base); err != nil {
+			return err
+		}
+		// VerifyInfeasibilityEvidence rebuilds the bound problem at its probe.
 		if err := VerifyInfeasibilityEvidence(*evidence); err != nil {
 			return fmt.Errorf("bound certificate: %w", err)
-		}
-		boundProblem, err := evidence.Problem.Problem()
-		if err != nil {
-			return err
-		}
-		if err := verifySameExceptProbe(file.Stage, problem, boundProblem); err != nil {
-			return err
 		}
 	default:
 		return fmt.Errorf("unknown bound basis %q", file.BoundBasis)
@@ -258,6 +282,9 @@ func verifyMinimumCVEvidence(file NumericalEvidence, rule acceptanceRule) error 
 	if err != nil {
 		return err
 	}
+	if err := verifyStageProblem(file.Base, string(StageSelectCanonicalBucketProbabilities), "", problem); err != nil {
+		return err
+	}
 	cv := file.MinimumCV
 	witness, err := decodeValues(cv.Witness)
 	if err != nil {
@@ -270,12 +297,18 @@ func verifyMinimumCVEvidence(file NumericalEvidence, rule acceptanceRule) error 
 	if err != nil {
 		return err
 	}
-	if err := finiteTerms(terms); err != nil {
-		return err
+	// Finite, nonzero, known, strictly sorted (so unique): σ is built
+	// without any float64 accumulation.
+	variables := make(map[VariableID]struct{}, len(problem.Variables))
+	for _, v := range problem.Variables {
+		variables[v.ID] = struct{}{}
+	}
+	if err := validateTerms(terms, variables); err != nil {
+		return fmt.Errorf("σ terms: %w", err)
 	}
 	sigma := map[VariableID]float64{}
 	for _, term := range terms {
-		sigma[term.Variable] += term.Coeff
+		sigma[term.Variable] = term.Coeff
 	}
 	var lowerRow *LinearRow
 	for i, row := range problem.Rows {

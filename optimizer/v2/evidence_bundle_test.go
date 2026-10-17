@@ -179,7 +179,8 @@ func TestObjectiveBoundEvidenceReverifies(t *testing.T) {
 		t.Fatalf("interval: %+v %v", interval, err)
 	}
 	for _, bound := range []objectiveBoundEvidence{*interval.loOut, *interval.hiOut} {
-		bundle, err := run.objectiveBoundBundle(compiled.Hard, 2, bound, where.stage, nil)
+		// The bound problem is the hard model itself (no probe).
+		bundle, err := run.objectiveBoundBundle(compiled.Hard, 2, bound, StageProveHardFeasibility, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -271,16 +272,28 @@ func TestMinimumCVEvidenceReverifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	optimal, err := run.decideJoint(context.Background(), compiled.Hard, StageSelectCanonicalBucketProbabilities, ObjectiveCanonicalBucketProbability, nil, true, nil)
+	// A real lock chain with loose locks (δ = 2, ρ = 0), so σ keeps a range.
+	run.locks = ProbeLocks{Delta: encodeFloat64(2), OtherRho: encodeFloat64(0), MainRho: encodeFloat64(0)}
+	locked, err := BuildMainProfileDeviationProblem(compiled, 2)
+	if err == nil {
+		locked, err = AddOtherBucketVisibilityRows(locked, compiled, 0)
+	}
+	if err == nil {
+		locked, err = AddMainGroupInternalVisibilityRows(locked, compiled, 0)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	optimal, err := run.decideJoint(context.Background(), locked, StageSelectCanonicalBucketProbabilities, ObjectiveCanonicalBucketProbability, nil, true, nil)
 	if err != nil || !optimal.gapMet() || len(optimal.lowerBounds) != 2 {
 		t.Fatalf("optimal decision: %+v %v", optimal, err)
 	}
 	// A worse feasible candidate: every Class at its σ maximum.
-	subs, _, err := splitByClass(compiled.Hard, compiled.Prepared.Classes)
+	subs, _, err := splitByClass(locked, compiled.Prepared.Classes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sigma := run.sigmaOf(compiled.Hard)
+	sigma := run.sigmaOf(locked)
 	his := make([][]float64, len(subs))
 	for i, sub := range subs {
 		where := solveContext{stage: StageSelectCanonicalBucketProbabilities, class: sub.position, classCount: len(subs)}
@@ -294,18 +307,18 @@ func TestMinimumCVEvidenceReverifies(t *testing.T) {
 		}
 		his[i] = interval.hiX
 	}
-	high := assemble(compiled.Hard, subs, his, his, 0)
-	if !run.replayAccepts(compiled.Hard, high) {
+	high := assemble(locked, subs, his, his, 0)
+	if !run.replayAccepts(locked, high) {
 		t.Fatal("fixture: σ-maximal point fails the internal set")
 	}
 	worse := optimal
 	worse.witness = high
-	worse.candidateS = ratAdd(ratOf(fixed), sigmaValue(compiled.Hard, sigma, high))
+	worse.candidateS = ratAdd(ratOf(fixed), sigmaValue(locked, sigma, high))
 	worse.requiredS = requiredMinimumCVGap(worse.candidateS)
 	if ratSub(worse.candidateS, optimal.safeLowerS).Cmp(worse.requiredS) <= 0 {
 		t.Fatal("fixture: the σ-maximal point is within the gap requirement")
 	}
-	solution := run.minimumCVPrecisionUnproven(worse, compiled.Hard, terms, fixed)
+	solution := run.minimumCVPrecisionUnproven(worse, locked, terms, fixed)
 	var file NumericalEvidence
 	readEvidence(t, solution.Diagnostics[0].EvidencePath, &file)
 	if err := VerifyNumericalEvidence(file); err != nil {
@@ -367,6 +380,9 @@ func TestReportCarriesEvidenceFields(t *testing.T) {
 		canonical.OptimalityGap == nil || canonical.RequiredGap == nil || canonical.Evidence == nil {
 		t.Fatalf("canonical report=%+v", canonical)
 	}
+	if base := report.EvidenceBase; base == nil || base.HardSHA256 == "" || base.StructureSHA256 == "" {
+		t.Fatalf("evidence base=%+v", base)
+	}
 	rules := report.AcceptanceRules
 	if rules == nil || rules.Internal.Version != internalRuleVersion || rules.Internal.BoundTolerance != "0" ||
 		rules.External.RowTolerance != encodeFloat64(1e-9) {
@@ -401,6 +417,36 @@ func TestBracketEvidenceBindsProbeValues(t *testing.T) {
 			bundle.Stage = string(StageProveHardFeasibility)
 			f.BoundEvidence = &bundle
 		},
+		// Review finding: keep one Main term at −δ', drop the others.
+		"Main membership": func(f *NumericalEvidence) {
+			bundle := *f.BoundEvidence
+			rebind(t, &bundle.EvidenceHeader, func(p *LinearProblem) {
+				for i := range p.Rows {
+					if p.Rows[i].Family != "main_profile_deviation_lock" {
+						continue
+					}
+					var terms []LinearTerm
+					kept := false
+					for _, term := range p.Rows[i].Terms {
+						switch {
+						case strings.HasPrefix(string(term.Variable), "d:main:"):
+							terms = append(terms, term)
+						case !kept:
+							terms, kept = append(terms, LinearTerm{Variable: term.Variable, Coeff: -(feasible - 0.0001)}), true
+						}
+					}
+					p.Rows[i].Terms = sortedTerms(func() map[VariableID]float64 {
+						m := map[VariableID]float64{}
+						for _, term := range terms {
+							m[term.Variable] = term.Coeff
+						}
+						return m
+					}())
+				}
+			})
+			bundle.Probe = relabelled
+			f.BoundEnd, f.BoundEvidence = relabelled, &bundle
+		},
 		"common constraints": func(f *NumericalEvidence) {
 			bundle := *f.BoundEvidence
 			rebind(t, &bundle.EvidenceHeader, func(p *LinearProblem) {
@@ -429,45 +475,93 @@ func TestBracketEvidenceBindsProbeValues(t *testing.T) {
 	}
 }
 
-// TestProbeBindingMatchesBuilders: each stage's probe rows bind exactly the
-// value the builder was called with, including ρ = 0 where zero coefficients
-// are dropped, and reject the neighbouring float64.
+// TestProbeBindingMatchesBuilders: each stage problem binds exactly the value
+// the builder chain was called with (including ρ = 0, where zero
+// coefficients are dropped) and rejects the neighbouring float64 unless the
+// builders produce the very same matrix for it (ρ/k can underflow to 0).
 func TestProbeBindingMatchesBuilders(t *testing.T) {
 	compiled := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, evidenceFixtureClass(0, .5), evidenceFixtureClass(1, .5))
-	builders := map[OptimizationStageID]func(float64) (LinearProblem, error){
-		StageMinimizeMainProfileDeviation: func(v float64) (LinearProblem, error) { return BuildMainProfileDeviationProblem(compiled, v) },
-		StageMaximizeOtherBucketVisibility: func(v float64) (LinearProblem, error) {
-			return AddOtherBucketVisibilityRows(compiled.Hard, compiled, v)
-		},
-		StageMaximizeMainGroupInternalVisibility: func(v float64) (LinearProblem, error) {
-			return AddMainGroupInternalVisibilityRows(compiled.Hard, compiled, v)
-		},
+	const deltaFix, otherFix = 0.25, 0.5
+	run := NewIntentEngine(NewGonumSolver()).newRun(compiled, nil)
+	profile := func() LinearProblem {
+		p, err := BuildMainProfileDeviationProblem(compiled, deltaFix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
 	}
-	for stage, build := range builders {
+	other := func() LinearProblem {
+		p, err := AddOtherBucketVisibilityRows(profile(), compiled, otherFix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	stages := []struct {
+		stage OptimizationStageID
+		locks ProbeLocks
+		build func(float64) (LinearProblem, error)
+	}{
+		{StageMinimizeMainProfileDeviation, ProbeLocks{}, func(v float64) (LinearProblem, error) { return BuildMainProfileDeviationProblem(compiled, v) }},
+		{StageMaximizeOtherBucketVisibility, ProbeLocks{Delta: encodeFloat64(deltaFix)}, func(v float64) (LinearProblem, error) {
+			return AddOtherBucketVisibilityRows(profile(), compiled, v)
+		}},
+		{StageMaximizeMainGroupInternalVisibility, ProbeLocks{Delta: encodeFloat64(deltaFix), OtherRho: encodeFloat64(otherFix)}, func(v float64) (LinearProblem, error) {
+			return AddMainGroupInternalVisibilityRows(other(), compiled, v)
+		}},
+	}
+	for _, test := range stages {
+		run.locks = test.locks
+		base, err := run.probeBase()
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, value := range []float64{0, 1.0 / 3, 0.4375, 0.75, 1, 1e-300} {
-			problem, err := build(value)
+			problem, err := test.build(value)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := verifyProbeBinding(string(stage), problem, encodeFloat64(value)); err != nil {
-				t.Fatalf("%s at %v: %v", stage, value, err)
+			if err := verifyStageProblem(base, string(test.stage), encodeFloat64(value), problem); err != nil {
+				t.Fatalf("%s at %v: %v", test.stage, value, err)
 			}
-			// The neighbouring float64 must be rejected unless the builder
-			// produces the very same matrix for it (ρ/k can underflow to 0).
 			next := math.Nextafter(value, 2)
-			other, err := build(next)
+			neighbour, err := test.build(next)
 			if err != nil { // above the parameter range: use the value below
 				next = math.Nextafter(value, -1)
-				if other, err = build(next); err != nil {
+				if neighbour, err = test.build(next); err != nil {
 					t.Fatal(err)
 				}
 			}
 			a, _ := SnapshotProblem(problem).SHA256()
-			b, _ := SnapshotProblem(other).SHA256()
-			if err := verifyProbeBinding(string(stage), problem, encodeFloat64(next)); err == nil && a != b {
-				t.Fatalf("%s: problem at %v verified as %v", stage, value, next)
+			b, _ := SnapshotProblem(neighbour).SHA256()
+			if err := verifyStageProblem(base, string(test.stage), encodeFloat64(next), problem); err == nil && a != b {
+				t.Fatalf("%s: problem at %v verified as %v", test.stage, value, next)
 			}
 		}
+		// Wrong earlier locks or another hard model never verify.
+		wrong := *base
+		wrong.Locks.Delta = encodeFloat64(deltaFix + 0.125)
+		if problem, _ := test.build(0.5); test.stage != StageMinimizeMainProfileDeviation && verifyStageProblem(&wrong, string(test.stage), encodeFloat64(0.5), problem) == nil {
+			t.Fatalf("%s verified with another δ lock", test.stage)
+		}
+		moved := *base
+		moved.HardSHA256 = strings.Repeat("0", 64)
+		if problem, _ := test.build(0.5); verifyStageProblem(&moved, string(test.stage), encodeFloat64(0.5), problem) == nil {
+			t.Fatalf("%s verified on another hard model", test.stage)
+		}
+	}
+	// The minimum-CV lock problem is the chain at every lock.
+	run.locks = ProbeLocks{Delta: encodeFloat64(deltaFix), OtherRho: encodeFloat64(otherFix), MainRho: encodeFloat64(0.125)}
+	base, _ := run.probeBase()
+	locked, err := AddMainGroupInternalVisibilityRows(other(), compiled, 0.125)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyStageProblem(base, string(StageSelectCanonicalBucketProbabilities), "", locked); err != nil {
+		t.Fatal(err)
+	}
+	if verifyStageProblem(base, string(StageSelectCanonicalBucketProbabilities), "", other()) == nil {
+		t.Fatal("a problem without the Main Group lock verified as the minimum-CV lock problem")
 	}
 }
 
@@ -519,6 +613,44 @@ func TestVerifiersRejectNonFiniteNumbers(t *testing.T) {
 		MinimumCV: &MinimumCVEvidence{FixedSecond: "+Inf", Witness: file.Witness, SigmaTerms: []TermSnapshot{{Variable: compiled.Primary[0].ID, Coeff: "NaN"}}}}
 	if err := VerifyNumericalEvidence(cvFile); err == nil {
 		t.Fatal("non-finite minimum-CV numbers accepted")
+	}
+	// Review finding: two finite 1e308 terms on one variable used to sum to
+	// +Inf; duplicate σ terms are now rejected before any arithmetic.
+	overflow := NumericalEvidence{Version: numericalEvidenceVersion, Code: DiagnosticPrecisionUnproven, Tolerance: "1e-09", Rule: encodeEvidenceRule(internalRule(1e-9)),
+		MinimumCV: &MinimumCVEvidence{FixedSecond: "0", Witness: []string{"1"}, CandidateSecond: "0", RequiredGap: "1/100000000",
+			SigmaTerms: []TermSnapshot{{Variable: "x", Coeff: "1e308"}, {Variable: "x", Coeff: "1e308"}}}}
+	if err := setProblem(&overflow.Problem, &overflow.ProblemSHA256, oneVarProblem(0, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyNumericalEvidence(overflow); err == nil {
+		t.Fatal("duplicate σ terms accepted")
+	}
+}
+
+// TestLaterStageEvidenceReverifies: a ρ_main PrecisionUnproven file from the
+// engine carries the δ and ρ_other locks and verifies by rebuilding the
+// whole chain; another δ lock does not.
+func TestLaterStageEvidenceReverifies(t *testing.T) {
+	compiled := skewedModel(t)
+	compiled.Prepared.Plan.EngineOptions.MainGroupInternalVisibilityBisectionIterations = 5
+	solution := solveWithEvidence(t, compiled, nil)
+	if solution.Status != StatusNumericalFailure || !strings.Contains(solution.Diagnostics[0].Message, string(StageMaximizeMainGroupInternalVisibility)) {
+		t.Fatalf("status=%s diagnostics=%+v", solution.Status, solution.Diagnostics)
+	}
+	var file NumericalEvidence
+	readEvidence(t, solution.Diagnostics[0].EvidencePath, &file)
+	if file.Base == nil || file.Base.Locks.Delta == "" || file.Base.Locks.OtherRho == "" || file.Base.Locks.MainRho != "" {
+		t.Fatalf("locks=%+v", file.Base)
+	}
+	if err := VerifyNumericalEvidence(file); err != nil {
+		t.Fatal(err)
+	}
+	wrong := file
+	base := *file.Base
+	base.Locks.Delta = encodeFloat64(0.5)
+	wrong.Base = &base
+	if err := VerifyNumericalEvidence(wrong); err == nil {
+		t.Fatal("another δ lock verified")
 	}
 }
 

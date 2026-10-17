@@ -55,18 +55,21 @@ func encodeEvidenceRule(rule acceptanceRule) EvidenceRule {
 
 // EvidenceHeader is the part every bundle shares.
 type EvidenceHeader struct {
-	Version         string          `json:"version"`
-	EngineVersion   string          `json:"engine_version"`
-	VerifierVersion string          `json:"verifier_version"`
-	BackendVersion  string          `json:"backend_version"`
-	SplitRule       string          `json:"split_rule"`
-	Tolerance       string          `json:"tolerance"`
-	Rule            EvidenceRule    `json:"rule"`
-	Stage           string          `json:"stage"`
-	Probe           string          `json:"probe,omitempty"`
-	ClassIDs        []string        `json:"class_ids"`
-	Problem         ProblemSnapshot `json:"problem"`
-	ProblemSHA256   string          `json:"problem_sha256"`
+	Version         string       `json:"version"`
+	EngineVersion   string       `json:"engine_version"`
+	VerifierVersion string       `json:"verifier_version"`
+	BackendVersion  string       `json:"backend_version"`
+	SplitRule       string       `json:"split_rule"`
+	Tolerance       string       `json:"tolerance"`
+	Rule            EvidenceRule `json:"rule"`
+	Stage           string       `json:"stage"`
+	Probe           string       `json:"probe,omitempty"`
+	ClassIDs        []string     `json:"class_ids"`
+	// Base binds a probe problem to the hard model and the stage builders;
+	// it is set for every evidence of a bisection probe.
+	Base          *ProbeBase      `json:"base,omitempty"`
+	Problem       ProblemSnapshot `json:"problem"`
+	ProblemSHA256 string          `json:"problem_sha256"`
 }
 
 // RowMultiplier is one exact multiplier on the "≤" form of a row: side "le"
@@ -145,6 +148,11 @@ func (r *engineRun) evidenceHeader(problem LinearProblem, rule acceptanceRule, s
 	}
 	if probe != nil {
 		header.Probe = encodeFloat64(*probe)
+		if probeStages[string(stage)] {
+			if header.Base, err = r.probeBase(); err != nil {
+				return EvidenceHeader{}, err
+			}
+		}
 	}
 	return header, nil
 }
@@ -200,10 +208,8 @@ func VerifyInfeasibilityEvidence(bundle InfeasibilityBundle) error {
 	if err != nil {
 		return err
 	}
-	if bundle.Probe != "" {
-		if err := verifyProbeBinding(bundle.Stage, problem, bundle.Probe); err != nil {
-			return err
-		}
+	if err := bundle.EvidenceHeader.verifyProbe(problem); err != nil {
+		return err
 	}
 	switch bundle.Kind {
 	case evidenceKindFarkas:
@@ -247,10 +253,8 @@ func VerifyObjectiveBound(bundle ObjectiveBoundBundle) error {
 	if err != nil {
 		return err
 	}
-	if bundle.Probe != "" {
-		if err := verifyProbeBinding(bundle.Stage, problem, bundle.Probe); err != nil {
-			return err
-		}
+	if err := bundle.EvidenceHeader.verifyProbe(problem); err != nil {
+		return err
 	}
 	sub, err := classSubproblemOf(problem, bundle.ClassIDs, bundle.Class)
 	if err != nil {
@@ -279,8 +283,26 @@ func (h EvidenceHeader) open() (LinearProblem, acceptanceRule, error) {
 	if err != nil {
 		return LinearProblem{}, acceptanceRule{}, err
 	}
+	if err := validateEvidenceProblem(problem); err != nil {
+		return LinearProblem{}, acceptanceRule{}, fmt.Errorf("problem snapshot: %w", err)
+	}
 	rule, err := h.rule()
 	return problem, rule, err
+}
+
+// verifyProbe binds a probe label to the header problem: a bisection probe
+// must be exactly the stage chain rebuilt at that value.
+func (h EvidenceHeader) verifyProbe(problem LinearProblem) error {
+	if !probeStages[h.Stage] {
+		if h.Probe != "" {
+			return fmt.Errorf("stage %q has no probe", h.Stage)
+		}
+		return nil
+	}
+	if h.Probe == "" {
+		return fmt.Errorf("stage %q evidence lacks its probe value", h.Stage)
+	}
+	return verifyStageProblem(h.Base, h.Stage, h.Probe, problem)
 }
 
 // rule decodes the acceptance rule and checks it is one the engine defines
