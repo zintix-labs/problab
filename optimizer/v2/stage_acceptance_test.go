@@ -16,8 +16,11 @@ package v2
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/big"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -222,6 +225,75 @@ func TestStageTwoSets(t *testing.T) {
 		_, _, external := replaySemanticSolution(compiled.Hard, solution.Primary, tau)
 		if !replayWithRule(compiled.Hard, solution.Primary, internalRule(tau)) || !external {
 			t.Fatalf("gap %g: final point fails a set", test.gap)
+		}
+	}
+}
+
+// determinismModels bisect (skewed) and bind the CV row in probes (E).
+func determinismModels(t *testing.T) map[string]CompiledModel {
+	return map[string]CompiledModel{"skewed": skewedModel(t), "cv-binding": contractCVBinding(t)}
+}
+
+func solvePrimaryBits(t *testing.T, compiled CompiledModel) string {
+	t.Helper()
+	solution, err := NewIntentEngine(NewGonumSolver()).Solve(context.Background(), compiled)
+	if err != nil || solution.Status != StatusOptimal {
+		t.Fatalf("status=%s err=%v", solution.Status, err)
+	}
+	return fmt.Sprint(floatBits(solution.Primary))
+}
+
+// TestEngineDeterminism is A18 in one process: repeated runs and a model
+// whose maps were filled in another order give the same primary bits.
+func TestEngineDeterminism(t *testing.T) {
+	for name, compiled := range determinismModels(t) {
+		want := solvePrimaryBits(t, compiled)
+		if got := solvePrimaryBits(t, compiled); got != want {
+			t.Fatalf("%s: repeated run differs", name)
+		}
+		reordered := compiled
+		reordered.VariableIndex = make(map[VariableID]int, len(compiled.VariableIndex))
+		for j := len(compiled.Hard.Variables) - 1; j >= 0; j-- {
+			id := compiled.Hard.Variables[j].ID
+			if index, ok := compiled.VariableIndex[id]; ok {
+				reordered.VariableIndex[id] = index
+			}
+		}
+		if got := solvePrimaryBits(t, reordered); got != want {
+			t.Fatalf("%s: map insertion order changed the primary", name)
+		}
+	}
+}
+
+// TestEngineSubprocessRepeatable is A18 across processes.
+func TestEngineSubprocessRepeatable(t *testing.T) {
+	if os.Getenv("PROBLAB_DETERMINISM_CHILD") == "1" {
+		for _, name := range []string{"cv-binding", "skewed"} {
+			fmt.Printf("DETERMINISM %s %s\n", name, solvePrimaryBits(t, determinismModels(t)[name]))
+		}
+		return
+	}
+	var want string
+	for i := 0; i < 2; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestEngineSubprocessRepeatable$", "-test.v")
+		cmd.Env = append(os.Environ(), "PROBLAB_DETERMINISM_CHILD=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		var got []string
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "DETERMINISM ") {
+				got = append(got, line)
+			}
+		}
+		if len(got) != 2 {
+			t.Fatalf("child output:\n%s", out)
+		}
+		if i == 0 {
+			want = strings.Join(got, "\n")
+		} else if strings.Join(got, "\n") != want {
+			t.Fatal("primary bits differ between processes")
 		}
 	}
 }
