@@ -19,17 +19,21 @@ package v2
 // runs the grid with a hard time limit per process. The concern is the cost
 // of the exact simplex (dense big.Rat tableau) as one Class grows.
 //
-// Environment: PROBLAB_SCALING_CLASSES, PROBLAB_SCALING_BUCKETS,
-// PROBLAB_SCALING_OUT (directory for the JSON result).
+// Environment: PROBLAB_SCALING_CLASSES and PROBLAB_SCALING_BUCKETS (one
+// size), or PROBLAB_SCALING_MIX such as "30x5,10x10,10x20,10x30" (Class
+// count x buckets per group); PROBLAB_SCALING_OUT (directory for results).
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,6 +88,7 @@ func scalingClass(index, n int, probability float64) PreparedClass {
 }
 
 type scalingResult struct {
+	Mix              string `json:",omitempty"`
 	Classes, Buckets int
 	Status, Error    string
 	Diagnostic       string
@@ -105,27 +110,83 @@ type scalingResult struct {
 	ClassMaxPivots            int
 	ClassMaxBits              int
 	ClassBudgetExhausted      int
+	// Probe outcomes per stage (FEASIBLE, INFEASIBLE, UNKNOWN) and the
+	// selected point, as a baseline for later engine changes.
+	ProbeOutcomes map[string]map[string]int
+	PrimarySHA256 string
+}
+
+// scalingSizes returns the bucket count of every Class.
+func scalingSizes(t *testing.T) (string, []int) {
+	if mix := os.Getenv("PROBLAB_SCALING_MIX"); mix != "" {
+		var sizes []int
+		for _, part := range strings.Split(mix, ",") {
+			var count, buckets int
+			if _, err := fmt.Sscanf(part, "%dx%d", &count, &buckets); err != nil || count <= 0 || buckets <= 0 {
+				t.Fatalf("bad mix part %q", part)
+			}
+			for i := 0; i < count; i++ {
+				sizes = append(sizes, buckets)
+			}
+		}
+		return mix, sizes
+	}
+	classes, _ := strconv.Atoi(os.Getenv("PROBLAB_SCALING_CLASSES"))
+	buckets, _ := strconv.Atoi(os.Getenv("PROBLAB_SCALING_BUCKETS"))
+	sizes := make([]int, classes)
+	for i := range sizes {
+		sizes[i] = buckets
+	}
+	return "", sizes
+}
+
+// sigmaRangeByClass is the achievable range of T = Σσ_k: only the CV rows
+// couple Classes, so it is the sum of each Class's σ range (exact simplex
+// endpoints, no joint Gonum LP).
+func sigmaRangeByClass(t *testing.T, compiled CompiledModel) (float64, float64) {
+	run := NewIntentEngine(NewGonumSolver()).newRun(compiled, nil)
+	subs, _, err := splitByClass(compiled.Hard, compiled.Prepared.Classes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigma := run.sigmaOf(compiled.Hard)
+	lo, hi := 0.0, 0.0
+	for _, sub := range subs {
+		where := solveContext{stage: StageProveHardFeasibility, class: sub.position, classCount: len(subs)}
+		witness, err := run.classify(context.Background(), sub.problem, where, ObjectiveHardFeasibility)
+		if err != nil || witness.class != evidenceFeasible {
+			t.Fatalf("class %s: %s %v", sub.classID, witness.class, err)
+		}
+		interval, err := run.classInterval(context.Background(), sub, sigma, witness.witness, where)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, _ := interval.loIn.Float64()
+		h, _ := interval.hiIn.Float64()
+		lo, hi = lo+l, hi+h
+	}
+	return lo, hi
 }
 
 func TestClassScalingWorker(t *testing.T) {
-	classesText := os.Getenv("PROBLAB_SCALING_CLASSES")
-	if classesText == "" {
+	if os.Getenv("PROBLAB_SCALING_CLASSES") == "" && os.Getenv("PROBLAB_SCALING_MIX") == "" {
 		t.Skip("class scaling worker: run through problab-p00/tools/class_scaling_driver.py")
 	}
-	classCount, _ := strconv.Atoi(classesText)
-	buckets, _ := strconv.Atoi(os.Getenv("PROBLAB_SCALING_BUCKETS"))
-	result := scalingResult{Classes: classCount, Buckets: buckets, StageSeconds: map[string]float64{}, Probes: map[string]int{}, Evidence: map[string]*EvidenceCounters{}}
+	mix, sizes := scalingSizes(t)
+	classCount, buckets := len(sizes), sizes[0]
+	result := scalingResult{Mix: mix, Classes: classCount, Buckets: buckets, StageSeconds: map[string]float64{}, Probes: map[string]int{},
+		Evidence: map[string]*EvidenceCounters{}, ProbeOutcomes: map[string]map[string]int{}}
 	build := func(cv NumericRange) CompiledModel {
 		classes := make([]PreparedClass, classCount)
 		for i := range classes {
-			classes[i] = scalingClass(i, buckets, 1/float64(classCount))
+			classes[i] = scalingClass(i, sizes[i], 1/float64(classCount))
 		}
 		return evidenceCompile(t, cv, classes...)
 	}
 	// Wrap the Classes in a binding CV minimum: the middle of the achievable
 	// second-moment range of the wide model.
 	wide := build(NumericRange{Min: 0, Max: 10})
-	lo, hi := jointSigmaRange(t, wide)
+	lo, hi := sigmaRangeByClass(t, wide)
 	mu := wide.Prepared.ExpectedRTP()
 	_, fixed, err := buildSecondMomentExpression(wide)
 	if err != nil {
@@ -172,6 +233,13 @@ func TestClassScalingWorker(t *testing.T) {
 			result.MaxGonumSeconds = math.Max(result.MaxGonumSeconds, event.Duration.Seconds())
 		case SolveEventSlow:
 			result.SlowSolves++
+		case "progress":
+			if event.Status == "FEASIBLE" || event.Status == "INFEASIBLE" || event.Status == "UNKNOWN" {
+				if result.ProbeOutcomes[string(event.Stage)] == nil {
+					result.ProbeOutcomes[string(event.Stage)] = map[string]int{}
+				}
+				result.ProbeOutcomes[string(event.Stage)][event.Status]++
+			}
 		}
 	})
 	result.TotalSeconds = time.Since(started).Seconds()
@@ -192,13 +260,24 @@ func TestClassScalingWorker(t *testing.T) {
 		if solution.CanonicalBucketProbabilitySelection.Evidence != nil {
 			result.Evidence["min_cv"] = solution.CanonicalBucketProbabilitySelection.Evidence
 		}
+		if solution.Status == StatusOptimal {
+			bits := make([]byte, 0, 8*len(solution.Primary))
+			for _, v := range solution.Primary {
+				bits = binary.LittleEndian.AppendUint64(bits, math.Float64bits(v))
+			}
+			result.PrimarySHA256 = fmt.Sprintf("%x", sha256.Sum256(bits))
+		}
 	}
 	raw, _ := json.MarshalIndent(result, "", "  ")
 	out := os.Getenv("PROBLAB_SCALING_OUT")
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(out, fmt.Sprintf("c%d-b%d.json", classCount, buckets)), raw, 0o644); err != nil {
+	name := fmt.Sprintf("c%d-b%d", classCount, buckets)
+	if mix != "" {
+		name = "mix-" + strings.ReplaceAll(mix, ",", "_")
+	}
+	if err := os.WriteFile(filepath.Join(out, name+".json"), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("classes=%d buckets=%d status=%s total=%.2fs class witness=%.3fs interval=%.3fs pivots=%d bits=%d", classCount, buckets, result.Status, result.TotalSeconds, result.WitnessSeconds, result.IntervalSeconds, result.ClassMaxPivots, result.ClassMaxBits)
