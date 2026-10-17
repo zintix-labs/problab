@@ -467,15 +467,18 @@ type EngineOptions struct {
 	// values before fixed visibility rows are locked. It must never be interpreted
 	// as an absolute bucket-probability allowance.
 	VisibilityTolerance float64 `yaml:"visibility_tolerance" json:"visibility_tolerance"`
-	// ProfileBisectionIterations is the fixed Main-profile probe budget for the common
-	// worst relative Main-profile deviation delta.
+	// ProfileBisectionIterations caps the midpoint probes for the common worst
+	// relative Main-profile deviation delta; the search stops earlier once the
+	// verified bracket width reaches the required precision.
 	ProfileBisectionIterations int `yaml:"profile_bisection_iterations" json:"profile_bisection_iterations"`
-	// OtherVisibilityBisectionIterations is the fixed Other-visibility probe budget for the
-	// common relative Other-bucket visibility retention rho.
+	// OtherVisibilityBisectionIterations caps the midpoint probes for the common
+	// relative Other-bucket visibility retention rho; the search stops earlier
+	// once the verified bracket width reaches the required precision.
 	OtherVisibilityBisectionIterations int `yaml:"other_visibility_bisection_iterations" json:"other_visibility_bisection_iterations"`
-	// MainGroupInternalVisibilityBisectionIterations is the fixed probe budget
+	// MainGroupInternalVisibilityBisectionIterations caps the midpoint probes
 	// for the common relative visibility retention of supported siblings inside
-	// every eligible Main Group.
+	// every eligible Main Group; the search stops earlier once the verified
+	// bracket width reaches the required precision.
 	MainGroupInternalVisibilityBisectionIterations int `yaml:"main_group_internal_visibility_bisection_iterations" json:"main_group_internal_visibility_bisection_iterations"`
 }
 
