@@ -225,7 +225,7 @@ func contractRecord(compiled CompiledModel, solution EngineSolution, result *con
 		"rho_other": solution.OtherBucketVisibilityOptimization, "rho_main": solution.MainGroupInternalVisibilityOptimization} {
 		switch {
 		case report.StopReason != "":
-			result.Stages[stage] = fmt.Sprintf("[%s, %s] w=%.3g %s/%s %s", encodeFloat64(report.Lower), encodeFloat64(report.Upper), report.VerifiedBound, report.LowerBasis, report.UpperBasis, report.StopReason)
+			result.Stages[stage] = fmt.Sprintf("[%s, %s] w=%.3g %s/%s %s probes=%d", encodeFloat64(report.Lower), encodeFloat64(report.Upper), report.VerifiedBound, report.LowerBasis, report.UpperBasis, report.StopReason, report.Probes)
 		case !report.Applicable && report.InapplicableReason != "":
 			result.Stages[stage] = "skipped"
 		}
