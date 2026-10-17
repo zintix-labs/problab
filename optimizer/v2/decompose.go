@@ -61,6 +61,20 @@ type classSubproblem struct {
 // global CV rows; anything else, or a variable shared by two Classes, is a
 // broken model and returned as an error.
 func splitByClass(problem LinearProblem, classes []PreparedClass) ([]classSubproblem, []int, error) {
+	return splitByClassIDs(problem, preparedClassIDs(classes))
+}
+
+func preparedClassIDs(classes []PreparedClass) []string {
+	ids := make([]string, len(classes))
+	for i, class := range classes {
+		ids[i] = class.ID
+	}
+	return ids
+}
+
+// splitByClassIDs is splitByClass with the Class order given by ID, so an
+// evidence verifier can split a problem snapshot without the prepared model.
+func splitByClassIDs(problem LinearProblem, classIDs []string) ([]classSubproblem, []int, error) {
 	position := make(map[VariableID]int, len(problem.Variables))
 	for j, variable := range problem.Variables {
 		position[variable.ID] = j
@@ -82,13 +96,13 @@ func splitByClass(problem LinearProblem, classes []PreparedClass) ([]classSubpro
 		rowsOf[row.ClassID] = append(rowsOf[row.ClassID], i)
 	}
 	var subs []classSubproblem
-	for _, class := range classes {
-		rows := rowsOf[class.ID]
+	for _, classID := range classIDs {
+		rows := rowsOf[classID]
 		if len(rows) == 0 {
 			continue
 		}
-		delete(rowsOf, class.ID)
-		sub := classSubproblem{classID: class.ID}
+		delete(rowsOf, classID)
+		sub := classSubproblem{classID: classID}
 		used := make(map[int]bool)
 		for _, i := range rows {
 			sub.problem.Rows = append(sub.problem.Rows, problem.Rows[i])
@@ -165,6 +179,9 @@ type jointDecision struct {
 	safeLowerS *big.Rat
 	gapS       *big.Rat
 	requiredS  *big.Rat
+	// lowerBounds are the Class σ lower bounds behind safeLowerS, one per
+	// Class, when every Class has one (evidence file of techspec §9.3).
+	lowerBounds []objectiveBoundEvidence
 }
 
 // gapMet reports whether the minimum-CV gap is proven within its requirement.
@@ -197,6 +214,8 @@ func (r *engineRun) decideJoint(ctx context.Context, problem LinearProblem, stag
 		}
 		switch result.class {
 		case evidenceInfeasible:
+			joint := problem
+			result.evidence.joint = &joint
 			return jointDecision{classification: result}, nil
 		case evidenceUnknown:
 			result.reasons = prefixReasons(fmt.Sprintf("class %s", sub.classID), result.reasons)
@@ -220,7 +239,8 @@ func (r *engineRun) decideJoint(ctx context.Context, problem LinearProblem, stag
 		}
 		return decision, nil
 	}
-	return r.couple(ctx, problem, subs, witnesses, stage, probe, minCV, start)
+	decision, err := r.couple(ctx, problem, subs, witnesses, stage, probe, minCV, start)
+	return attachJoint(decision, problem), err
 }
 
 func (r *engineRun) fixedSecond() *big.Rat {
@@ -318,8 +338,13 @@ func (r *engineRun) couple(ctx context.Context, problem LinearProblem, subs []cl
 	if lower.present {
 		safeT = lower.relaxed
 	}
-	if outerComplete && (safeT == nil || sumLoOut.Cmp(safeT) > 0) {
-		safeT = sumLoOut
+	if outerComplete {
+		for _, interval := range intervals {
+			decision.lowerBounds = append(decision.lowerBounds, *interval.loOut)
+		}
+		if safeT == nil || sumLoOut.Cmp(safeT) > 0 {
+			safeT = sumLoOut
+		}
 	}
 	if safeT == nil {
 		decision.reasons = []string{"no reliable lower bound for the second moment"}
@@ -337,6 +362,15 @@ func disjoint(side string, rule acceptanceRule, limit relaxedLimit, intervals []
 	}
 	return jointDecision{classification: classification{class: evidenceInfeasible,
 		evidence: &infeasibilityEvidence{kind: evidenceKindCVDisjoint, rule: rule, cv: evidence}}}
+}
+
+// attachJoint records the joint problem a type-C certificate refutes.
+func attachJoint(decision jointDecision, problem LinearProblem) jointDecision {
+	if decision.class == evidenceInfeasible && decision.evidence != nil && decision.evidence.joint == nil {
+		joint := problem
+		decision.evidence.joint = &joint
+	}
+	return decision
 }
 
 // classInterval computes inner (replayed witnesses) and outer (exact dual

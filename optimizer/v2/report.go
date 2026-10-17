@@ -33,6 +33,7 @@ func BuildIntentQualityReport(compiled CompiledModel, solution EngineSolution) I
 	}
 	report.PhaseA = report.MainProfileOptimization
 	report.PhaseB = report.OtherBucketVisibilityOptimization
+	report.AcceptanceRules = acceptanceRulesReport(compiled.Prepared.Plan.EngineOptions.FeasibilityTolerance)
 	primary, err := solutionPrimaryMasses(compiled, solution)
 	if err != nil {
 		primary = zeroPrimaryMasses(compiled.Prepared)

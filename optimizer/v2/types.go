@@ -629,6 +629,9 @@ type Diagnostic struct {
 	Deficit        float64        `json:"deficit,omitempty"`
 	Representation Representation `json:"representation,omitempty"`
 	Causes         []Cause        `json:"causes,omitempty"`
+	// EvidencePath is the saved evidence file of a verified INFEASIBLE_MODEL,
+	// PrecisionUnproven or EvidenceUnavailable result (techspec §9.3).
+	EvidencePath string `json:"evidence_path,omitempty"`
 }
 
 // AdvisoryCode identifies a non-fatal static configuration topology risk. An
@@ -931,6 +934,9 @@ type IntentQualityReport struct {
 	MainGroupInternalVisibilityOptimization BisectionReport        `json:"main_group_internal_visibility_optimization"`
 	CanonicalBucketProbabilitySelection     CanonicalizationReport `json:"canonical_bucket_probability_selection"`
 	Classes                                 []ClassIntentReport    `json:"classes,omitempty"`
+	// AcceptanceRules names the two sets of techspec §4.6: brackets and the
+	// minimum-CV gap are relative to Internal; final replay uses External.
+	AcceptanceRules *AcceptanceRulesReport `json:"acceptance_rules,omitempty"`
 
 	// Deprecated: use MainProfileOptimization.
 	PhaseA BisectionReport `json:"phase_a_profile"`

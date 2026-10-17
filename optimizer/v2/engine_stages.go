@@ -134,7 +134,7 @@ func (r *engineRun) proveHardFeasibility(ctx context.Context) (*stageFailure, er
 		hardStage.finish("completed", 1, nil, nil, nil, "feasible", "")
 		return nil, nil
 	case evidenceUnknown:
-		solution := r.evidenceUnavailable(StageProveHardFeasibility, nil, decision.classification)
+		solution := r.evidenceUnavailable(StageProveHardFeasibility, nil, r.compiled.Hard, decision.classification)
 		hardStage.finish("failed", 1, nil, nil, nil, "unknown", solution.Diagnostics[0].Message)
 		return &stageFailure{solution: solution}, nil
 	}
@@ -176,7 +176,9 @@ func (r *engineRun) hardInfeasible(ctx context.Context, evidence classification)
 	if len(diagnostics) == 0 {
 		diagnostics = Diagnostics{certificate}
 	}
-	return EngineSolution{Status: StatusInfeasibleModel, Diagnostics: diagnostics, Evidence: r.finalEvidence(LinearProblem{}, nil)}, nil
+	solution := EngineSolution{Status: StatusInfeasibleModel, Diagnostics: diagnostics, Evidence: r.finalEvidence(LinearProblem{}, nil)}
+	bundle, err := r.infeasibilityBundle(evidence.evidence, StageProveHardFeasibility, nil)
+	return r.attachEvidence(solution, "infeasibility-evidence-"+string(StageProveHardFeasibility)+".json", bundle, err), nil
 }
 
 // certifiedClasses returns the 0-based Classes whose own subproblem has a
@@ -325,15 +327,22 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 		}
 		return LinearProblem{}, nil, report, failure, err
 	}
+	// The probe history, the feasible end's problem and the certificate of
+	// the infeasible end feed the PrecisionUnproven evidence file.
+	var history []EvidenceProbe
+	var lastProblem, bestProblem LinearProblem
+	var otherEvidence *infeasibilityEvidence
 	probe := func(value float64) (jointDecision, error) {
 		problem, err := spec.build(value)
 		if err != nil {
 			return jointDecision{}, fmt.Errorf("%w: %v", errModelStructure, err)
 		}
+		lastProblem = problem
 		v := value
 		decision, err := r.decideJoint(ctx, problem, spec.stage, spec.origin, &v, false, nil)
 		if err == nil {
 			report.Probes++
+			history = append(history, EvidenceProbe{Value: encodeFloat64(value), Result: string(decision.class)})
 		}
 		return decision, err
 	}
@@ -348,9 +357,9 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 	case evidenceInfeasible:
 		return fail(&stageFailure{solution: r.contradiction(spec.stage, "the feasible endpoint transform lost the previous stage's feasibility")}, nil)
 	case evidenceUnknown:
-		return fail(&stageFailure{solution: r.evidenceUnavailable(spec.stage, &feasible, start.classification)}, nil)
+		return fail(&stageFailure{solution: r.evidenceUnavailable(spec.stage, &feasible, lastProblem, start.classification)}, nil)
 	}
-	best, witness := feasible, start.witness
+	best, witness, bestProblem := feasible, start.witness, lastProblem
 	other, otherBasis, stop := spec.otherEnd, BasisTheoreticalEndpoint, ""
 	var lastUnknown classification
 	stage.progress(report.Probes, minF(best, other), maxF(best, other), nil, string(start.class))
@@ -369,9 +378,9 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 	converged := func() bool { return parameterPrecisionMet(width()) }
 	switch end.class {
 	case evidenceFeasible:
-		best, witness, stop = other, end.witness, StopEndpoint
+		best, witness, bestProblem, stop = other, end.witness, lastProblem, StopEndpoint
 	case evidenceInfeasible:
-		otherBasis = BasisVerifiedCertificate
+		otherBasis, otherEvidence = BasisVerifiedCertificate, end.evidence
 	case evidenceUnknown:
 		stop, lastUnknown = StopEvidenceUnavailable, end.classification
 	}
@@ -388,9 +397,9 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 		}
 		switch decision.class {
 		case evidenceFeasible:
-			best, witness = mid, decision.witness
+			best, witness, bestProblem = mid, decision.witness, lastProblem
 		case evidenceInfeasible:
-			other, otherBasis = mid, BasisVerifiedCertificate
+			other, otherBasis, otherEvidence = mid, BasisVerifiedCertificate, decision.evidence
 		default:
 			stop, lastUnknown = StopEvidenceUnavailable, decision.classification
 		}
@@ -425,7 +434,18 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 	report.StopReason = stop
 	if !converged() {
 		report.Evidence = r.counters.since(before)
-		return fail(&stageFailure{solution: r.precisionUnproven(spec.stage, report, lastUnknown)}, nil)
+		file := r.numericalEvidence(DiagnosticPrecisionUnproven, spec.stage)
+		file.Metric, file.Direction, file.RequiredPrecision = spec.metric, direction, requiredParameterPrecision.RatString()
+		file.Budget.Iterations, file.Probes = spec.iterations, history
+		file.FeasibleEnd, file.Witness = encodeFloat64(best), encodeValues(witness)
+		file.BoundEnd, file.BoundBasis, file.Reasons, file.Counters = encodeFloat64(other), otherBasis, lastUnknown.reasons, report.Evidence
+		buildErr := setProblem(&file.FeasibleProblem, &file.FeasibleSHA256, bestProblem)
+		if buildErr == nil && otherEvidence != nil {
+			bundle, err := r.infeasibilityBundle(otherEvidence, spec.stage, &other)
+			file.BoundEvidence, buildErr = &bundle, err
+		}
+		solution := r.attachEvidence(r.precisionUnproven(spec.stage, report, lastUnknown), numericalEvidenceName(spec.stage), file, buildErr)
+		return fail(&stageFailure{solution: solution}, nil)
 	}
 
 	fixed := spec.lock(best)
@@ -445,7 +465,7 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 		case evidenceInfeasible:
 			return fail(&stageFailure{solution: r.contradiction(spec.stage, "the tolerance lock is provably infeasible although a feasible witness exists")}, nil)
 		case evidenceUnknown:
-			return fail(&stageFailure{solution: r.evidenceUnavailable(spec.stage, &fixed, decision.classification)}, nil)
+			return fail(&stageFailure{solution: r.evidenceUnavailable(spec.stage, &fixed, locked, decision.classification)}, nil)
 		}
 		lockedWitness = decision.witness
 	}
@@ -500,7 +520,7 @@ func (r *engineRun) selectMinimumCV(ctx context.Context, base LinearProblem, wit
 		case evidenceInfeasible:
 			return fail(r.contradiction(StageSelectCanonicalBucketProbabilities, "minimum CV selection became provably infeasible although a feasible witness exists"))
 		case evidenceUnknown:
-			return fail(r.evidenceUnavailable(StageSelectCanonicalBucketProbabilities, nil, decision.classification))
+			return fail(r.evidenceUnavailable(StageSelectCanonicalBucketProbabilities, nil, base, decision.classification))
 		}
 		if decision.safeLowerS != nil {
 			report.SafeLowerBound = ratFloatPointer(decision.safeLowerS)
@@ -509,7 +529,7 @@ func (r *engineRun) selectMinimumCV(ctx context.Context, base LinearProblem, wit
 		report.RequiredGap = ratFloatPointer(decision.requiredS)
 		if !decision.gapMet() {
 			report.Evidence = r.counters.since(before)
-			return fail(r.minimumCVPrecisionUnproven(decision, report))
+			return fail(r.minimumCVPrecisionUnproven(decision, base, terms, fixed))
 		}
 		values = decision.witness
 	}
@@ -527,7 +547,7 @@ func (r *engineRun) selectMinimumCV(ctx context.Context, base LinearProblem, wit
 }
 
 // evidenceUnavailable is the NUMERICAL_FAILURE value for "no evidence".
-func (r *engineRun) evidenceUnavailable(stage OptimizationStageID, probe *float64, result classification) EngineSolution {
+func (r *engineRun) evidenceUnavailable(stage OptimizationStageID, probe *float64, problem LinearProblem, result classification) EngineSolution {
 	where := string(stage)
 	if probe != nil {
 		where += fmt.Sprintf(" at %s", encodeFloat64(*probe))
@@ -541,7 +561,15 @@ func (r *engineRun) evidenceUnavailable(stage OptimizationStageID, probe *float6
 		Message:        fmt.Sprintf("%s: no replay-accepted witness and no verified certificate (%s). %s", where, result.reasonText(), designerUncertainHint),
 		Representation: RepresentationAtomicBuckets, Causes: causes,
 	}
-	return EngineSolution{Status: StatusNumericalFailure, Diagnostics: Diagnostics{diagnostic}, Evidence: r.finalEvidence(LinearProblem{}, nil)}
+	solution := EngineSolution{Status: StatusNumericalFailure, Diagnostics: Diagnostics{diagnostic}, Evidence: r.finalEvidence(LinearProblem{}, nil)}
+	file := r.numericalEvidence(DiagnosticEvidenceUnavailable, stage)
+	counters := r.counters.clone()
+	file.Reasons, file.Counters = result.reasons, &counters
+	if probe != nil {
+		file.Probe = encodeFloat64(*probe)
+	}
+	err := setProblem(&file.Problem, &file.ProblemSHA256, problem)
+	return r.attachEvidence(solution, numericalEvidenceName(stage), file, err)
 }
 
 // precisionUnproven is the NUMERICAL_FAILURE value for a bracket wider than
@@ -567,7 +595,7 @@ func (r *engineRun) precisionUnproven(stage OptimizationStageID, report Bisectio
 	return EngineSolution{Status: StatusNumericalFailure, Diagnostics: Diagnostics{diagnostic}, Evidence: r.finalEvidence(LinearProblem{}, nil)}
 }
 
-func (r *engineRun) minimumCVPrecisionUnproven(decision jointDecision, report CanonicalizationReport) EngineSolution {
+func (r *engineRun) minimumCVPrecisionUnproven(decision jointDecision, base LinearProblem, terms []LinearTerm, fixed float64) EngineSolution {
 	metrics := []NamedValue{{Name: "candidate_second_moment", Value: ratFloat(decision.candidateS)}, {Name: "required_gap", Value: ratFloat(decision.requiredS)}}
 	gap := "unbounded (no reliable lower bound)"
 	if decision.gapS != nil {
@@ -581,8 +609,19 @@ func (r *engineRun) minimumCVPrecisionUnproven(decision jointDecision, report Ca
 		Representation: RepresentationAtomicBuckets,
 		Causes:         []Cause{{Summary: "minimum CV optimality gap in second-moment units", Metrics: metrics}},
 	}
-	_ = report
-	return EngineSolution{Status: StatusNumericalFailure, Diagnostics: Diagnostics{diagnostic}, Evidence: r.finalEvidence(LinearProblem{}, nil)}
+	solution := EngineSolution{Status: StatusNumericalFailure, Diagnostics: Diagnostics{diagnostic}, Evidence: r.finalEvidence(LinearProblem{}, nil)}
+	file := r.numericalEvidence(DiagnosticPrecisionUnproven, StageSelectCanonicalBucketProbabilities)
+	file.Metric, file.Direction = metricCanonicalBucketProbabilities, "minimize"
+	counters := r.counters.clone()
+	file.Counters = &counters
+	file.MinimumCV = &MinimumCVEvidence{FixedSecond: encodeFloat64(fixed), SigmaTerms: encodeTerms(terms),
+		Witness: encodeValues(decision.witness), CandidateSecond: decision.candidateS.RatString(), RequiredGap: decision.requiredS.RatString()}
+	for i, bound := range decision.lowerBounds {
+		file.MinimumCV.LowerBounds = append(file.MinimumCV.LowerBounds, ClassBound{Class: i + 1, Direction: bound.direction,
+			Multipliers: encodeMultipliers(bound.problem, bound.rows, bound.multipliers), Value: bound.value.String()})
+	}
+	err := setProblem(&file.Problem, &file.ProblemSHA256, base)
+	return r.attachEvidence(solution, numericalEvidenceName(StageSelectCanonicalBucketProbabilities), file, err)
 }
 
 // contradiction is INTERNAL_ERROR: verified infeasibility after a witness.

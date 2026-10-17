@@ -82,6 +82,9 @@ type infeasibilityEvidence struct {
 	emptyBox *emptyBoxError
 	cv       *cvDisjointEvidence
 	class    int // 1-based Class for kinds A/B found on a Class subproblem
+	// joint is the problem the evidence refutes as a whole: for kinds A/B
+	// the problem whose Class subproblem is problem (techspec §9.3).
+	joint *LinearProblem
 }
 
 // classification is the result of one evidence decision.
