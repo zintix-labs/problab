@@ -204,7 +204,7 @@ func TestStageTwoSets(t *testing.T) {
 		{2e-9, StatusNumericalFailure, DiagnosticEvidenceUnavailable},
 		{1e-8, StatusInfeasibleModel, ""},
 	} {
-		compiled := contractToleranceGap(t, test.gap)
+		compiled := evidenceToleranceGapModel(t, test.gap)
 		solution, err := NewIntentEngine(NewGonumSolver()).Solve(context.Background(), compiled)
 		if err != nil || solution.Status != test.want || (test.code != "" && solution.Diagnostics[0].Code != test.code) {
 			t.Fatalf("gap %g: status=%s err=%v diagnostics=%+v", test.gap, solution.Status, err, solution.Diagnostics)
@@ -231,7 +231,7 @@ func TestStageTwoSets(t *testing.T) {
 
 // determinismModels bisect (skewed) and bind the CV row in probes (E).
 func determinismModels(t *testing.T) map[string]CompiledModel {
-	return map[string]CompiledModel{"skewed": skewedModel(t), "cv-binding": contractCVBinding(t)}
+	return map[string]CompiledModel{"skewed": skewedModel(t), "cv-binding": evidenceCVBindingModel(t)}
 }
 
 func solvePrimaryBits(t *testing.T, compiled CompiledModel) string {

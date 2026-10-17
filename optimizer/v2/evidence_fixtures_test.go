@@ -15,8 +15,10 @@
 package v2
 
 import (
+	"context"
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand"
 	"testing"
 )
@@ -202,4 +204,57 @@ func evidenceSkewedClass(i int, probability float64) PreparedClass {
 func evidenceCompile(t *testing.T, cv NumericRange, classes ...PreparedClass) CompiledModel {
 	t.Helper()
 	return modelTestCompile(t, modelTestPrepared(OverallIntent{CV: cv}, classes...))
+}
+
+// evidenceCVBindingModel is P00 E7: two Classes whose CV minimum binds in
+// the probes (90% up the achievable second-moment range).
+func evidenceCVBindingModel(t *testing.T) CompiledModel {
+	classes := []PreparedClass{evidenceFixtureClass(0, 0.5), evidenceSkewedClass(1, 0.5)}
+	wide := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, classes...)
+	lo, hi := jointSigmaRange(t, wide)
+	mu := wide.Prepared.ExpectedRTP()
+	return evidenceCompile(t, NumericRange{Min: math.Sqrt((lo+0.9*(hi-lo))/(mu*mu) - 1), Max: 10}, classes...)
+}
+
+// evidenceToleranceGapModel puts the CV maximum the given relative gap below the
+// exact minimum second moment, so only replay tolerance can make it feasible.
+func evidenceToleranceGapModel(t *testing.T, gap float64) CompiledModel {
+	classes := []PreparedClass{evidenceFixtureClass(0, 0.5), evidenceFixtureClass(1, 0.3), evidenceFixtureClass(2, 0.2)}
+	wide := evidenceCompile(t, NumericRange{Min: 0, Max: 10}, classes...)
+	lo := exactMinimumSecondMoment(t, wide)
+	mu := wide.Prepared.ExpectedRTP()
+	return evidenceCompile(t, NumericRange{Min: 0, Max: math.Sqrt(lo*(1-gap)/(mu*mu) - 1)}, classes...)
+}
+
+// exactMinimumSecondMoment is the exact minimum of the CV-row expression over the
+// unrelaxed hard model (exact simplex, no tolerance).
+func exactMinimumSecondMoment(t *testing.T, compiled CompiledModel) float64 {
+	t.Helper()
+	row := modelTestRow(t, compiled.Hard, cvMinRowID)
+	withoutCV := cloneLinearProblem(compiled.Hard)
+	withoutCV.Rows = nil
+	for _, r := range compiled.Hard.Rows {
+		if r.ID != cvMinRowID && r.ID != cvMaxRowID {
+			withoutCV.Rows = append(withoutCV.Rows, r)
+		}
+	}
+	models, err := buildCandidateModels(withoutCV, productRule(1e-9))
+	if err != nil || len(models) < 2 {
+		t.Fatalf("exact model: %v", err)
+	}
+	unrelaxed := models[1]
+	c := map[int]*big.Rat{}
+	index := map[VariableID]int{}
+	for j, v := range withoutCV.Variables {
+		index[v.ID] = j
+	}
+	for _, term := range row.Terms {
+		c[index[term.Variable]] = ratOf(term.Coeff)
+	}
+	result := acquireLowerBound(context.Background(), unrelaxed, c, defaultExactBudget)
+	if !result.check.valid {
+		t.Fatalf("exact minimum: %s", result.check.reason)
+	}
+	value, _ := result.check.value.Float64()
+	return value
 }
