@@ -50,9 +50,10 @@ const (
 	reasonNoMainGroupWithMultipleSupport = "no-main-group-with-multiple-supported-buckets"
 )
 
-// IntentEngine owns stage policy above a backend-neutral Solver. In particular,
-// it decides whether SolveInfeasible is a hard-model result, a normal bisection
-// signal, or a contradiction after a known feasible witness exists.
+// IntentEngine owns stage policy above a backend-neutral Solver. A backend
+// status only chooses what to try next; it never decides an outcome. Feasible
+// means a witness passed replay, infeasible means an exactly verified
+// certificate exists, and anything else is undecided.
 type IntentEngine struct {
 	solver Solver
 
@@ -83,12 +84,13 @@ func (e *IntentEngine) Solve(ctx context.Context, compiled CompiledModel) (Engin
 // common supported-sibling visibility inside Main Groups, and finally chooses a
 // deterministic primary vector. Hard rows are never relaxed.
 //
-// Status mapping is intentionally stage-aware: an infeasible HardFeasibility
-// solve becomes INFEASIBLE_MODEL after a typed diagnostic; infeasible preference
-// probes merely update their deterministic brackets. Once a feasible
-// witness exists, unexpected infeasibility in a lock/canonical solve is treated
-// as numerical/transform contradiction and never overwrites the witness with a
-// false hard-model diagnosis.
+// Every stage decides by evidence. The hard stage reports INFEASIBLE_MODEL
+// only with a verified certificate; bisection brackets move only on replayed
+// witnesses and verified certificates. An undecided probe or lock stops the
+// stage with EvidenceUnavailable or PrecisionUnproven instead of guessing.
+// A certificate against a problem that already has a feasible witness is an
+// internal contradiction and never overwrites the witness with a false
+// hard-model diagnosis.
 func (e *IntentEngine) SolveObserved(ctx context.Context, compiled CompiledModel, observer OptimizationStageObserver) (EngineSolution, error) {
 	if e == nil || e.solver == nil {
 		return EngineSolution{}, fmt.Errorf("intent engine requires a Solver dependency")

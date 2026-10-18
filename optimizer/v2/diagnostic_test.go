@@ -42,8 +42,11 @@ func TestHardInfeasibilityReportsAchievableMainBound(t *testing.T) {
 	}
 }
 
-// TestHardInfeasibilityReportsAchievableGlobalCV verifies conversion of an
-// auxiliary second-moment range back to the Designer's dimensionless CV unit.
+// TestHardInfeasibilityReportsAchievableGlobalCV verifies the global CV
+// explanation of a hard type-C certificate (one Class, CV [0,0], side lower).
+// The certificate bound is a safe outer bound, so it is never reported as an
+// achievable range; its CV conversion is a labeled approximation just below
+// the exact achievable CV √2.
 func TestHardInfeasibilityReportsAchievableGlobalCV(t *testing.T) {
 	prepared := diagnosticPreparedProblem(NumericRange{Min: 1, Max: 1}, NumericRange{Min: 0, Max: 0}, 0.5)
 	solution := solveDiagnosticFixture(t, prepared)
@@ -54,10 +57,36 @@ func TestHardInfeasibilityReportsAchievableGlobalCV(t *testing.T) {
 	if diagnostic.Code != DiagnosticGlobalCVInfeasible {
 		t.Fatalf("diagnostic code=%s want=%s; diagnostic=%+v", diagnostic.Code, DiagnosticGlobalCVInfeasible, diagnostic)
 	}
-	wantCV := math.Sqrt(2)
-	if diagnostic.Achievable == nil || math.Abs(diagnostic.Achievable.Min-wantCV) > 1e-8 || math.Abs(diagnostic.Achievable.Max-wantCV) > 1e-8 {
-		t.Fatalf("achievable CV=%+v, want [%g,%g]", diagnostic.Achievable, wantCV, wantCV)
+	if diagnostic.Achievable != nil || diagnostic.Deficit != 0 {
+		t.Fatalf("a safe bound must not be reported as achievable or as a required gap: %+v", diagnostic)
 	}
+	if len(diagnostic.SourcePaths) != 1 || diagnostic.SourcePaths[0] != "overall.cv.max" || diagnostic.ConstraintIDs[0] != string(cvMaxRowID) {
+		t.Fatalf("conflicting CV row: paths=%v ids=%v", diagnostic.SourcePaths, diagnostic.ConstraintIDs)
+	}
+	approx := causeMetric(t, diagnostic, "approx_cv_of_certified_bound")
+	wantCV := math.Sqrt(2)
+	if approx > wantCV || wantCV-approx > 1e-6 {
+		t.Fatalf("approximate CV of the certified bound=%.17g, want just below %.17g", approx, wantCV)
+	}
+	t.Logf("approximate CV of the certified bound is %.3g below the exact achievable CV", wantCV-approx)
+	if !strings.Contains(diagnostic.Message, "raise overall.cv.max") || !strings.Contains(diagnostic.Message, "approximately CV >=") {
+		t.Fatalf("message lacks the direction or the labeled approximation: %s", diagnostic.Message)
+	}
+}
+
+// causeMetric returns the named metric of the diagnostic's first cause.
+func causeMetric(t *testing.T, diagnostic Diagnostic, name string) float64 {
+	t.Helper()
+	if len(diagnostic.Causes) == 0 {
+		t.Fatalf("diagnostic has no causes: %+v", diagnostic)
+	}
+	for _, metric := range diagnostic.Causes[0].Metrics {
+		if metric.Name == name {
+			return metric.Value
+		}
+	}
+	t.Fatalf("metric %q missing from %+v", name, diagnostic.Causes[0].Metrics)
+	return 0
 }
 
 // TestHardInfeasibilityReportsEveryLocallyInfeasibleClass protects the

@@ -79,9 +79,9 @@ const (
 	Maximize
 )
 
-// ObjectiveOrigin tells the Engine how an infeasible backend result should be
-// interpreted. In particular, infeasible preference probes update a bisection
-// bracket and are not Run-level failures.
+// ObjectiveOrigin labels what a solve is for, for display, slow-solve records
+// and diagnostics. It never decides a feasibility conclusion: that rests on
+// replayed witnesses and verified certificates only.
 type ObjectiveOrigin string
 
 const (

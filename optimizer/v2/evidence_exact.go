@@ -25,9 +25,24 @@ import (
 type exactBudget struct {
 	maxPivots int
 	maxBits   int
-	// usage, when set, records the largest pivot count and number size seen
-	// so reports can show how much of the budget real models consume.
+	// usage, when set, records the run's call count and largest pivot count
+	// and number size, so reports can show how much of the budget real
+	// models consume.
 	usage *EvidenceCounters
+	// stage, when set, records the same peaks for the current stage only:
+	// a maximum cannot be recovered by subtracting two run maxima.
+	stage *exactPeak
+}
+
+// exactPeak is the largest pivot count and number size of a set of calls.
+type exactPeak struct {
+	pivots int
+	bits   int
+}
+
+func (p *exactPeak) observe(pivots, bits int) {
+	p.pivots = max(p.pivots, pivots)
+	p.bits = max(p.bits, bits)
 }
 
 var defaultExactBudget = exactBudget{maxPivots: 20000, maxBits: 1 << 14}
@@ -157,14 +172,20 @@ func (t *exactTableau) maxBits() int {
 
 // solve runs primal simplex from a feasible identity basis.
 func (t *exactTableau) solve(ctx context.Context, budget exactBudget) (status exactStatus, x []*big.Rat, pivots int) {
-	if budget.usage != nil {
+	// bits is the size of the current tableau, measured once per tableau;
+	// peakBits is the largest over every tableau this call produced, which
+	// can exceed the final one.
+	bits := t.maxBits()
+	peakBits := bits
+	if budget.usage != nil || budget.stage != nil {
 		defer func() {
-			budget.usage.ExactCalls++
-			if pivots > budget.usage.MaxExactPivots {
-				budget.usage.MaxExactPivots = pivots
+			if budget.usage != nil {
+				budget.usage.ExactCalls++
+				budget.usage.MaxExactPivots = max(budget.usage.MaxExactPivots, pivots)
+				budget.usage.MaxExactBits = max(budget.usage.MaxExactBits, peakBits)
 			}
-			if bits := t.maxBits(); bits > budget.usage.MaxExactBits {
-				budget.usage.MaxExactBits = bits
+			if budget.stage != nil {
+				budget.stage.observe(pivots, peakBits)
 			}
 		}()
 	}
@@ -172,7 +193,7 @@ func (t *exactTableau) solve(ctx context.Context, budget exactBudget) (status ex
 		if ctx.Err() != nil {
 			return exactCanceled, nil, pivots
 		}
-		if pivots >= budget.maxPivots || t.maxBits() > budget.maxBits {
+		if pivots >= budget.maxPivots || bits > budget.maxBits {
 			return exactBudgetHit, nil, pivots
 		}
 		enter := -1
@@ -208,6 +229,8 @@ func (t *exactTableau) solve(ctx context.Context, budget exactBudget) (status ex
 		}
 		t.pivot(leave, enter)
 		pivots++
+		bits = t.maxBits()
+		peakBits = max(peakBits, bits)
 	}
 }
 

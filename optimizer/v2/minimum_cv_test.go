@@ -438,7 +438,7 @@ func TestMinimumCVSelectionReport(t *testing.T) {
 }
 
 func TestMinimumCVVersionAndConfigCompatibility(t *testing.T) {
-	if engineImplementationVersion != "intent-lp-v2.10.0" {
+	if engineImplementationVersion != "intent-lp-v2.10.1" {
 		t.Fatal(engineImplementationVersion)
 	}
 	if _, err := ParseConfig([]byte(validConfigYAML)); err != nil {

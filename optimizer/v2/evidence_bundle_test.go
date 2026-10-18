@@ -174,7 +174,7 @@ func TestObjectiveBoundEvidenceReverifies(t *testing.T) {
 	if err != nil || witness.class != evidenceFeasible {
 		t.Fatalf("witness: %+v %v", witness, err)
 	}
-	interval, err := run.classInterval(context.Background(), subs[1], run.sigmaOf(compiled.Hard), witness.witness, where)
+	interval, err := run.classInterval(context.Background(), subs[1], mustSigma(t, run, compiled.Hard), witness.witness, where)
 	if err != nil || interval.loOut == nil || interval.hiOut == nil {
 		t.Fatalf("interval: %+v %v", interval, err)
 	}
@@ -308,7 +308,7 @@ func validMinimumCVEvidence(t *testing.T) (NumericalEvidence, jointDecision) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sigma := run.sigmaOf(locked)
+	sigma := mustSigma(t, run, locked)
 	his := make([][]float64, len(subs))
 	for i, sub := range subs {
 		where := solveContext{stage: StageSelectCanonicalBucketProbabilities, class: sub.position, classCount: len(subs)}
@@ -605,7 +605,7 @@ func TestVerifiersRejectNonFiniteNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	interval, err := run.classInterval(context.Background(), subs[0], run.sigmaOf(compiled.Hard), witness.witness, where)
+	interval, err := run.classInterval(context.Background(), subs[0], mustSigma(t, run, compiled.Hard), witness.witness, where)
 	if err != nil || interval.hiOut == nil {
 		t.Fatalf("interval: %+v %v", interval, err)
 	}
@@ -784,4 +784,14 @@ func TestEvidenceIsNotOverwrittenAcrossRuns(t *testing.T) {
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("first run's evidence changed: %v", err)
 	}
+}
+
+// mustSigma is engineRun.sigmaOf for tests whose compiled model is valid.
+func mustSigma(t *testing.T, run *engineRun, problem LinearProblem) map[VariableID]float64 {
+	t.Helper()
+	sigma, err := run.sigmaOf(problem)
+	if err != nil {
+		t.Fatalf("sigmaOf: %v", err)
+	}
+	return sigma
 }
