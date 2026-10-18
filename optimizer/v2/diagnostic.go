@@ -28,8 +28,10 @@ type diagnosticRangeResult struct {
 }
 
 // diagnoseHardModelInfeasibility runs bounded, deterministic auxiliary LPs
-// after—and only after—the immutable hard model is explicitly infeasible. It
-// first projects the hard model into one independent problem per intent Class.
+// after—and only after—a type A or B certificate has proved the hard model
+// infeasible. Its output only words that result; it never decides the status.
+// A type-C (global CV) certificate does not come here: its explanation is
+// built from the certificate itself without any solve. It first projects the hard model into one independent problem per intent Class.
 // This is essential for useful reporting: if fg_02 and fg_07 are both locally
 // infeasible, relaxing an fg_02 row in the full model would still be blocked by
 // fg_07 and would incorrectly collapse to a generic HardModelInfeasible result.

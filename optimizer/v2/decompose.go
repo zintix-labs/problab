@@ -217,7 +217,15 @@ func (r *engineRun) decideJoint(ctx context.Context, problem LinearProblem, stag
 	}
 	// Without CV rows the Classes are independent. Minimum CV still has to
 	// minimize σ unless the second moment is fully fixed (S = F).
-	if len(global) == 0 && (!minCV || len(r.sigmaOf(problem)) == 0) {
+	fullyFixed := false
+	if len(global) == 0 && minCV {
+		sigma, err := r.sigmaOf(problem)
+		if err != nil {
+			return jointDecision{}, err
+		}
+		fullyFixed = len(sigma) == 0
+	}
+	if len(global) == 0 && (!minCV || fullyFixed) {
 		joint := assemble(problem, subs, witnesses, witnesses, 0)
 		if !r.replayAccepts(problem, joint) {
 			return jointDecision{classification: classification{class: evidenceUnknown, reasons: []string{"assembled joint witness failed replay"}}}, nil
@@ -225,7 +233,10 @@ func (r *engineRun) decideJoint(ctx context.Context, problem LinearProblem, stag
 		decision := jointDecision{classification: classification{class: evidenceFeasible, witness: joint, source: "decomposition"}}
 		if minCV {
 			// Without CV rows every contribution is fixed by Class rows: S = F.
-			fixed := r.fixedSecond()
+			fixed, err := r.fixedSecond()
+			if err != nil {
+				return jointDecision{}, err
+			}
 			decision.candidateS, decision.safeLowerS, decision.gapS = fixed, fixed, new(big.Rat)
 			decision.requiredS = requiredMinimumCVGap(fixed)
 		}
@@ -235,19 +246,18 @@ func (r *engineRun) decideJoint(ctx context.Context, problem LinearProblem, stag
 	return attachJoint(decision, problem), err
 }
 
-func (r *engineRun) fixedSecond() *big.Rat {
-	_, fixed, err := buildSecondMomentExpression(r.compiled)
-	if err != nil || !isFinite(fixed) {
-		return new(big.Rat)
-	}
-	return ratOf(fixed)
-}
+// fixedSecond is F, the exact fixed second-moment contribution of the
+// intent:false Classes. A failure is a broken compiled model, never F = 0.
+func (r *engineRun) fixedSecond() (*big.Rat, error) { return fixedSecondMoment(r.compiled) }
 
 // couple is the §6.3 coupling decision.
 func (r *engineRun) couple(ctx context.Context, problem LinearProblem, subs []classSubproblem, witnesses [][]float64,
 	stage OptimizationStageID, probe *float64, minCV bool, start []float64,
 ) (jointDecision, error) {
-	sigma := r.sigmaOf(problem)
+	sigma, err := r.sigmaOf(problem)
+	if err != nil {
+		return jointDecision{}, err
+	}
 	intervals := make([]classInterval, len(subs))
 	for i, sub := range subs {
 		where := solveContext{stage: stage, class: sub.position, classCount: len(subs), probe: probe}
@@ -322,7 +332,10 @@ func (r *engineRun) couple(ctx context.Context, problem LinearProblem, subs []cl
 	if candidate == nil {
 		return jointDecision{classification: classification{class: evidenceUnknown, reasons: []string{"no replayed minimum-CV candidate"}}}, nil
 	}
-	fixed := r.fixedSecond()
+	fixed, err := r.fixedSecond()
+	if err != nil {
+		return jointDecision{}, err
+	}
 	decision.classification = classification{class: evidenceFeasible, witness: candidate, source: "decomposition"}
 	decision.candidateS = ratAdd(fixed, candidateT)
 	decision.requiredS = requiredMinimumCVGap(decision.candidateS)
@@ -553,15 +566,17 @@ func relaxCVRow(problem LinearProblem, row LinearRow, rule acceptanceRule) (*big
 
 // sigmaOf is σ for problem: the CV rows' terms, or, for a problem without CV
 // rows, the compiled second-moment expression (the same terms; techspec §7.3).
-func (r *engineRun) sigmaOf(problem LinearProblem) map[VariableID]float64 {
+// An empty σ means the second moment is fully fixed (S = F), so a failure to
+// build the expression is a broken compiled model, never an empty σ.
+func (r *engineRun) sigmaOf(problem LinearProblem) (map[VariableID]float64, error) {
 	if sigma := sigmaCoefficients(problem); len(sigma) > 0 {
-		return sigma
+		return sigma, nil
 	}
-	sigma := map[VariableID]float64{}
 	terms, _, err := buildSecondMomentExpression(r.compiled)
 	if err != nil {
-		return sigma
+		return nil, fmt.Errorf("%w: second moment expression: %v", errModelStructure, err)
 	}
+	sigma := map[VariableID]float64{}
 	present := map[VariableID]bool{}
 	for _, v := range problem.Variables {
 		present[v.ID] = true
@@ -571,7 +586,7 @@ func (r *engineRun) sigmaOf(problem LinearProblem) map[VariableID]float64 {
 			sigma[term.Variable] = term.Coeff
 		}
 	}
-	return sigma
+	return sigma, nil
 }
 
 func sigmaCoefficients(problem LinearProblem) map[VariableID]float64 {

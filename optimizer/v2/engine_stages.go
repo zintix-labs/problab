@@ -126,6 +126,7 @@ func stageError(_ context.Context, err error, stage OptimizationStageID) (*stage
 // proveHardFeasibility is §7.1: a witness, a verified certificate, or no
 // evidence. Explanatory diagnostics run only after a certificate exists.
 func (r *engineRun) proveHardFeasibility(ctx context.Context) (*stageFailure, error) {
+	r.beginStageCounters()
 	hardStage := beginOptimizationStage(r.emit, StageProveHardFeasibility, string(StageProveHardFeasibility), "")
 	defer hardStage.ensureTerminal()
 	decision, err := r.decideJoint(ctx, r.compiled.Hard, StageProveHardFeasibility, ObjectiveHardFeasibility, nil, false, nil)
@@ -145,13 +146,22 @@ func (r *engineRun) proveHardFeasibility(ctx context.Context) (*stageFailure, er
 	if err != nil {
 		return nil, err
 	}
-	hardStage.finish("failed", 1, nil, nil, nil, "infeasible", solution.Diagnostics[0].Message)
+	result := "infeasible"
+	if solution.Status != StatusInfeasibleModel {
+		result = "error" // invalid evidence is never reported as infeasible
+	}
+	hardStage.finish("failed", 1, nil, nil, nil, result, solution.Diagnostics[0].Message)
 	return &stageFailure{solution: solution}, nil
 }
 
-// hardInfeasible reports INFEASIBLE_MODEL backed by a verified certificate,
-// adding the existing family diagnostics as explanation only.
+// hardInfeasible reports INFEASIBLE_MODEL backed by a verified certificate.
+// A type-C certificate is explained from its own content (no solve); types A
+// and B add the existing family diagnostics as explanation only.
 func (r *engineRun) hardInfeasible(ctx context.Context, evidence classification) (EngineSolution, error) {
+	// Type C first: its evidence is checked before anything reads its payload.
+	if evidence.evidence != nil && evidence.evidence.kind == evidenceKindCVDisjoint {
+		return r.hardGlobalCVInfeasible(evidence), nil
+	}
 	certificate := r.certificateDiagnostic(evidence)
 	explainer := &IntentEngine{solver: r}
 	r.at(solveContext{stage: StageProveHardFeasibility, source: "diagnostic"})
@@ -182,6 +192,28 @@ func (r *engineRun) hardInfeasible(ctx context.Context, evidence classification)
 	solution := EngineSolution{Status: StatusInfeasibleModel, Diagnostics: diagnostics, Evidence: r.finalEvidence(LinearProblem{}, nil)}
 	bundle, err := r.infeasibilityBundle(evidence.evidence, StageProveHardFeasibility, nil)
 	return r.attachEvidence(solution, "infeasibility-evidence-"+string(StageProveHardFeasibility)+".json", bundle, err), nil
+}
+
+// hardGlobalCVInfeasible reports a type-C certificate from its own content.
+// It never calls a Solver: the family explanations would re-solve the joint
+// dense model, and only a global CV explanation can agree with type C. Broken
+// evidence is INTERNAL_ERROR; a failed explanation keeps INFEASIBLE_MODEL with
+// the generic certificate diagnostic, since the status rests on the
+// certificate (in T units) and not on display values such as F.
+func (r *engineRun) hardGlobalCVInfeasible(evidence classification) EngineSolution {
+	diagnostic, err := globalCVDiagnostic(r.compiled, evidence.evidence)
+	if errors.Is(err, errInvalidCVEvidence) {
+		return internalEngineFailure(fmt.Sprintf("%s: %v", StageProveHardFeasibility, err), r.finalEvidence(LinearProblem{}, nil))
+	}
+	if err != nil {
+		// Only reached after the evidence checks passed, so the payload is
+		// complete and the generic certificate diagnostic can read it.
+		diagnostic = r.certificateDiagnostic(evidence)
+		diagnostic.Causes = append(diagnostic.Causes, Cause{Summary: "global CV explanation unavailable: " + err.Error()})
+	}
+	solution := EngineSolution{Status: StatusInfeasibleModel, Diagnostics: Diagnostics{diagnostic}, Evidence: r.finalEvidence(LinearProblem{}, nil)}
+	bundle, err := r.infeasibilityBundle(evidence.evidence, StageProveHardFeasibility, nil)
+	return r.attachEvidence(solution, "infeasibility-evidence-"+string(StageProveHardFeasibility)+".json", bundle, err)
 }
 
 // certifiedClasses returns the 0-based Classes whose own subproblem has a
@@ -321,7 +353,7 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 		direction = "minimize"
 	}
 	report := BisectionReport{Applicable: true, Objective: string(spec.stage), Metric: spec.metric, Direction: direction}
-	before := r.counters.clone()
+	r.beginStageCounters()
 	stage := beginOptimizationStage(r.emit, spec.stage, report.Objective, spec.metric)
 	defer stage.ensureTerminal()
 	fail := func(failure *stageFailure, err error) (LinearProblem, []float64, BisectionReport, *stageFailure, error) {
@@ -436,7 +468,7 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 	report.RequiredPrecision, _ = requiredParameterPrecision.Float64()
 	report.StopReason = stop
 	if !converged() {
-		report.Evidence = r.counters.since(before)
+		report.Evidence = r.stageCounters()
 		file := r.numericalEvidence(DiagnosticPrecisionUnproven, spec.stage)
 		file.Metric, file.Direction, file.RequiredPrecision = spec.metric, direction, requiredParameterPrecision.RatString()
 		file.Budget.Iterations, file.Probes = spec.iterations, history
@@ -473,7 +505,7 @@ func (r *engineRun) bisect(ctx context.Context, spec bisectSpec) (LinearProblem,
 		lockedWitness = decision.witness
 	}
 	report.FixedValue = fixed
-	report.Evidence = r.counters.since(before)
+	report.Evidence = r.stageCounters()
 	stage.finish("completed", report.Probes, floatPointer(report.Lower), floatPointer(report.Upper), floatPointer(fixed), "verified", "")
 	return locked, lockedWitness, report, nil, nil
 }
@@ -493,7 +525,7 @@ func (r *engineRun) selectMinimumCV(ctx context.Context, base LinearProblem, wit
 		Metric:    metricCanonicalBucketProbabilities, Direction: "minimize",
 		PrimaryVariables: len(compiled.Primary), GapUnit: "second_moment",
 	}
-	before := r.counters.clone()
+	r.beginStageCounters()
 	stage := beginOptimizationStage(r.emit, StageSelectCanonicalBucketProbabilities, report.Objective, report.Metric)
 	defer stage.ensureTerminal()
 	fail := func(solution EngineSolution) ([]float64, CanonicalizationReport, *stageFailure, error) {
@@ -518,7 +550,7 @@ func (r *engineRun) selectMinimumCV(ctx context.Context, base LinearProblem, wit
 			return fail(failure.solution)
 		}
 		stage.tick(1, 1, string(decision.class))
-		report.Solves = r.counters.since(before).Solves
+		report.Solves = r.stageCounters().Solves
 		switch decision.class {
 		case evidenceInfeasible:
 			return fail(r.contradiction(StageSelectCanonicalBucketProbabilities, "minimum CV selection became provably infeasible although a feasible witness exists"))
@@ -531,7 +563,7 @@ func (r *engineRun) selectMinimumCV(ctx context.Context, base LinearProblem, wit
 		}
 		report.RequiredGap = ratFloatPointer(decision.requiredS)
 		if !decision.gapMet() {
-			report.Evidence = r.counters.since(before)
+			report.Evidence = r.stageCounters()
 			return fail(r.minimumCVPrecisionUnproven(decision, base, terms, fixed))
 		}
 		values = decision.witness
@@ -544,7 +576,7 @@ func (r *engineRun) selectMinimumCV(ctx context.Context, base LinearProblem, wit
 	report.SecondMoment = floatPointer(second)
 	report.CV = cv
 	report.CVDefined = cv != nil
-	report.Evidence = r.counters.since(before)
+	report.Evidence = r.stageCounters()
 	stage.finish("completed", report.Solves, nil, nil, nil, "verified", "")
 	return values, report, nil, nil
 }
@@ -566,8 +598,7 @@ func (r *engineRun) evidenceUnavailable(stage OptimizationStageID, probe *float6
 	}
 	solution := EngineSolution{Status: StatusNumericalFailure, Diagnostics: Diagnostics{diagnostic}, Evidence: r.finalEvidence(LinearProblem{}, nil)}
 	file := r.numericalEvidence(DiagnosticEvidenceUnavailable, stage)
-	counters := r.counters.clone()
-	file.Reasons, file.Counters = result.reasons, &counters
+	file.Reasons, file.Counters = result.reasons, r.stageCounters()
 	if probe != nil {
 		file.Probe = encodeFloat64(*probe)
 	}
@@ -615,8 +646,7 @@ func (r *engineRun) minimumCVPrecisionUnproven(decision jointDecision, base Line
 	solution := EngineSolution{Status: StatusNumericalFailure, Diagnostics: Diagnostics{diagnostic}, Evidence: r.finalEvidence(LinearProblem{}, nil)}
 	file := r.numericalEvidence(DiagnosticPrecisionUnproven, StageSelectCanonicalBucketProbabilities)
 	file.Metric, file.Direction = metricCanonicalBucketProbabilities, "minimize"
-	counters := r.counters.clone()
-	file.Counters = &counters
+	file.Counters = r.stageCounters()
 	file.MinimumCV = &MinimumCVEvidence{FixedSecond: encodeFloat64(fixed), SigmaTerms: encodeTerms(terms),
 		Witness: encodeValues(decision.witness), CandidateSecond: decision.candidateS.RatString(), RequiredGap: decision.requiredS.RatString()}
 	for i, bound := range decision.lowerBounds {
@@ -655,8 +685,20 @@ func (c EvidenceCounters) clone() EvidenceCounters {
 	return out
 }
 
-// since returns the counters accumulated after before.
-func (c EvidenceCounters) since(before EvidenceCounters) *EvidenceCounters {
+// beginStageCounters starts a stage's counter scope.
+func (r *engineRun) beginStageCounters() {
+	r.stageStart, r.stagePeak = r.counters.clone(), exactPeak{}
+}
+
+// stageCounters returns the counters of the running stage: totals since the
+// stage began and the stage's own exact-simplex peaks.
+func (r *engineRun) stageCounters() *EvidenceCounters {
+	return r.counters.since(r.stageStart, r.stagePeak)
+}
+
+// since returns the counters accumulated after before; the two maxima come
+// from peak because a maximum cannot be recovered by subtraction.
+func (c EvidenceCounters) since(before EvidenceCounters, peak exactPeak) *EvidenceCounters {
 	out := EvidenceCounters{
 		Solves: c.Solves - before.Solves, SlowSolves: c.SlowSolves - before.SlowSolves,
 		InfeasibilityCertificates:    c.InfeasibilityCertificates - before.InfeasibilityCertificates,
@@ -669,8 +711,8 @@ func (c EvidenceCounters) since(before EvidenceCounters) *EvidenceCounters {
 		SigmaEndpointTime:            c.SigmaEndpointTime - before.SigmaEndpointTime,
 		BudgetExhausted:              c.BudgetExhausted - before.BudgetExhausted,
 		ExactCalls:                   c.ExactCalls - before.ExactCalls,
-		MaxExactPivots:               c.MaxExactPivots,
-		MaxExactBits:                 c.MaxExactBits,
+		MaxExactPivots:               peak.pivots,
+		MaxExactBits:                 peak.bits,
 		WitnessAttempts:              diffCounts(c.WitnessAttempts, before.WitnessAttempts),
 		WitnessFound:                 diffCounts(c.WitnessFound, before.WitnessFound),
 	}

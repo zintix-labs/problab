@@ -112,7 +112,7 @@ func (r *engineRun) budget() exactBudget {
 	if r.engine.exactBudget != nil {
 		budget = *r.engine.exactBudget
 	}
-	budget.usage = &r.counters
+	budget.usage, budget.stage = &r.counters, &r.stagePeak
 	return budget
 }
 

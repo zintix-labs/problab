@@ -77,6 +77,10 @@ type engineRun struct {
 	locks    ProbeLocks
 	options  SolveOptions
 	counters EvidenceCounters
+	// stageStart and stagePeak scope counters to the running stage (stage
+	// reports and per-stage evidence files); see beginStageCounters.
+	stageStart EvidenceCounters
+	stagePeak  exactPeak
 
 	// The two sets of techspec §4.6: accept (internal) judges every
 	// witness and is what probe and lock certificates prove empty;
