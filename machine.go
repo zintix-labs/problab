@@ -93,16 +93,22 @@ const (
 	rngProduction
 )
 
-// newMachineWithSeed 以指定 opaque byte seed 建立 Machine。
+// newMachineWithSeed 是 Machine 的私有建構核心：所有建構入口（公開入口、
+// Simulator worker、MachinePool、測試輔助函式）最後都經由它建立 Machine。
 //
-// 這是最常用的「可重現」入口：同一份 GameSetting + 同一個 seed，應能得到一致的隨機序列（取決於 Core 實作）。
+// 它不推導政策：RNG 政策（mode）與 Extend 省略政策（omitExtend）由呼叫者決定，
+// 呼叫者也負責維持取設定、resolveOptimal、產生 seed 的先後順序。
 //
-// 建立流程（概念）：
-//  1. cf.New(seed) + core.New(...) 建出 RNG 核心
-//  2. slot.NewGame(gs, reg, core, isSim) 依設定 + registry 建出 Slot 遊戲執行核心
-//  3. 初始化 Machine 需要的 buffers（SpinRequest/SpinResult）
-//  4. 如果啟用優化（UseOptimal = true），使用 Problab 預先解析的共用 Artifact
-func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, isSim bool, optimal *optimalrt.Artifact, mode rngMode) (*Machine, error) {
+// 建立流程：
+//  1. 檢查不變條件：production 必須保留 Extend（正式回應需要完整 Extend）
+//  2. cf.New(seed) + core.New(...) 建出 RNG 核心
+//  3. slot.NewGame(gs, reg, core, omitExtend) 依設定 + registry 建出 Slot 遊戲執行核心
+//  4. 初始化 Machine 需要的 buffers（SpinRequest/SpinResult）
+//  5. 如果啟用優化（UseOptimal = true），使用 Problab 預先解析的共用 Artifact
+func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, omitExtend bool, optimal *optimalrt.Artifact, mode rngMode) (*Machine, error) {
+	if mode == rngProduction && omitExtend {
+		return nil, errs.NewFatal("production machine must not omit Extend")
+	}
 	seed = append([]byte(nil), seed...)
 	rng, err := cf.New(seed)
 	if err != nil {
@@ -122,7 +128,7 @@ func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.P
 		rngMode:     mode,
 		optimal:     optimal,
 	}
-	m.gh, err = slot.NewGame(gs, reg, m.core, isSim)
+	m.gh, err = slot.NewGame(gs, reg, m.core, omitExtend)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +249,9 @@ func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
 
 // UsesOptimal reports the loaded runtime source, not merely a config flag.
 func (m *Machine) UsesOptimal() bool { return m.optimal != nil }
+
+// OmitExtend 回傳此 Machine 的 Extend 省略政策（true 表示結果不含 Extend）。
+func (m *Machine) OmitExtend() bool { return m.gh.OmitExtend() }
 
 // SpinOffline executes a deterministic new spin with a validated wager. It is
 // for sequential offline tools, not production requests or checkpoint recovery.

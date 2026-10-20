@@ -25,9 +25,9 @@ const baselineBuildersMigrated = false
 // baselineEngineOmitsSnapshot 標示引擎是否已在省略模式下跳過 Snapshot()（施工步驟 2）。
 // false 時 fixture 遊戲在 Simulator 中也必須與 B0 完全相同；true 時只比對非 Extend
 // 結果，且 Snapshot() 呼叫次數必須為 0（techspec C3）。
-const baselineEngineOmitsSnapshot = false
+const baselineEngineOmitsSnapshot = true
 
-func baselineMachineOmitExtend(m *Machine) bool { return m.gh.IsSim }
+func baselineMachineOmitExtend(m *Machine) bool { return m.OmitExtend() }
 
 func buildBaselineMachine(lab *Problab, c baselineCase) (*Machine, error) {
 	s := c.Seed

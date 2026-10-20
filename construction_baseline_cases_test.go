@@ -236,15 +236,26 @@ func (c baselineCase) removedMode() bool {
 
 func (c baselineCase) needsReference() bool { return c.removedMode() }
 
-func (c baselineCase) isFixtureSimulator() bool {
-	return c.Kind == "simulator" && c.Game == fixtureGameID
+// omitsExtendNow 表示此案例「現在」建出的物件處於省略 Extend 的模式：Simulator
+// 一律如此；舊的 isSim=true Machine 與 ByJSON/YAML Machine 在舊入口刪除前也是。
+func (c baselineCase) omitsExtendNow() bool {
+	switch c.Kind {
+	case "simulator":
+		return true
+	case "machine":
+		return !baselineBuildersMigrated && c.removedMode()
+	}
+	return false
 }
 
-// compareExtend：Simulator 的內部 buffer 不屬於可觀察輸出；fixture 遊戲不檢查
-// isSim，內部 Extend 預期會因引擎省略呼叫而改變，所以只比對非 Extend 結果。
-func (c baselineCase) compareExtend() bool {
-	return !(baselineEngineOmitsSnapshot && c.isFixtureSimulator())
+// fixtureOmitted：fixture 遊戲不檢查 isSim，在省略模式下其內部 Extend 預期會因
+// 引擎不呼叫 Snapshot() 而變為 nil，所以只比對非 Extend 結果，並要求 Snapshot()
+// 呼叫次數為 0（techspec C3）。demo 遊戲自行檢查 isSim，不受此影響，仍做完整比對。
+func (c baselineCase) fixtureOmitted() bool {
+	return baselineEngineOmitsSnapshot && c.Game == fixtureGameID && c.omitsExtendNow()
 }
+
+func (c baselineCase) compareExtend() bool { return !c.fixtureOmitted() }
 
 func (c baselineCase) record(t testing.TB) *baselineRecord {
 	t.Helper()

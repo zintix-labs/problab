@@ -62,7 +62,7 @@ func buildGame0000(gh *slot.Game) (slot.GameLogic, error) {
 		return nil, err
 	}
 	g.fixed.symboltypes = gh.GameSetting.GameModeSettings[0].SymbolSetting.SymbolTypes
-	g.ext = g.newext(gh.GameSetting.GameModeSettings[0].ScreenSetting.ScreenSize, gh.IsSim)
+	g.ext = g.newext(gh.GameSetting.GameModeSettings[0].ScreenSetting.ScreenSize, gh.OmitExtend())
 	return g, nil
 }
 

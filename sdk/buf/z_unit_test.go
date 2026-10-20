@@ -97,7 +97,7 @@ func TestGameModeResultRecordAndHitMap(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 	screen := []int16{1, 1, 1}
 	gmr.RecordDetail(10, 1, 0, 3, 0, 0, []int16{0, 1, 2})
 	if gmr.GetTmpWin() != 10 {
@@ -131,7 +131,7 @@ func TestGameModeResultDiscard(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 	initialTotal := gmr.TotalWin
 
 	gmr.RecordDetail(10, 1, 0, 3, 0, 0, []int16{0, 1, 2})
@@ -163,7 +163,7 @@ func TestGameModeResultRecordDetailSegments(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 
 	seg1 := []int16{0, 1}
 	seg2 := []int16{2, 3}
@@ -192,7 +192,7 @@ func TestGameModeResultMultipleActs(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 	screen := []int16{1, 1, 1}
 
 	// First act
@@ -225,7 +225,7 @@ func TestGameModeResultFinishStepAndRound(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 	screen := []int16{1, 1, 1}
 
 	gmr.RecordDetail(10, 1, 0, 3, 0, 0, []int16{0, 1, 2})
@@ -252,7 +252,7 @@ func TestGameModeResultView_EdgeCases(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 
 	// View before any screen is added
 	view := gmr.View()
@@ -277,7 +277,7 @@ func TestGameModeResultHitMapTmp(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 
 	// HitMapTmp before any detail
 	tmp := gmr.HitMapTmp()
@@ -308,7 +308,7 @@ func TestGameModeResultReset(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 	modeId := gmr.GameModeId
 
 	// Add some data
@@ -351,7 +351,7 @@ func TestGameModeResultUpdateTmpWin(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 
 	// Record detail adds to tmp win
 	gmr.RecordDetail(10, 1, 0, 3, 0, 0, []int16{0, 1, 2})
@@ -380,7 +380,7 @@ func TestGameModeResultAddAct_ScreenSizePanic(t *testing.T) {
 	if err := gms.HitSetting.Init(); err != nil {
 		t.Fatalf("hit setting init error: %v", err)
 	}
-	gmr := NewGameModeResult(0, gms, 4, 4)
+	gmr := NewGameModeResult(0, gms, 4, 4, false)
 
 	// Wrong screen size should panic
 	wrongScreen := []int16{1, 2} // size 2, expected 3

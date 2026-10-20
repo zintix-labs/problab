@@ -634,10 +634,10 @@ func compareBaselineRecord(t *testing.T, c baselineCase, got, want *baselineReco
 		t.Fatalf("執行期錯誤不同：got=%v want=%v", got.RunErrors, want.RunErrors)
 	}
 	compareRuns(t, "runtime", got.RuntimeGames, want.RuntimeGames, c.compareExtend(), false)
-	compareRuns(t, "run", got.Runs, want.Runs, c.compareExtend(), baselineEngineOmitsSnapshot && c.isFixtureSimulator())
+	compareRuns(t, "run", got.Runs, want.Runs, c.compareExtend(), c.fixtureOmitted())
 }
 
-func compareRuns(t *testing.T, label string, got, want map[string]*baselineRun, withExtend, fixtureSim bool) {
+func compareRuns(t *testing.T, label string, got, want map[string]*baselineRun, withExtend, fixtureOmitted bool) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("%s 數量不同：got=%d want=%d", label, len(got), len(want))
@@ -658,8 +658,8 @@ func compareRuns(t *testing.T, label string, got, want map[string]*baselineRun, 
 		if withExtend && (g.Digest != w.Digest || g.ExtActs != w.ExtActs || g.SnapshotCalls != w.SnapshotCalls) {
 			t.Fatalf("%s %s 的完整結果（含 Extend 與 Snapshot 呼叫次數）不同", label, name)
 		}
-		if fixtureSim && g.SnapshotCalls != 0 {
-			t.Fatalf("%s %s：Simulator 中 Snapshot() 仍被呼叫 %d 次", label, name, g.SnapshotCalls)
+		if fixtureOmitted && g.SnapshotCalls != 0 {
+			t.Fatalf("%s %s：省略模式下 Snapshot() 仍被呼叫 %d 次", label, name, g.SnapshotCalls)
 		}
 	}
 }
