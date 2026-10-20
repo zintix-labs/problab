@@ -25,6 +25,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/spec"
 )
@@ -228,7 +229,7 @@ func TestVerifyReplayMachineUsesSameSeedBytesAsCollection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fixtureMachine, err := lab.NewUnoptimizedMachineWithSeedBytes(spec.GID(1), seed.Bytes(), true)
+	fixtureMachine, err := lab.NewMachine(spec.GID(1), problab.MachineConfig{Seed: problab.SeedBytes(seed.Bytes()), Unoptimized: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/spec"
 )
@@ -35,7 +36,7 @@ func TestReplayMaterializedSnapshotsUsesRawGameOutcome(t *testing.T) {
 	defer func() { _ = lab.Close() }()
 
 	const seed int64 = 4127483647
-	machine, err := lab.NewUnoptimizedMachineWithSeed(spec.GID(1), seed, true)
+	machine, err := lab.NewMachine(spec.GID(1), problab.MachineConfig{Seed: problab.SeedInt64(seed), Unoptimized: true})
 	if err != nil {
 		t.Fatalf("construct raw fixture machine: %v", err)
 	}

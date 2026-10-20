@@ -35,7 +35,7 @@ MaxSpins 必須在 1…20,000，SatisfiedRatio 為大於 1 的整數。Factory �
 
 ## 第一階段邊界
 
-一次 Run 使用一台 deterministic、`isSim=false` 機台，保留 Extend，依序處理組別與玩家，亂數流連續前進。尊重 Lab 的 native／optimal 選擇，報告逐 mode 記來源。沒有暖機、平行玩家、跨組重播、checkpoint 或 Choice。完整 FG／連消可以包含在同一次 Spin 裡；每次結果必須 IsGameEnd 且沒有 checkpoint。
+一次 Run 使用一台 deterministic、保留 Extend 的機台（`NewMachine`），依序處理組別與玩家，亂數流連續前進。尊重 Lab 的 native／optimal 選擇，報告逐 mode 記來源。沒有暖機、平行玩家、跨組重播、checkpoint 或 Choice。完整 FG／連消可以包含在同一次 Spin 裡；每次結果必須 IsGameEnd 且沒有 checkpoint。
 
 每位玩家最多 **20,000 個完整 Spin**。這是有限體驗視窗的產品邊界，不是統計定理或效能限制；更長期的分布估計請用 Simulator。第 20,000 局照常結算並呼叫 Next，策略離場優先；仍想繼續則 Others／max_spin_reached，不執行下一注。
 

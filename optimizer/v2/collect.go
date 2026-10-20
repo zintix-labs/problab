@@ -137,11 +137,11 @@ func NewCollector(lab *problab.Problab) *Collector {
 
 // newOptimizerMachine creates the deterministic, unoptimized Machine shared by
 // collection and verification. Optimizer tags must receive the complete raw
-// SpinResult, including game-defined ExtendResult snapshots, so isSim is
-// deliberately false. Explicit seed material still keeps the Machine on the
-// deterministic RNG lifecycle; false selects full-result mode only.
+// SpinResult, including game-defined ExtendResult snapshots; a Machine always
+// keeps Extend, and explicit seed material keeps it on the deterministic RNG
+// lifecycle.
 func newOptimizerMachine(lab *problab.Problab, gid spec.GID, seed []byte) (*problab.Machine, error) {
-	return lab.NewUnoptimizedMachineWithSeedBytes(gid, seed, false)
+	return lab.NewMachine(gid, problab.MachineConfig{Seed: problab.SeedBytes(seed), Unoptimized: true})
 }
 
 // Collect first replays configured raw snapshot banks through the current game,

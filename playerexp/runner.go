@@ -87,7 +87,7 @@ func constructMachine(c Config, o Options) (m *problab.Machine, err error) {
 			}
 		}
 	}()
-	return o.Lab.NewMachineWithSeedBytes(c.GameID, c.Seed.Bytes(), false)
+	return o.Lab.NewMachine(c.GameID, problab.MachineConfig{Seed: problab.SeedBytes(c.Seed.Bytes())})
 }
 
 func initialReport(c Config, status Status, err error) Report {

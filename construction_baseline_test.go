@@ -12,7 +12,8 @@ package problab
 // 原模式保留的案例比對同一個 B0 案例；原模式被移除的案例（省略 Extend 的
 // Machine）比對錄製 B0 時一併建立的參考案例。
 //
-// 錄製：PROBLAB_RECORD_BASELINE=b0 go test -run TestConstructionBaseline .
+// 錄製：PROBLAB_RECORD_BASELINE=b0（只限施工步驟 1）或 b1（舊入口刪除之後）
+// go test -run TestConstructionBaseline .
 // 一般執行只讀不寫，並先驗證 B0 的 SHA-256 未被改動。
 
 import (
@@ -506,7 +507,15 @@ func TestConstructionBaseline(t *testing.T) {
 	case "":
 		compareConstructionBaseline(t, cases)
 	case "b0":
-		recordConstructionBaseline(t, cases, "b0")
+		if baselineBuildersMigrated {
+			t.Fatal(errBaselineRecordClosed)
+		}
+		recordConstructionBaseline(t, cases, "b0", true)
+	case "b1":
+		if !baselineBuildersMigrated {
+			t.Fatal("B1 只能在舊入口刪除並完成遷移之後錄製")
+		}
+		recordConstructionBaseline(t, cases, "b1", false)
 	default:
 		t.Fatalf("unknown %s=%q", baselineRecordEnv, mode)
 	}
@@ -528,9 +537,9 @@ func recordAll(t testing.TB, cases []baselineCase, withReferences bool) map[stri
 	return out
 }
 
-func recordConstructionBaseline(t *testing.T, cases []baselineCase, name string) {
-	records := recordAll(t, cases, true)
-	again := recordAll(t, cases, true)
+func recordConstructionBaseline(t *testing.T, cases []baselineCase, name string, withReferences bool) {
+	records := recordAll(t, cases, withReferences)
+	again := recordAll(t, cases, withReferences)
 	first, err := marshalBaseline(records)
 	if err != nil {
 		t.Fatal(err)

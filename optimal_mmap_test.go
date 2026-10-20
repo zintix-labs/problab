@@ -36,15 +36,15 @@ func TestMMapOptimalMatchesMemoryAndIsShared(t *testing.T) {
 		t.Fatalf("mmap NewAuto: %v", err)
 	}
 
-	memoryMachine, err := memoryLab.NewMachineWithSeed(0, 5150, true)
+	memoryMachine, err := memoryLab.NewMachine(0, MachineConfig{Seed: SeedInt64(5150)})
 	if err != nil {
 		t.Fatalf("memory machine: %v", err)
 	}
-	mmapMachine1, err := mmapLab.NewMachineWithSeed(0, 5150, true)
+	mmapMachine1, err := mmapLab.NewMachine(0, MachineConfig{Seed: SeedInt64(5150)})
 	if err != nil {
 		t.Fatalf("mmap machine 1: %v", err)
 	}
-	mmapMachine2, err := mmapLab.NewMachineWithSeed(0, 5151, true)
+	mmapMachine2, err := mmapLab.NewMachine(0, MachineConfig{Seed: SeedInt64(5151)})
 	if err != nil {
 		t.Fatalf("mmap machine 2: %v", err)
 	}

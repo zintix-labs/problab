@@ -181,7 +181,7 @@ analysis:
 		}
 		previous = r
 		// Independent direct replay proves no reseed at player/group boundaries.
-		m, e := lab.NewMachineWithSeedBytes(0, c.Seed.Bytes(), false)
+		m, e := lab.NewMachine(0, problab.MachineConfig{Seed: problab.SeedBytes(c.Seed.Bytes())})
 		if e != nil {
 			t.Fatal("Run closed borrowed Lab", e)
 		}

@@ -37,7 +37,7 @@ func TestProductionMachineReseedsOnlyForNewCycles(t *testing.T) {
 	lab := newOneGameLab(t, factory, WithSeedEntropy(bytes.NewReader(make([]byte, 32*8))))
 	defer func() { _ = lab.Close() }()
 
-	machine, err := lab.NewMachine(1, false)
+	machine, err := newProductionMachineForTest(lab, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestOptimalProductionReseedsBeforeSelectorAndReturnsArtifactLineage(t *test
 		t.Fatal(err)
 	}
 	defer func() { _ = lab.Close() }()
-	machine, err := lab.NewMachine(0, false)
+	machine, err := newProductionMachineForTest(lab, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestExplicitSeedAndSimulationPathsRemainDeterministic(t *testing.T) {
 	lab := newOneGameLab(t, factory, WithSeedEntropy(bytes.NewReader(make([]byte, 32*4))))
 	defer func() { _ = lab.Close() }()
 
-	explicit, err := lab.NewMachineWithSeedString(1, "fixed-seed", false)
+	explicit, err := lab.NewMachine(1, MachineConfig{Seed: SeedString("fixed-seed")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestExplicitSeedAndSimulationPathsRemainDeterministic(t *testing.T) {
 		t.Fatal("explicit seeded or SpinInternal path called Reseed")
 	}
 
-	simulated, err := lab.NewMachine(1, true)
+	simulated, err := lab.NewMachine(1, MachineConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,11 +164,11 @@ func TestExplicitSeedAndSimulationPathsRemainDeterministic(t *testing.T) {
 		t.Fatal("simulation Machine called Reseed")
 	}
 
-	a, err := lab.NewMachineWithSeedBytes(1, []byte("same"), false)
+	a, err := lab.NewMachine(1, MachineConfig{Seed: SeedBytes([]byte("same"))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := lab.NewMachineWithSeedString(1, "same", false)
+	b, err := lab.NewMachine(1, MachineConfig{Seed: SeedString("same")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestProductionReseedFailureIsFatalAndStateAtomic(t *testing.T) {
 	factory, _ := core.NewChaCha20Factory(errorReader{})
 	lab := newOneGameLab(t, factory, WithSeedEntropy(bytes.NewReader(make([]byte, 64))))
 	defer func() { _ = lab.Close() }()
-	machine, err := lab.NewMachine(1, false)
+	machine, err := newProductionMachineForTest(lab, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestPCG64ProductionLifecycleCallsCompatibilityNoOp(t *testing.T) {
 	factory := &lifecycleFactory{base: core.PCG64()}
 	lab := newOneGameLab(t, factory, WithSeedEntropy(bytes.NewReader(make([]byte, 64))))
 	defer func() { _ = lab.Close() }()
-	machine, err := lab.NewMachine(1, false)
+	machine, err := newProductionMachineForTest(lab, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestProblabSeedEntropyValidationAndSerialization(t *testing.T) {
 	for range count {
 		go func() {
 			defer wg.Done()
-			if _, err := lab.NewMachine(1, true); err != nil {
+			if _, err := lab.NewMachine(1, MachineConfig{}); err != nil {
 				t.Errorf("NewMachine: %v", err)
 			}
 		}()
@@ -306,7 +306,7 @@ func TestSimulatorAndMachinePoolUseFactoryStreamOrdinals(t *testing.T) {
 	lab := newOneGameLab(t, core.PCG64(), WithSeedEntropy(bytes.NewReader(make([]byte, 64))))
 	defer func() { _ = lab.Close() }()
 
-	simulator, err := lab.NewSimulatorWithSeedBytes(1, root)
+	simulator, err := lab.NewSimulator(1, MachineConfig{Seed: SeedBytes(root)})
 	if err != nil {
 		t.Fatal(err)
 	}

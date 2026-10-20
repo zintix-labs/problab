@@ -51,7 +51,7 @@ func TestSpinOfflineReusesOwnedBuffers(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = lab.Close() }()
-			m, err := lab.NewMachineWithSeed(0, 77, false)
+			m, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,17 +117,17 @@ func TestSpinOfflineParity(t *testing.T) {
 			defer func() { _ = lab.Close() }()
 			var a, b *Machine
 			if optimal {
-				a, err = lab.NewMachineWithSeed(0, 77, false)
+				a, err = lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
 			} else {
-				a, err = lab.NewUnoptimizedMachineWithSeed(0, 77, false)
+				a, err = lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77), Unoptimized: true})
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			if optimal {
-				b, err = lab.NewMachineWithSeed(0, 77, false)
+				b, err = lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
 			} else {
-				b, err = lab.NewUnoptimizedMachineWithSeed(0, 77, false)
+				b, err = lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77), Unoptimized: true})
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -202,7 +202,7 @@ func TestSpinOfflineSnapshotRestoreFaults(t *testing.T) {
 				t.Fatal(e)
 			}
 			defer func() { _ = lab.Close() }()
-			m, e := lab.NewMachineWithSeed(0, 77, false)
+			m, e := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -233,7 +233,7 @@ func TestSpinOfflineSnapshotRestoreFaults(t *testing.T) {
 			}
 			if phase == "panic" || phase == "panic-restore" {
 				// Even a panic must restore the sampler's post-selection stream.
-				control, e := lab.NewMachineWithSeed(0, 77, false)
+				control, e := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
 				if e != nil {
 					t.Fatal(e)
 				}
@@ -278,7 +278,7 @@ func TestSpinOfflineSnapshotRestoreFaults(t *testing.T) {
 
 func TestSpinOfflineValidationAndOptimalError(t *testing.T) {
 	lab := newOneGameLab(t, core.Default())
-	m, err := lab.NewMachineWithSeed(1, 77, false)
+	m, err := lab.NewMachine(1, MachineConfig{Seed: SeedInt64(77)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestSpinOfflineValidationAndOptimalError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	om, err := optLab.NewMachineWithSeed(0, 77, false)
+	om, err := optLab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
 	if err != nil {
 		t.Fatal(err)
 	}

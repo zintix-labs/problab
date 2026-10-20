@@ -49,9 +49,9 @@ func TestDefaultChaCha20OptimalArtifact(t *testing.T) {
 		t.Fatalf("NewAuto with compatible artifact: %v", err)
 	}
 	defer func() { _ = lab.Close() }()
-	machine, err := lab.NewMachineWithSeed(0, 99, true)
+	machine, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(99)})
 	if err != nil {
-		t.Fatalf("NewMachineWithSeed: %v", err)
+		t.Fatalf("NewMachine: %v", err)
 	}
 	if machine.optimal == nil || machine.optimal.Backend() != "memory" {
 		t.Fatal("fixture did not load its manifest memory artifact")
@@ -72,7 +72,7 @@ func TestExplicitPCG64LoadsLegacyCompatibleArtifact(t *testing.T) {
 		t.Fatalf("NewAuto with explicit PCG64 artifact: %v", err)
 	}
 	defer func() { _ = lab.Close() }()
-	machine, err := lab.NewMachineWithSeed(0, 832, true)
+	machine, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(832)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,13 +107,13 @@ func TestLegacyOptimalDeterministic(t *testing.T) {
 		t.Fatalf("NewAuto: %v", err)
 	}
 
-	m1, err := lab.NewMachineWithSeed(0, 19, true)
+	m1, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(19)})
 	if err != nil {
-		t.Fatalf("NewMachineWithSeed m1: %v", err)
+		t.Fatalf("NewMachine m1: %v", err)
 	}
-	m2, err := lab.NewMachineWithSeed(0, 19, true)
+	m2, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(19)})
 	if err != nil {
-		t.Fatalf("NewMachineWithSeed m2: %v", err)
+		t.Fatalf("NewMachine m2: %v", err)
 	}
 
 	r1, err := json.Marshal(m1.SpinInternal(0))
@@ -155,21 +155,21 @@ func TestOptimalArtifactSharedAcrossAllMachineBuilders(t *testing.T) {
 		t.Fatalf("preload count=%d, want 1", got)
 	}
 
-	m1, err := lab.NewMachineWithSeed(0, 1, true)
+	m1, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(1)})
 	if err != nil {
-		t.Fatalf("NewMachineWithSeed m1: %v", err)
+		t.Fatalf("NewMachine m1: %v", err)
 	}
-	m2, err := lab.NewMachineWithSeed(0, 2, true)
+	m2, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(2)})
 	if err != nil {
-		t.Fatalf("NewMachineWithSeed m2: %v", err)
+		t.Fatalf("NewMachine m2: %v", err)
 	}
 	if m1.optimal == nil || m1.optimal != m2.optimal {
 		t.Fatal("machines do not share the same immutable artifact")
 	}
 
-	sim, err := lab.NewSimulatorWithSeed(0, 3)
+	sim, err := lab.NewSimulator(0, MachineConfig{Seed: SeedInt64(3)})
 	if err != nil {
-		t.Fatalf("NewSimulatorWithSeed: %v", err)
+		t.Fatalf("NewSimulator: %v", err)
 	}
 	if sim.mBuf[0].optimal != m1.optimal {
 		t.Fatal("simulator does not share the Problab artifact")
@@ -209,7 +209,7 @@ func TestOptimalArtifactConcurrentFirstResolveLoadsOnce(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func(seed int64) {
 			defer wg.Done()
-			machine, err := lab.NewMachineWithSeed(0, seed, true)
+			machine, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(seed)})
 			if err != nil {
 				errs <- err
 				return
@@ -258,11 +258,11 @@ func TestManifestOptimalMatchesLegacyRuntime(t *testing.T) {
 		t.Fatalf("manifest NewAuto: %v", err)
 	}
 
-	legacy, err := legacyLab.NewMachineWithSeed(0, 832, true)
+	legacy, err := legacyLab.NewMachine(0, MachineConfig{Seed: SeedInt64(832)})
 	if err != nil {
 		t.Fatalf("legacy machine: %v", err)
 	}
-	binaryMachine, err := manifestLab.NewMachineWithSeed(0, 832, true)
+	binaryMachine, err := manifestLab.NewMachine(0, MachineConfig{Seed: SeedInt64(832)})
 	if err != nil {
 		t.Fatalf("manifest machine: %v", err)
 	}

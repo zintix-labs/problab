@@ -27,8 +27,8 @@ func BenchmarkMachineBuildWithSharedOptimal(b *testing.B) {
 	defer func() { _ = lab.Close() }()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := lab.NewMachineWithSeed(0, int64(i+1), true); err != nil {
-			b.Fatalf("NewMachineWithSeed: %v", err)
+		if _, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(int64(i + 1))}); err != nil {
+			b.Fatalf("NewMachine: %v", err)
 		}
 	}
 	b.StopTimer()
@@ -53,7 +53,7 @@ func BenchmarkOptimalProductionSpin(b *testing.B) {
 		b.Fatalf("NewAuto: %v", err)
 	}
 	defer func() { _ = lab.Close() }()
-	machine, err := lab.NewMachine(0, false)
+	machine, err := newProductionMachineForTest(lab, 0)
 	if err != nil {
 		b.Fatal(err)
 	}
