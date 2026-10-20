@@ -50,6 +50,10 @@ const (
 	baselineFirstLines   = 3
 )
 
+// b1CasesSHA256 是 B1 cases.json 的 SHA-256（PRD 0012 完成後錄製，供 PRD 0011 比對）。
+// 空字串表示 B1 尚未錄製。
+const b1CasesSHA256 = "d1147e40313380fc5b91b4439e91fddc99793cd2a2e042d11b20d70e6d4b1d57"
+
 // b0CasesSHA256 是 B0 cases.json 的 SHA-256。B0 不可重錄覆蓋；若真的需要重錄，
 // 必須是獨立、經使用者同意的 commit，並同時更新此常數與 b0.sha256。
 const b0CasesSHA256 = "70d6b7bbcc69bf631d9ad1e297d154dd800ebe410503f7b04ed37db79008b56c"
@@ -602,9 +606,21 @@ func loadBaseline(t testing.TB, name, wantSHA string) map[string]*baselineRecord
 
 func compareConstructionBaseline(t *testing.T, cases []baselineCase) {
 	b0 := loadBaseline(t, "b0", b0CasesSHA256)
+	var b1 map[string]*baselineRecord
+	if b1CasesSHA256 != "" {
+		b1 = loadBaseline(t, "b1", b1CasesSHA256)
+	}
 	for _, c := range cases {
 		t.Run(c.Key, func(t *testing.T) {
 			got := c.record(t)
+			if b1 != nil {
+				// B1 是本決策完成後的基準：同一個案例鍵，完整比對。
+				want, ok := b1[c.Key]
+				if !ok {
+					t.Fatalf("B1 缺少案例 %q", c.Key)
+				}
+				compareBaselineRecord(t, c, got, want, got.OmitExtend)
+			}
 			target, expectOmit := c.target()
 			if own, ok := b0[c.Key]; ok && own.Kind == "error" {
 				// B0 中本身就是錯誤的案例（例如 PCG64 不接受的 seed 長度），比對同一個錯誤。

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"testing/fstest"
 
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/sdk/buf"
@@ -146,9 +145,4 @@ func fixtureConfigYAML(t testing.TB) []byte {
 		text = next
 	}
 	return []byte(text)
-}
-
-func fixtureConfigFS(t testing.TB) fs.FS {
-	t.Helper()
-	return fstest.MapFS{"fixture.yaml": &fstest.MapFile{Data: fixtureConfigYAML(t)}}
 }
