@@ -180,7 +180,7 @@ func (t *Tuner) collect(gid spec.GID, betmode int, lab *problab.Problab, seed []
 	if err != nil {
 		return err
 	}
-	m, err := lab.NewMachineWithSeedBytes(gid, seed, false)
+	m, err := lab.NewMachine(gid, problab.MachineConfig{Seed: problab.SeedBytes(seed)})
 	if err != nil {
 		return err
 	}

@@ -44,7 +44,7 @@ type observedFactory struct {
 type extensionProbe struct{ t *testing.T }
 
 func (g extensionProbe) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
-	if gh.IsSim || r.StartState != nil || r.Cycle != 0 || r.HasChoice {
+	if gh.OmitExtend() || r.StartState != nil || r.Cycle != 0 || r.HasChoice {
 		g.t.Fatal("not a clean non-simulator new spin")
 	}
 	// This type/logic deliberately has no DTO renderer registration.
@@ -181,7 +181,7 @@ analysis:
 		}
 		previous = r
 		// Independent direct replay proves no reseed at player/group boundaries.
-		m, e := lab.NewMachineWithSeedBytes(0, c.Seed.Bytes(), false)
+		m, e := lab.NewMachine(0, problab.MachineConfig{Seed: problab.SeedBytes(c.Seed.Bytes())})
 		if e != nil {
 			t.Fatal("Run closed borrowed Lab", e)
 		}

@@ -44,7 +44,7 @@ GOCACHE=/tmp/problab-playerexp-cache make exp
 | A04 | `TestPreflightAndRegistry`、`TestCancellationBoundariesAndNilStrategies`：跨 GID 同名合法、重複／typed-nil 拒絕、Factory 回 nil／typed-nil、tag 不跨 GID |
 | A05 | root `TestSpinOfflineParity/native`：兩個 mode、三種 mult、60 局逐局 DTO 與 RNG bytes 相等 |
 | A06 | root `TestSpinOfflineParity/optimal`、`TestSpinOfflineValidationAndOptimalError`、`TestSpinOfflineSnapshotRestoreFaults`：真 manifest、closed artifact、前後 Snapshot、seed／selector Restore 故障；panic 仍恢復 selector，雙重錯誤保留 |
-| A07 | `TestUnregisteredExtensionReachesStrategyAndTag`：自訂遊戲檢查 isSim=false／乾淨 request，無 DTO renderer；策略及 tag 都看到 raw Extend |
+| A07 | `TestUnregisteredExtensionReachesStrategyAndTag`：自訂遊戲檢查 OmitExtend()=false／乾淨 request，無 DTO renderer；策略及 tag 都看到 raw Extend |
 | A08 | `TestStateSettlementAndDynamicRTP`：500→430→432；修改 state 副本無效；TotalWin 不重乘 |
 | A09 | 同上：成本 100 與 2、贏分 30 與 4，玩家與 pooled RTP 都為 34/102，不是倍率平均 |
 | A10 | `TestRealRunReproducibilityAndContinuousStream`：200 個獨立 Strategy、400 次 Next、每次 FirstSpin state／策略歷史為初始；demo factory 每人複製設定 |

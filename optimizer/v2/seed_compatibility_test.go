@@ -19,22 +19,33 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"io"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 
+	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/spec"
 )
 
+// The fixture bank is an existing bank (16 records) collected with
+// Int64Seed(4127483647). The values below are its known result and form a
+// standing compatibility contract: the current code must restore and replay the
+// existing bank to the same samples, and a fresh collection under the same
+// integer seed must produce the same samples. Never re-capture them from current
+// code; a mismatch means the bank format, seed encoding, RNG restore or game
+// results changed.
 const (
-	preSeedSpecCollectionSnapshotsGolden = "11c842fc692da2883e46d5b817750faa4f59447fd3b5ee81966a9a88a070eb12"
-	preSeedSpecCollectionEvidenceGolden  = "b11eb29110bb6b5c3856e04bf56b7ec984933b395834b4f9f92513112d6d0c26"
-	preSeedSpecReplayEvidenceGolden      = "2bf29b8780452b8caa744262c35b97d93696f5bfee30248d06aed99d834f8183"
-	preSeedSpecBankFixture               = "testdata/seed_bank_1700000000_s2.bin"
+	fixtureBankPath     = "testdata/seed_bank_1700000000_s2.bin"
+	fixtureBankRootSeed = 4127483647
+	// fixtureBankSnapshotsDigest is the SHA-256 of the 16 sample snapshots concatenated in canonical order.
+	fixtureBankSnapshotsDigest = "11c842fc692da2883e46d5b817750faa4f59447fd3b5ee81966a9a88a070eb12"
 )
+
+// fixtureBankTotalWins are the raw integer wins of the 16 samples in canonical order.
+var fixtureBankTotalWins = []int64{20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 210, 10, 10, 0, 65}
 
 type stableReplaySourceEvidence struct {
 	State                  CollectionReplaySourceState `json:"state"`
@@ -71,14 +82,31 @@ func collectionSnapshotsDigest(t *testing.T, collected CollectedProblem) string 
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func stableJSONDigest(t *testing.T, value any) string {
+func collectionTotalWins(t *testing.T, collected CollectedProblem) []int64 {
 	t.Helper()
-	raw, err := json.Marshal(value)
-	if err != nil {
+	var wins []int64
+	if err := visitCanonicalCollectionSamples(collected, func(_, _ int, sample CollectedSample) error {
+		wins = append(wins, sample.TotalWin)
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(raw)
-	return hex.EncodeToString(digest[:])
+	return wins
+}
+
+// requireFixtureBankSamples asserts that collected holds exactly the fixture bank samples.
+func requireFixtureBankSamples(t *testing.T, collected CollectedProblem) {
+	t.Helper()
+	if got := collectionSnapshotsDigest(t, collected); got != fixtureBankSnapshotsDigest {
+		t.Fatalf("snapshot digest=%s want fixture bank %s", got, fixtureBankSnapshotsDigest)
+	}
+	if got := collectionTotalWins(t, collected); !reflect.DeepEqual(got, fixtureBankTotalWins) {
+		t.Fatalf("total wins=%v want fixture bank %v", got, fixtureBankTotalWins)
+	}
+}
+
+func fixtureBankClassEvidence(replay, fresh uint64) []CollectionClassEvidence {
+	return []CollectionClassEvidence{{Name: "all_outcomes", Requested: 16, ReplayAccepted: replay, FreshAccepted: fresh, Accepted: 16}}
 }
 
 func projectStableReplayEvidence(evidence CollectionEvidence) stableReplayEvidence {
@@ -101,41 +129,44 @@ func projectStableReplayEvidence(evidence CollectionEvidence) stableReplayEviden
 	}
 }
 
-func TestCollectionDigestMatchesPreChangeGolden(t *testing.T) {
+func collectFixtureBankFresh(t *testing.T, probe bool) CollectedProblem {
+	t.Helper()
 	lab := newCollectionFactoryLab(t, core.Default())
-	defer func() { _ = lab.Close() }()
-	plan := collectionFixturePlan(4127483647, 2, 16, 16, 4)
-
+	t.Cleanup(func() { _ = lab.Close() })
+	plan := collectionFixturePlan(fixtureBankRootSeed, 2, 16, 16, 4)
+	if probe {
+		plan.Plan.ID = "probe"
+		if _, diagnostic, err := validateRuntimeTarget(lab, plan); err != nil || diagnostic.StopsRun() {
+			t.Fatalf("validateRuntimeTarget: diagnostic=%+v err=%v", diagnostic, err)
+		}
+	}
 	collected, diagnostics, err := NewCollector(lab).Collect(context.Background(), plan, 0)
 	if err != nil || diagnostics.StopsRun() {
 		t.Fatalf("Collect: diagnostics=%+v err=%v", diagnostics, err)
 	}
-	if got := collectionSnapshotsDigest(t, collected); got != preSeedSpecCollectionSnapshotsGolden {
-		t.Fatalf("snapshot digest=%s want pre-change golden %s", got, preSeedSpecCollectionSnapshotsGolden)
+	return collected
+}
+
+// A fresh collection under the bank's integer root seed reproduces the bank samples.
+func TestFreshCollectionReproducesFixtureBank(t *testing.T) {
+	collected := collectFixtureBankFresh(t, false)
+	requireFixtureBankSamples(t, collected)
+	want := stableReplayEvidence{
+		ReplaySources: []stableReplaySourceEvidence{},
+		Classes:       fixtureBankClassEvidence(0, 16),
+		FreshSpins:    16, FreshAccepted: 16,
 	}
-	if got := stableJSONDigest(t, collected.Evidence); got != preSeedSpecCollectionEvidenceGolden {
-		t.Fatalf("evidence digest=%s want pre-change golden %s", got, preSeedSpecCollectionEvidenceGolden)
+	if got := projectStableReplayEvidence(collected.Evidence); !reflect.DeepEqual(got, want) {
+		t.Fatalf("evidence=%+v want %+v", got, want)
 	}
 }
 
+// The root seed probe before collection must not consume or perturb collection RNG.
 func TestRootSeedProbeDoesNotPerturbCollection(t *testing.T) {
-	lab := newCollectionFactoryLab(t, core.Default())
-	defer func() { _ = lab.Close() }()
-	plan := collectionFixturePlan(4127483647, 2, 16, 16, 4)
-	plan.Plan.ID = "probe-golden"
-	if _, diagnostic, err := validateRuntimeTarget(lab, plan); err != nil || diagnostic.StopsRun() {
-		t.Fatalf("validateRuntimeTarget: diagnostic=%+v err=%v", diagnostic, err)
-	}
-	collected, diagnostics, err := NewCollector(lab).Collect(context.Background(), plan, 0)
-	if err != nil || diagnostics.StopsRun() {
-		t.Fatalf("Collect after probe: diagnostics=%+v err=%v", diagnostics, err)
-	}
-	if got := collectionSnapshotsDigest(t, collected); got != preSeedSpecCollectionSnapshotsGolden {
-		t.Fatalf("post-probe snapshot digest=%s want %s", got, preSeedSpecCollectionSnapshotsGolden)
-	}
+	requireFixtureBankSamples(t, collectFixtureBankFresh(t, true))
 }
 
-func replayPreSeedSpecFixture(t *testing.T, seed SeedSpec) CollectedProblem {
+func replayFixtureBank(t *testing.T, seed SeedSpec) CollectedProblem {
 	t.Helper()
 	lab := newCollectionFactoryLab(t, core.Default())
 	t.Cleanup(func() { _ = lab.Close() })
@@ -143,43 +174,49 @@ func replayPreSeedSpecFixture(t *testing.T, seed SeedSpec) CollectedProblem {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := collectionFixturePlan(4127483647, 1, 16, 16, 4)
+	plan := collectionFixturePlan(fixtureBankRootSeed, 1, 16, 16, 4)
 	plan.Plan.Seed = seed
-	plan.Plan.Collection.CollectedSeed = []string{preSeedSpecBankFixture}
+	plan.Plan.Collection.CollectedSeed = []string{fixtureBankPath}
 	collector := NewCollector(lab)
 	collector.WorkingDirectory = workingDirectory
 	collected, diagnostics, err := collector.Collect(context.Background(), plan, 0)
 	if err != nil || diagnostics.StopsRun() {
-		t.Fatalf("replay fixture: diagnostics=%+v err=%v", diagnostics, err)
+		t.Fatalf("replay fixture bank: diagnostics=%+v err=%v", diagnostics, err)
 	}
 	return collected
 }
 
-func TestFixtureBankReplayMatchesPreChangeGolden(t *testing.T) {
-	collected := replayPreSeedSpecFixture(t, Int64Seed(4127483647))
-	if got := collectionSnapshotsDigest(t, collected); got != preSeedSpecCollectionSnapshotsGolden {
-		t.Fatalf("replay snapshot digest=%s want pre-change golden %s", got, preSeedSpecCollectionSnapshotsGolden)
+// requireFixtureBankReplay asserts that all 16 records are accepted by replay, no
+// fresh spins run, and the replayed samples are the known ones.
+func requireFixtureBankReplay(t *testing.T, collected CollectedProblem) {
+	t.Helper()
+	requireFixtureBankSamples(t, collected)
+	want := stableReplayEvidence{
+		ReplaySources: []stableReplaySourceEvidence{{
+			State: CollectionReplayUsed, EndReason: CollectionReplayEndQuotasFull,
+			TotalRecords: 16, Records: 16, Accepted: 16,
+			StreamCursor: 2, StreamCursorRecognized: true,
+		}},
+		Classes:       fixtureBankClassEvidence(16, 0),
+		ReplayRecords: 16, ReplayAccepted: 16,
 	}
-	if got := stableJSONDigest(t, projectStableReplayEvidence(collected.Evidence)); got != preSeedSpecReplayEvidenceGolden {
-		t.Fatalf("stable replay evidence digest=%s want pre-change golden %s", got, preSeedSpecReplayEvidenceGolden)
+	if got := projectStableReplayEvidence(collected.Evidence); !reflect.DeepEqual(got, want) {
+		t.Fatalf("replay evidence=%+v want %+v", got, want)
 	}
 }
 
+func TestFixtureBankReplayKnownResult(t *testing.T) {
+	requireFixtureBankReplay(t, replayFixtureBank(t, Int64Seed(fixtureBankRootSeed)))
+}
+
+// Replaying existing records does not use the plan root seed: a UTF-8 seed
+// yields the same result.
 func TestExistingBankReplaysUnderUTF8Seed(t *testing.T) {
 	seed, err := UTF8Seed("bank-root-is-not-used-for-restored-records")
 	if err != nil {
 		t.Fatal(err)
 	}
-	collected := replayPreSeedSpecFixture(t, seed)
-	if collected.Evidence.ReplayAccepted != 16 || collected.Evidence.FreshAccepted != 0 {
-		t.Fatalf("replay evidence=%+v", collected.Evidence)
-	}
-	if got := collectionSnapshotsDigest(t, collected); got != preSeedSpecCollectionSnapshotsGolden {
-		t.Fatalf("UTF-8 replay snapshot digest=%s want G3 %s", got, preSeedSpecCollectionSnapshotsGolden)
-	}
-	if got := stableJSONDigest(t, projectStableReplayEvidence(collected.Evidence)); got != preSeedSpecReplayEvidenceGolden {
-		t.Fatalf("UTF-8 stable replay evidence digest=%s want G3 %s", got, preSeedSpecReplayEvidenceGolden)
-	}
+	requireFixtureBankReplay(t, replayFixtureBank(t, seed))
 }
 
 type recordingNewSeedFactory struct {
@@ -228,7 +265,7 @@ func TestVerifyReplayMachineUsesSameSeedBytesAsCollection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fixtureMachine, err := lab.NewUnoptimizedMachineWithSeedBytes(spec.GID(1), seed.Bytes(), true)
+	fixtureMachine, err := lab.NewMachine(spec.GID(1), problab.MachineConfig{Seed: problab.SeedBytes(seed.Bytes()), Unoptimized: true})
 	if err != nil {
 		t.Fatal(err)
 	}

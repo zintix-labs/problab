@@ -22,11 +22,11 @@ import (
 	"github.com/zintix-labs/problab/sdk/core"
 )
 
-// TestNewUnoptimizedMachineWithSeedPreservesReplayIdentity locks the collection
+// TestUnoptimizedMachinePreservesReplayIdentity locks the collection
 // boundary needed by optimizer/v2. Game 0 enables a published Optimal Artifact;
 // a normal Machine therefore owns that artifact, while the raw optimizer Machine
 // must bypass it and reproduce a spin directly from its pre-spin Core snapshot.
-func TestNewUnoptimizedMachineWithSeedPreservesReplayIdentity(t *testing.T) {
+func TestUnoptimizedMachinePreservesReplayIdentity(t *testing.T) {
 	lab, err := NewAuto(
 		core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
 		WithOptimalFS(testManifestFS(t, false)),
@@ -36,16 +36,16 @@ func TestNewUnoptimizedMachineWithSeedPreservesReplayIdentity(t *testing.T) {
 	}
 	defer func() { _ = lab.Close() }()
 
-	normal, err := lab.NewMachineWithSeed(0, 77, true)
+	normal, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
 	if err != nil {
-		t.Fatalf("NewMachineWithSeed: %v", err)
+		t.Fatalf("NewMachine: %v", err)
 	}
 	if normal.optimal == nil {
 		t.Fatal("game 0 fixture did not enable its existing Optimal Artifact")
 	}
-	raw, err := lab.NewUnoptimizedMachineWithSeed(0, 77, true)
+	raw, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77), Unoptimized: true})
 	if err != nil {
-		t.Fatalf("NewUnoptimizedMachineWithSeed: %v", err)
+		t.Fatalf("NewMachine(Unoptimized): %v", err)
 	}
 	if raw.optimal != nil {
 		t.Fatal("raw optimizer Machine retained an Optimal Artifact")

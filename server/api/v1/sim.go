@@ -141,7 +141,7 @@ func (sh *SimHandler) Sim(w http.ResponseWriter, q *http.Request) {
 		v := rnd.Int64()
 		req.Seed = &v
 	}
-	sim, err := sh.Problab.NewSimulatorWithSeed(req.GID, *req.Seed)
+	sim, err := sh.Problab.NewSimulator(req.GID, problab.MachineConfig{Seed: problab.SeedInt64(*req.Seed)})
 	if err != nil {
 		// 這裡的錯誤是來自problab 尊重錯誤分級
 		httperr.Errs(w, errs.Wrap(err, fmt.Sprintf("build simulator err: %d", req.GID)))
@@ -304,7 +304,7 @@ func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
 		req.Seed = &v
 	}
 	// 取得sim
-	sim, err := sh.Problab.NewSimulatorWithSeed(req.GID, *req.Seed)
+	sim, err := sh.Problab.NewSimulator(req.GID, problab.MachineConfig{Seed: problab.SeedInt64(*req.Seed)})
 	if err != nil {
 		httperr.Errs(w, errs.Wrap(err, fmt.Sprintf("build simulator err: %d", req.GID)))
 		return

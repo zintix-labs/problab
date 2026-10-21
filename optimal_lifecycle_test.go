@@ -23,9 +23,9 @@ func TestOptimalLifecycleClosesPoolsBeforeArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAuto: %v", err)
 	}
-	machine, err := lab.NewMachineWithSeed(0, 1, true)
+	machine, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(1)})
 	if err != nil {
-		t.Fatalf("NewMachineWithSeed: %v", err)
+		t.Fatalf("NewMachine: %v", err)
 	}
 	artifact := machine.optimal
 
@@ -55,7 +55,7 @@ func TestOptimalLifecycleClosesPoolsBeforeArtifact(t *testing.T) {
 	if !lab.Closed() || !artifact.Closed() {
 		t.Fatal("Problab close did not close its artifact store")
 	}
-	if _, err := lab.NewMachineWithSeed(0, 2, true); err == nil {
+	if _, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(2)}); err == nil {
 		t.Fatal("closed Problab created a new machine")
 	}
 }

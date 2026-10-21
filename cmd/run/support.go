@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"strconv"
 
+	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/spec"
 	"golang.org/x/text/language"
@@ -87,7 +88,7 @@ func executeSimulator() { // 取得spin數
 		log.Fatal(err)
 	}
 	defer func() { _ = lab.Close() }()
-	s, err := lab.NewSimulatorWithSeed(cfg.id, cfg.seed)
+	s, err := lab.NewSimulator(cfg.id, problab.MachineConfig{Seed: problab.SeedInt64(cfg.seed)})
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -47,7 +47,7 @@ type Simulator struct {
 	sBuf     []*stats.StatReport      // 併發統計結果報表(僅Players需要)
 }
 
-func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, optimal *optimalrt.Artifact) (*Simulator, error) {
+func newSimulator(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, optimal *optimalrt.Artifact) (*Simulator, error) {
 	seed = append([]byte(nil), seed...)
 	s := &Simulator{
 		GameName: gs.GameName,
@@ -62,7 +62,7 @@ func newSimulatorWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core
 		rBuf:     make([]*recorder.SpinRecorder, 0, capPrepare),
 		sBuf:     make([]*stats.StatReport, 0, capPrepare),
 	}
-	m, err := newMachineWithSeed(gs, reg, cf, s.initSeed, true, optimal, rngDeterministic)
+	m, err := newMachine(gs, reg, cf, s.initSeed, true, optimal, rngDeterministic)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 		if err != nil {
 			return nil, 0, errs.Wrap(err, "derive Simulator worker seed")
 		}
-		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, seed, true, s.optimal, rngDeterministic)
+		m, err := newMachine(s.gs, s.logic, s.cf, seed, true, s.optimal, rngDeterministic)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -197,7 +197,7 @@ func (s *Simulator) SimPlayers(mp int, players int, initBets int, betMode int, r
 		if err != nil {
 			return nil, nil, 0, errs.Wrap(err, "derive Simulator worker seed")
 		}
-		m, err := newMachineWithSeed(s.gs, s.logic, s.cf, seed, true, s.optimal, rngDeterministic)
+		m, err := newMachine(s.gs, s.logic, s.cf, seed, true, s.optimal, rngDeterministic)
 		if err != nil {
 			return nil, nil, 0, err
 		}

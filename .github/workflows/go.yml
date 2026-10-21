@@ -18,7 +18,7 @@ on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
 
 jobs:
   # 1) Lint (fast feedback, separate from tests)
