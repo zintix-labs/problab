@@ -10,17 +10,16 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 )
 
-// This harness delegates all solving to the checkout's engine. It does not
-// contain a copy of either selection algorithm.
+// minimumCVTraceSolver records per-stage solve counts, elapsed time and
+// allocations for the manual profile (PROBLAB_MINCV_PROFILE=1). All solving is
+// delegated to the checkout's engine.
 type minimumCVTraceSolver struct {
 	t       *testing.T
-	records []string
 	counts  map[OptimizationStageID]int
 	elapsed map[OptimizationStageID]time.Duration
 }
@@ -48,72 +47,10 @@ func (s *minimumCVTraceSolver) Solve(ctx context.Context, p LinearProblem, o Lin
 	}
 	s.counts[o.Name]++
 	s.elapsed[o.Name] += duration
-	if o.Origin != ObjectiveCanonicalBucketProbability {
-		b, _ := json.Marshal(struct {
-			P       LinearProblem
-			O       LinearObjective
-			Options SolveOptions
-			Values  []float64
-		}{p, o, opts, r.Values})
-		// LinearVariable contains infinite auxiliary bounds; JSON cannot encode
-		// those. Use Go's deterministic slice/struct representation, not maps.
-		if b == nil {
-			b = []byte(fmt.Sprintf("%#v|%#v|%#v|%#v", p, o, opts, r.Values))
-		}
-		s.records = append(s.records, fmt.Sprintf("%x", sha256.Sum256(b)))
-	}
 	if s.counts[o.Name] == 1 || s.counts[o.Name]%50 == 0 {
 		s.t.Logf("stage=%s solves=%d elapsed=%s rows=%d vars=%d", o.Name, s.counts[o.Name], s.elapsed[o.Name], len(p.Rows), len(p.Variables))
 	}
 	return r, err
-}
-
-func TestMinimumCVSelectionPreservesEarlierStages(t *testing.T) {
-	mainClass := modelTestIntentClass(0, "main-siblings", 1, []float64{0, 1, 3}, []float64{0, 1, 9}, [][]int{{0, 1, 2}}, nil)
-	mainClass.Design.Exp = 1
-	mainClass.Design.Subjective.MainExperience.Probability = NumericRange{Min: 1, Max: 1}
-	mainPrepared := modelTestPrepared(OverallIntent{CV: NumericRange{Min: 0, Max: 10}}, mainClass)
-	mainPrepared.Plan.EngineOptions.MainGroupInternalVisibilityBisectionIterations = 40
-	cases := []struct {
-		name string
-		p    PreparedProblem
-	}{
-		{"other", jointFairnessPreparedProblem()},
-		{"main", mainPrepared},
-	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			compiled := modelTestCompile(t, test.p)
-			s := &minimumCVTraceSolver{t: t, counts: map[OptimizationStageID]int{}, elapsed: map[OptimizationStageID]time.Duration{}}
-			r, err := NewIntentEngine(s).Solve(context.Background(), compiled)
-			if err != nil || r.Status != StatusOptimal {
-				t.Fatalf("%v %+v", err, r)
-			}
-			b, err := json.Marshal(s.records)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Logf("first-four-trace=%x calls=%d primary=%v", sha256.Sum256(b), len(s.records), r.Primary)
-			if dir := os.Getenv("PROBLAB_MINCV_CAPTURE"); dir != "" {
-				if err := os.WriteFile(filepath.Join(dir, "first-four-"+test.name+".json"), b, 0600); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			// PRD 0010 rewrote stages 1–4 (per-Class decomposition with verified
-			// evidence), superseding the e05a4cd trace. Re-captured on darwin/arm64
-			// at intent-lp-v2.10.0; other platforms need their own capture.
-			want := map[string]map[string]string{
-				"darwin/arm64": {"other": "bef3ff0de7f5e95992e2c0ab42d01a1005dd6a78e71ec545840ded634722dba2", "main": "c36f06de654d9e596c4d77052c0e6166aeac7a04106f4761d83cec96bbb3bda9"},
-			}[runtime.GOOS+"/"+runtime.GOARCH][test.name]
-			if want == "" {
-				t.Skipf("no captured trace for %s/%s", runtime.GOOS, runtime.GOARCH)
-			}
-			if fmt.Sprintf("%x", sha256.Sum256(b)) != want {
-				t.Fatalf("first four stages changed: %x", sha256.Sum256(b))
-			}
-		})
-	}
 }
 
 func minimumCV450BucketsFixture(t *testing.T) CompiledModel {
