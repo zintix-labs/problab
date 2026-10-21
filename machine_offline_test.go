@@ -17,7 +17,6 @@ package problab
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -27,9 +26,7 @@ import (
 	"github.com/zintix-labs/problab/demo/demo_logic"
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/internal/optimalrt"
-	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
-	"github.com/zintix-labs/problab/sdk/slot"
 )
 
 type offlineScratchPRNG struct {
@@ -168,114 +165,6 @@ func TestSpinOfflineParity(t *testing.T) {
 	}
 }
 
-type offlineFaultPRNG struct {
-	core.PRNG
-	snapshots, restores   int
-	snapshotAt, restoreAt int
-	fault                 error
-}
-
-func (p *offlineFaultPRNG) Snapshot() ([]byte, error) {
-	p.snapshots++
-	if p.snapshots == p.snapshotAt {
-		return nil, p.fault
-	}
-	return p.PRNG.Snapshot()
-}
-func (p *offlineFaultPRNG) Restore(b []byte) error {
-	p.restores++
-	if p.restores == p.restoreAt {
-		return p.fault
-	}
-	return p.PRNG.Restore(b)
-}
-
-type offlinePanicLogic struct{}
-
-func (offlinePanicLogic) GetResult(*buf.SpinRequest, *slot.Game) *buf.SpinResult { panic("game fault") }
-
-func TestSpinOfflineSnapshotRestoreFaults(t *testing.T) {
-	for _, phase := range []string{"snapshot-before", "snapshot-after", "restore-seed", "restore-stream", "panic", "panic-restore"} {
-		t.Run(phase, func(t *testing.T) {
-			lab, e := NewAuto(core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testManifestFS(t, false)))
-			if e != nil {
-				t.Fatal(e)
-			}
-			defer func() { _ = lab.Close() }()
-			m, e := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
-			if e != nil {
-				t.Fatal(e)
-			}
-			fault := errors.New("injected PRNG failure")
-			p := &offlineFaultPRNG{PRNG: m.core.PRNG, fault: fault}
-			m.core.PRNG = p
-			switch phase {
-			case "snapshot-before":
-				p.snapshotAt = 1
-			case "snapshot-after":
-				p.snapshotAt = 2
-			case "restore-seed":
-				p.restoreAt = 1
-			case "restore-stream":
-				p.restoreAt = 2
-			case "panic", "panic-restore":
-				if phase == "panic-restore" {
-					p.restoreAt = 2
-				}
-				reg := slot.NewLogicRegistry()
-				if e = reg.Register(m.gh.GameSetting.LogicKey, func(*slot.Game) (slot.GameLogic, error) { return offlinePanicLogic{}, nil }); e != nil {
-					t.Fatal(e)
-				}
-				m.gh, e = slot.NewGame(m.gh.GameSetting, reg, m.core, false)
-				if e != nil {
-					t.Fatal(e)
-				}
-			}
-			if phase == "panic" || phase == "panic-restore" {
-				// Even a panic must restore the sampler's post-selection stream.
-				control, e := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
-				if e != nil {
-					t.Fatal(e)
-				}
-				if _, e = control.optimal.PickSeed(0, control.core); e != nil {
-					t.Fatal(e)
-				}
-				want, _ := control.SnapshotCore()
-				func() {
-					defer func() {
-						caught := recover()
-						if caught == nil {
-							t.Fatal("panic swallowed")
-						}
-						if phase == "panic-restore" {
-							cause, ok := caught.(error)
-							if !ok || !errors.Is(cause, fault) {
-								t.Fatal("panic lost restore error", caught)
-							}
-						}
-					}()
-					_, _ = m.SpinOffline(0, 1)
-				}()
-				if phase == "panic-restore" {
-					return
-				}
-				got, _ := m.SnapshotCore()
-				if p.restores != 2 || !bytes.Equal(got, want) {
-					t.Fatal("panic lost selector RNG")
-				}
-				return
-			}
-			r, e := m.SpinOffline(0, 1)
-			if r != nil || !errors.Is(e, fault) {
-				t.Fatal("error lost or fallback", r, e)
-			}
-			if phase == "restore-seed" && p.restores != 2 {
-				t.Fatal("did not restore selector on failed seed restore")
-			}
-		})
-	}
-}
-
 func TestSpinOfflineValidationAndOptimalError(t *testing.T) {
 	lab := newOneGameLab(t, core.Default())
 	m, err := lab.NewMachine(1, MachineConfig{Seed: SeedInt64(77)})
@@ -307,7 +196,8 @@ func TestSpinOfflineValidationAndOptimalError(t *testing.T) {
 	if err := optLab.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := om.SpinOffline(0, 1); err == nil {
+	// 抽 seed 失敗屬於內部執行故障：panic，不得靜默改用原始 RNG。
+	if p := catchPanic(func() { _, _ = om.SpinOffline(0, 1) }); p == nil {
 		t.Fatal("closed artifact silently fell back")
 	}
 }

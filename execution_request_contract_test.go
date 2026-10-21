@@ -131,8 +131,8 @@ func probeManifestLab(t testing.TB, log *[]probeRequest) *Problab {
 // internalIdentity 是 SpinInternal 交給遊戲的 GameId／GameName。
 //
 // 執行核心收斂前，SpinInternal 交給遊戲的是零值；收斂後改為機台本身的值。收斂前後
-// 本測試只允許修改這一個函式。
-func internalIdentity(m *Machine) (spec.GID, string) { return 0, "" }
+// 本測試只修改了這一個函式。
+func internalIdentity(m *Machine) (spec.GID, string) { return m.gameId, m.gameName }
 
 func probeLast(t testing.TB, log []probeRequest) probeRequest {
 	t.Helper()

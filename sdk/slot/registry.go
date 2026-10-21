@@ -28,6 +28,10 @@ import (
 // GetResult must write/return the *buf.SpinResult for the given request.
 // `g` provides access to the (already-initialized) runtime objects for this game instance.
 //
+// The request is owned by the Machine and reset before every execution. Treat it as
+// read-only and do not retain `r` or anything it references (StartState, snapshots,
+// checkpoint) after GetResult returns; later executions overwrite them.
+//
 // NOTE: GameSetting is treated as read-only after Init. If you intentionally mutate settings,
 // you are responsible for correctness and concurrency safety.
 type GameLogic interface {

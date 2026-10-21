@@ -45,8 +45,6 @@ func (r *rgsReplay) spin(ctx context.Context, snapshot []byte, win float64) (*bu
 	if len(snapshot) != r.snapshotLength {
 		return nil, &rgsReplayMismatch{message: fmt.Sprintf("snapshot length=%d want=%d", len(snapshot), r.snapshotLength)}
 	}
-	request := r.machine.SpinRequest
-	request.Choice, request.HasChoice, request.Cycle, request.StartState = 0, false, 0, nil
 	if r.previous != nil && r.previous.State != nil {
 		r.previous.State.StartCoreSnap, r.previous.State.AfterCoreSnap, r.previous.State.Checkpoint = nil, nil, nil
 	}
