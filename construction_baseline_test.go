@@ -53,7 +53,7 @@ const (
 
 // b1CasesSHA256 是 B1 cases.json 的 SHA-256（PRD 0012 完成後錄製，供 PRD 0011 比對）。
 // 空字串表示 B1 尚未錄製。
-const b1CasesSHA256 = ""
+const b1CasesSHA256 = "932c5fd51aff967b2898eae3cf8d14889c938dbb6576ff2d7841e48645ad936f"
 
 // b0CasesSHA256 是 B0 cases.json 的 SHA-256。B0 不可重錄覆蓋；若真的需要重錄，
 // 必須是獨立、經使用者同意的 commit，並同時更新此常數與 b0.sha256。
