@@ -1,0 +1,281 @@
+{
+ "Config": {
+  "Analysis": [
+   {
+    "CI": "confidence_95",
+    "Name": "e0",
+    "Player": {
+     "InitBet": 300,
+     "Players": 20,
+     "Strategy": "flat"
+    },
+    "WinBuckets": [
+     0,
+     1,
+     2,
+     5
+    ]
+   }
+  ],
+  "GameID": 0,
+  "Seed": 77
+ },
+ "Error": "",
+ "Groups": [
+  {
+   "Buckets": [
+    {
+     "Count": 2823,
+     "IncludeMax": true,
+     "IncludeMin": true,
+     "Max": 0,
+     "Min": 0,
+     "ObservedMax": {
+      "Defined": true,
+      "Value": 0
+     }
+    },
+    {
+     "Count": 672,
+     "IncludeMax": false,
+     "IncludeMin": false,
+     "Max": 1,
+     "Min": 0,
+     "ObservedMax": {
+      "Defined": true
+     }
+    },
+    {
+     "Count": 214,
+     "IncludeMax": false,
+     "IncludeMin": true,
+     "Max": 2,
+     "Min": 1,
+     "ObservedMax": {
+      "Defined": true
+     }
+    },
+    {
+     "Count": 181,
+     "IncludeMax": false,
+     "IncludeMin": true,
+     "Max": 5,
+     "Min": 2,
+     "ObservedMax": {
+      "Defined": true
+     }
+    },
+    {
+     "Count": 110,
+     "IncludeMax": false,
+     "IncludeMin": true,
+     "Min": 5,
+     "ObservedMax": {
+      "Defined": true
+     }
+    }
+   ],
+   "CompleteSpins": 4000,
+   "Completed": 20,
+   "Config": {
+    "CI": "confidence_95",
+    "Name": "e0",
+    "Player": {
+     "InitBet": 300,
+     "Players": 20,
+     "Strategy": "flat"
+    },
+    "WinBuckets": [
+     0,
+     1,
+     2,
+     5
+    ]
+   },
+   "Error": "",
+   "Events": [],
+   "ExitStats": [
+    {
+     "CI": {
+      "Available": true,
+      "Lo": 0,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Defined": true,
+     "Value": 0
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Lo": 0,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Defined": true,
+     "Value": 0
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Hi": 1,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Defined": true,
+     "Value": 1
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Lo": 0,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Defined": true,
+     "Value": 0
+    }
+   ],
+   "Exits": [
+    0,
+    0,
+    20,
+    0
+   ],
+   "InitialBalance": 12000,
+   "MaxSpinReached": 0,
+   "MaxSpinStat": {
+    "CI": {
+     "Available": true,
+     "Lo": 0,
+     "Method": "clopper_pearson",
+     "Reason": ""
+    },
+    "Defined": true,
+    "Value": 0
+   },
+   "PooledRTP": {
+    "Defined": true
+   },
+   "RTP": [
+    {
+     "CI": {
+      "Available": false,
+      "Hi": 0,
+      "Lo": 0,
+      "Method": "binomial_order_statistic",
+      "Reason": "insufficient_samples_for_finite_interval"
+     },
+     "Count": 0,
+     "Defined": true,
+     "Metric": "quantile",
+     "N": 20
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Method": "binomial_order_statistic",
+      "Reason": ""
+     },
+     "Count": 0,
+     "Defined": true,
+     "Metric": "quantile",
+     "N": 20
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Method": "binomial_order_statistic",
+      "Reason": ""
+     },
+     "Count": 0,
+     "Defined": true,
+     "Metric": "quantile",
+     "N": 20
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Method": "binomial_order_statistic",
+      "Reason": ""
+     },
+     "Count": 0,
+     "Defined": true,
+     "Metric": "quantile",
+     "N": 20
+    },
+    {
+     "CI": {
+      "Available": false,
+      "Hi": 0,
+      "Lo": 0,
+      "Method": "binomial_order_statistic",
+      "Reason": "insufficient_samples_for_finite_interval"
+     },
+     "Count": 0,
+     "Defined": true,
+     "Metric": "quantile",
+     "N": 20
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Count": 1,
+     "Defined": true,
+     "Metric": "threshold",
+     "N": 20
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Count": 5,
+     "Defined": true,
+     "Metric": "threshold",
+     "N": 20
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Count": 11,
+     "Defined": true,
+     "Metric": "threshold",
+     "N": 20
+    },
+    {
+     "CI": {
+      "Available": true,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Count": 13,
+     "Defined": true,
+     "Metric": "threshold",
+     "N": 20,
+     "Parameter": 1
+    }
+   ],
+   "Started": 20,
+   "Status": "COMPLETED",
+   "TotalBet": 160000,
+   "TotalWin": 134970,
+   "UndefinedRTPPlayers": 0,
+   "Unmatched": 4000
+  }
+ ],
+ "Modes": [
+  {
+   "BetUnit": 40,
+   "Source": "native"
+  }
+ ],
+ "Status": "COMPLETED"
+}
