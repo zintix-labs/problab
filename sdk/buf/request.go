@@ -23,6 +23,9 @@ import "github.com/zintix-labs/problab/spec"
 // 購買模式的價格倍率 = BetUnits[BetMode] / BetUnits[0] （數學比值，非整數除法）。
 // 賠率表與 max_win_limit 以 BetMult=1 的金額定義（對應基礎投注額）
 // 算分時乘 BetMult，不乘購買模式的價格倍率。
+//
+// 交給遊戲的 SpinRequest 由 Machine 持有，並在每次執行前重設；遊戲只讀，且不得保留
+// 它或其內含參照。
 type SpinRequest struct {
 	UID        string   // 唯一識別碼
 	GameName   string   // 要玩的遊戲

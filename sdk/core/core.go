@@ -51,7 +51,9 @@ type SnapshotFormatter interface {
 
 // Restorable 定義可快照與還原的狀態介面。
 type Restorable interface {
-	// Snapshot 回傳可用於還原的序列化狀態。
+	// Snapshot 回傳可用於還原的序列化狀態。Snapshot 不得改變 PRNG 狀態：Machine 會在
+	// 執行前後擷取快照，並依此還原隔離後的串流。實作可以重用自己的回傳緩衝區，呼叫端
+	// 需要保留時必須自行複製。
 	Snapshot() ([]byte, error)
 	// Restore 依序列化狀態還原 PRNG 內部狀態。實作不得修改傳入的
 	// bytes；Optimal runtime 可能直接傳入唯讀 mmap 中的快照。

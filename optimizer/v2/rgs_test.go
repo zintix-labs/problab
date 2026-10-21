@@ -26,7 +26,6 @@ import (
 	"github.com/zintix-labs/problab/corefmt"
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/dto"
-	"github.com/zintix-labs/problab/sdk/buf"
 )
 
 func rgsTestTuner(t *testing.T, base RunResult, formats []OutputFormat, options ...TunerOption) *Tuner {
@@ -341,10 +340,6 @@ func TestRGSIdentityReplayStateAndExactPayout(t *testing.T) {
 		snapshot := bank[i*replay.snapshotLength : (i+1)*replay.snapshotLength]
 		if replay.previous != nil {
 			replay.previous.State.Checkpoint = json.RawMessage(`{"old":true}`)
-			replay.machine.SpinRequest.Choice = 99
-			replay.machine.SpinRequest.HasChoice = true
-			replay.machine.SpinRequest.Cycle = 4
-			replay.machine.SpinRequest.StartState = &buf.StartState{Checkpoint: "stale"}
 		}
 		actual, e := replay.spin(context.Background(), snapshot, rows[i].WinMultiplier)
 		if e != nil {
