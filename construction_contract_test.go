@@ -99,7 +99,7 @@ func TestProductionMachineMustKeepExtend(t *testing.T) {
 // U2：fixture 遊戲每轉 4 次 YieldResult，觸發 GMR pool 擴容；擴容後新建的 GMR
 // 也必須遵守省略政策，且跨轉 Reset 後不變。
 func TestOmitExtendAppliesToGrownGameModeResults(t *testing.T) {
-	lab, _, err := newBaselineLab(t, baselineCombos[0], true)
+	lab, err := newFixtureLab(t)
 	if err != nil {
 		t.Fatal(err)
 	}

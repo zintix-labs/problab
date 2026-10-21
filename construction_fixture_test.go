@@ -10,9 +10,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
 	"github.com/zintix-labs/problab/spec"
 )
@@ -29,9 +31,6 @@ const (
 	fixtureGameName           = "fixture_noguard"
 	fixtureLogicKey           = spec.LogicKey("fixture_noguard")
 	fixtureBaseYield          = 4
-	// fixturePanicBetMult：以此倍數投注時遊戲刻意 panic，用來觸發 MachinePool 補機
-	// （techspec C6）。其他倍數完全不受影響。
-	fixturePanicBetMult = 7
 )
 
 var fixtureSnapshotCalls atomic.Int64
@@ -86,9 +85,6 @@ func buildFixtureGame(gh *slot.Game) (slot.GameLogic, error) {
 }
 
 func (g *fixtureGame) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
-	if r.BetMult == fixturePanicBetMult {
-		panic("fixture: forced panic for MachinePool rebuild")
-	}
 	sr := gh.StartNewSpin(r)
 	triggered := false
 	for i := range fixtureBaseYield {
@@ -151,4 +147,15 @@ func fixtureConfigYAML(t testing.TB) []byte {
 		text = next
 	}
 	return []byte(text)
+}
+
+// newFixtureLab 建立只含 fixture 遊戲的凍結 Lab（ChaCha20、無 optimal）。
+func newFixtureLab(t testing.TB) (*Problab, error) {
+	t.Helper()
+	f, err := core.NewChaCha20Factory(newDetReader("fixture-reseed"))
+	if err != nil {
+		return nil, err
+	}
+	cfgs := Configs(fstest.MapFS{"fixture.yaml": &fstest.MapFile{Data: fixtureConfigYAML(t)}})
+	return NewAuto(f, cfgs, Logics(fixtureLogics), WithSeedEntropy(newDetReader("fixture-seed")))
 }
