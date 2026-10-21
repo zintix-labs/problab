@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,11 +53,11 @@ const (
 
 // b1CasesSHA256 是 B1 cases.json 的 SHA-256（PRD 0012 完成後錄製，供 PRD 0011 比對）。
 // 空字串表示 B1 尚未錄製。
-const b1CasesSHA256 = "d1147e40313380fc5b91b4439e91fddc99793cd2a2e042d11b20d70e6d4b1d57"
+const b1CasesSHA256 = ""
 
 // b0CasesSHA256 是 B0 cases.json 的 SHA-256。B0 不可重錄覆蓋；若真的需要重錄，
 // 必須是獨立、經使用者同意的 commit，並同時更新此常數與 b0.sha256。
-const b0CasesSHA256 = "70d6b7bbcc69bf631d9ad1e297d154dd800ebe410503f7b04ed37db79008b56c"
+const b0CasesSHA256 = "4d3805919e91e7c01d615087ff35475266b8cc99c15961d2789c0f2bc3e0579b"
 
 // ---------------------------------------------------------------------------
 // 記錄格式
@@ -79,6 +80,20 @@ type baselineRecord struct {
 	RuntimeGames  map[string]*baselineRun  `json:"runtime_games,omitempty"`
 	Err           *baselineErr             `json:"err,omitempty"`
 	RunErrors     map[string]*baselineErr  `json:"run_errors,omitempty"`
+
+	// WorkerStates 是 SimMP 跑完後每個 worker Machine 的 RNG 狀態（techspec C5）。
+	WorkerStates []string `json:"worker_states,omitempty"`
+	// RuntimePools 是 Runtime 各遊戲池內每台機台的 slot、generation 與 RNG 狀態，
+	// 在建立後、正常 Spin 後、補機後各記一次（techspec C6）。
+	RuntimePools    map[string][]baselinePoolMachine `json:"runtime_pools,omitempty"`
+	RuntimeErrors   map[string]*baselineErr          `json:"runtime_errors,omitempty"`
+	RuntimeRebuilds map[string]int32                 `json:"runtime_rebuilds,omitempty"`
+}
+
+type baselinePoolMachine struct {
+	Slot     uint64 `json:"slot"`
+	Gen      uint64 `json:"gen"`
+	Snapshot string `json:"snapshot"`
 }
 
 type baselineRun struct {
@@ -418,6 +433,9 @@ func recordSimulatorCase(t testing.TB, key string, build func() (*Simulator, *de
 		t.Fatalf("%s: Sim: %v", key, err)
 	}
 	rec.Stats["sim"] = canonicalInts(t, report)
+	// 報表中的平方和是除以投注單位平方的浮點數；直接比對 recorder 的原始整數計數器
+	// （含三個平方和）。Sim 結束時只把 rBuf 的長度歸零，recorder 本身仍在底層陣列中。
+	rec.Stats["sim_basic"] = canonicalInts(t, ss.rBuf[:1][0].Basic)
 
 	ss = fresh()
 	report, _, err = ss.SimMP(0, baselineSimMPRounds, baselineSimMPWorkers, false)
@@ -425,7 +443,39 @@ func recordSimulatorCase(t testing.TB, key string, build func() (*Simulator, *de
 		t.Fatalf("%s: SimMP: %v", key, err)
 	}
 	rec.Stats["simmp"] = canonicalInts(t, report)
+	for w, r := range ss.rBuf[:baselineSimMPWorkers] {
+		rec.Stats[fmt.Sprintf("simmp_basic_w%d", w)] = canonicalInts(t, r.Basic)
+	}
+	for _, m := range ss.mBuf {
+		state, err := m.SnapshotCore()
+		if err != nil {
+			t.Fatalf("%s: worker state: %v", key, err)
+		}
+		rec.WorkerStates = append(rec.WorkerStates, hex.EncodeToString(state))
+	}
 	return rec
+}
+
+// poolStates 依序取出池內所有可用機台記錄狀態後原樣放回，FIFO 順序不變。
+func poolStates(t testing.TB, p *MachinePool) []baselinePoolMachine {
+	t.Helper()
+	n := len(p.pool)
+	machines := make([]*Machine, 0, n)
+	out := make([]baselinePoolMachine, 0, n)
+	for range n {
+		m := <-p.pool
+		state, err := m.SnapshotCore()
+		if err != nil {
+			t.Fatalf("pool machine state: %v", err)
+		}
+		machines = append(machines, m)
+		out = append(out, baselinePoolMachine{Slot: m.poolSlot, Gen: m.poolGen, Snapshot: hex.EncodeToString(state)})
+	}
+	for _, m := range machines {
+		p.pool <- m
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slot < out[j].Slot })
+	return out
 }
 
 func recordDevSimCase(t testing.TB, key string, build func() (*DevSimulator, *detReader, error)) *baselineRecord {
@@ -465,7 +515,11 @@ func recordDevSimCase(t testing.TB, key string, build func() (*DevSimulator, *de
 
 func recordRuntimeCase(t testing.TB, key string, build func() (*SlotRuntime, *Problab, *detReader, error)) *baselineRecord {
 	t.Helper()
-	rec := &baselineRecord{Key: key, Kind: "runtime", RuntimeGames: map[string]*baselineRun{}}
+	rec := &baselineRecord{
+		Key: key, Kind: "runtime", RuntimeGames: map[string]*baselineRun{},
+		RuntimePools: map[string][]baselinePoolMachine{}, RuntimeErrors: map[string]*baselineErr{},
+		RuntimeRebuilds: map[string]int32{},
+	}
 	rt, lab, entropy, err := build()
 	if err != nil {
 		rec.Kind = "error"
@@ -480,19 +534,47 @@ func recordRuntimeCase(t testing.TB, key string, build func() (*SlotRuntime, *Pr
 		if err != nil {
 			t.Fatalf("%s: setting %d: %v", key, id, err)
 		}
-		acc := newRunAccumulator()
-		calls := fixtureSnapshotCalls.Load()
-		for range baselineRuntimeSpins {
-			res, err := rt.Spin(ctx, &dto.SpinRequest{
-				UID: "baseline", GameName: gs.GameName, GameId: id,
-				Bet: gs.BetUnits[0], BetMode: 0, BetMult: 1,
-			})
-			if err != nil {
-				t.Fatalf("%s: runtime spin %d: %v", key, id, err)
+		game := fmt.Sprintf("game_%d", id)
+		pool := rt.pools[id]
+		rec.RuntimePools[game+"/built"] = poolStates(t, pool)
+		spins := func(run string, count int) {
+			acc := newRunAccumulator()
+			calls := fixtureSnapshotCalls.Load()
+			for range count {
+				res, err := rt.Spin(ctx, &dto.SpinRequest{
+					UID: "baseline", GameName: gs.GameName, GameId: id,
+					Bet: gs.BetUnits[0], BetMode: 0, BetMult: 1,
+				})
+				if err != nil {
+					t.Fatalf("%s: runtime spin %d: %v", key, id, err)
+				}
+				acc.addSpin(t, res, nil)
 			}
-			acc.addSpin(t, res, nil)
+			rec.RuntimeGames[run] = acc.finish(fixtureSnapshotCalls.Load() - calls)
 		}
-		rec.RuntimeGames[fmt.Sprintf("game_%d", id)] = acc.finish(fixtureSnapshotCalls.Load() - calls)
+		spins(game, baselineRuntimeSpins)
+		rec.RuntimePools[game+"/after_spins"] = poolStates(t, pool)
+		if id == fixtureGameID {
+			// 觸發補機：fixture 遊戲在此倍數下 panic，池子淘汰該機台並以下一個
+			// generation 的派生 seed 補一台新的 production Machine。
+			_, err := rt.Spin(ctx, &dto.SpinRequest{
+				UID: "baseline", GameName: gs.GameName, GameId: id,
+				Bet: gs.BetUnits[0] * fixturePanicBetMult, BetMode: 0, BetMult: fixturePanicBetMult,
+			})
+			if err == nil {
+				t.Fatalf("%s: forced panic spin succeeded", key)
+			}
+			e := baselineErrOf(err, entropy)
+			e.EntropyRead = 0
+			rec.RuntimeErrors[game+"/panic"] = e
+			rec.RuntimePools[game+"/after_rebuild"] = poolStates(t, pool)
+			spins(game+"/after_rebuild", baselineRuntimeSpins/2)
+			rec.RuntimePools[game+"/after_rebuild_spins"] = poolStates(t, pool)
+		}
+		rec.RuntimeRebuilds[game] = pool.rebuild.Load()
+	}
+	if len(rec.RuntimeErrors) == 0 {
+		rec.RuntimeErrors = nil // 與 JSON omitempty 載入後的表示一致
 	}
 	return rec
 }
@@ -610,16 +692,23 @@ func compareConstructionBaseline(t *testing.T, cases []baselineCase) {
 	if b1CasesSHA256 != "" {
 		b1 = loadBaseline(t, "b1", b1CasesSHA256)
 	}
+	// 案例鍵集合必須與基準完全相同：案例產生器若漏掉一列，該案例會默默不再執行，
+	// 因此必須由「基準還有這一列」讓測試失敗。
+	requireSameCaseKeys(t, "B0", cases, b0, true)
+	if b1 != nil {
+		requireSameCaseKeys(t, "B1", cases, b1, false)
+	}
 	for _, c := range cases {
 		t.Run(c.Key, func(t *testing.T) {
 			got := c.record(t)
 			if b1 != nil {
-				// B1 是本決策完成後的基準：同一個案例鍵，完整比對。
+				// B1 是本決策完成後的基準：同一個案例鍵、整筆紀錄完全相同，沒有任何例外
+				// （包含預期為 nil 的 Extend、OmitExtend 旗標與 Snapshot 呼叫次數）。
 				want, ok := b1[c.Key]
 				if !ok {
 					t.Fatalf("B1 缺少案例 %q", c.Key)
 				}
-				compareBaselineRecord(t, c, got, want, got.OmitExtend)
+				requireIdenticalRecord(t, "B1", got, want)
 			}
 			target, expectOmit := c.target()
 			if own, ok := b0[c.Key]; ok && own.Kind == "error" {
@@ -658,6 +747,16 @@ func compareBaselineRecord(t *testing.T, c baselineCase, got, want *baselineReco
 	if !jsonEqual(got.RunErrors, want.RunErrors) {
 		t.Fatalf("執行期錯誤不同：got=%v want=%v", got.RunErrors, want.RunErrors)
 	}
+	if !jsonEqual(got.WorkerStates, want.WorkerStates) {
+		t.Fatal("Simulator worker Machine 的狀態不同")
+	}
+	if !jsonEqual(got.RuntimePools, want.RuntimePools) {
+		t.Fatal("Runtime 池內機台的 slot、generation 或狀態不同")
+	}
+	if !jsonEqual(got.RuntimeErrors, want.RuntimeErrors) || !jsonEqual(got.RuntimeRebuilds, want.RuntimeRebuilds) {
+		t.Fatalf("Runtime 補機流程不同：errors got=%v want=%v rebuilds got=%v want=%v",
+			got.RuntimeErrors, want.RuntimeErrors, got.RuntimeRebuilds, want.RuntimeRebuilds)
+	}
 	compareRuns(t, "runtime", got.RuntimeGames, want.RuntimeGames, c.compareExtend(), false)
 	compareRuns(t, "run", got.Runs, want.Runs, c.compareExtend(), c.fixtureOmitted())
 }
@@ -688,6 +787,68 @@ func compareRuns(t *testing.T, label string, got, want map[string]*baselineRun, 
 		}
 	}
 }
+
+// requireSameCaseKeys 確認目前的案例鍵集合與基準完全相同。B0 另含參考案例
+// （ref/ 前綴），比對時排除。
+func requireSameCaseKeys(t *testing.T, name string, cases []baselineCase, base map[string]*baselineRecord, skipRefs bool) {
+	t.Helper()
+	current := map[string]bool{}
+	for _, c := range cases {
+		current[c.Key] = true
+	}
+	var missing, extra []string
+	for key := range base {
+		if skipRefs && strings.HasPrefix(key, "ref/") {
+			continue
+		}
+		if !current[key] {
+			missing = append(missing, key)
+		}
+	}
+	for key := range current {
+		if _, ok := base[key]; !ok {
+			extra = append(extra, key)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Fatalf("%s 的案例鍵集合不同：基準有但未執行=%v；執行了但基準沒有=%v", name, missing, extra)
+	}
+}
+
+// requireIdenticalRecord 要求整筆紀錄完全相同，並指出第一個不同的欄位。
+func requireIdenticalRecord(t *testing.T, name string, got, want *baselineRecord) {
+	t.Helper()
+	if jsonEqual(got, want) {
+		return
+	}
+	var g, w map[string]json.RawMessage
+	gb, _ := json.Marshal(got)
+	wb, _ := json.Marshal(want)
+	_ = json.Unmarshal(gb, &g)
+	_ = json.Unmarshal(wb, &w)
+	fields := map[string]bool{}
+	for k := range g {
+		fields[k] = true
+	}
+	for k := range w {
+		fields[k] = true
+	}
+	names := make([]string, 0, len(fields))
+	for k := range fields {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if !bytes.Equal(g[k], w[k]) {
+			t.Fatalf("%s 紀錄不同：第一個不同的欄位是 %q", name, k)
+		}
+	}
+	t.Fatalf("%s 紀錄不同", name)
+}
+
+var errBaselineRecordClosed = errors.New("B0 只能在施工步驟 1 的程式上錄製；舊入口已刪除，無法重建參考案例")
 
 func jsonEqual(a, b any) bool {
 	x, err1 := json.Marshal(a)

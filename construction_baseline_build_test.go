@@ -5,10 +5,7 @@
 
 package problab
 
-import (
-	"errors"
-	"fmt"
-)
+import "fmt"
 
 // 本檔把每個 B0 案例鍵對應到「現在」的建構寫法。
 //
@@ -83,8 +80,6 @@ func buildBaselineSimulator(lab *Problab, c baselineCase) (*Simulator, error) {
 	}
 	return nil, fmt.Errorf("unknown simulator entry %q", c.Entry)
 }
-
-var errBaselineRecordClosed = errors.New("B0 只能在施工步驟 1 的 commit 錄製；舊入口已刪除，無法重建參考案例")
 
 // buildBaselineReference 只用於錄製 B0。舊入口刪除後不再能錄製 B0。
 func buildBaselineReference(*Problab, baselineCase) (*Machine, error) {

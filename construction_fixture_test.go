@@ -29,6 +29,9 @@ const (
 	fixtureGameName           = "fixture_noguard"
 	fixtureLogicKey           = spec.LogicKey("fixture_noguard")
 	fixtureBaseYield          = 4
+	// fixturePanicBetMult：以此倍數投注時遊戲刻意 panic，用來觸發 MachinePool 補機
+	// （techspec C6）。其他倍數完全不受影響。
+	fixturePanicBetMult = 7
 )
 
 var fixtureSnapshotCalls atomic.Int64
@@ -83,6 +86,9 @@ func buildFixtureGame(gh *slot.Game) (slot.GameLogic, error) {
 }
 
 func (g *fixtureGame) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
+	if r.BetMult == fixturePanicBetMult {
+		panic("fixture: forced panic for MachinePool rebuild")
+	}
 	sr := gh.StartNewSpin(r)
 	triggered := false
 	for i := range fixtureBaseYield {
