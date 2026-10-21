@@ -93,7 +93,7 @@ const (
 	rngProduction
 )
 
-// newMachineWithSeed 是 Machine 的私有建構核心：所有建構入口（公開入口、
+// newMachine 是 Machine 的私有建構核心：所有建構入口（公開入口、
 // Simulator worker、MachinePool、測試輔助函式）最後都經由它建立 Machine。
 //
 // 它不推導政策：RNG 政策（mode）與 Extend 省略政策（omitExtend）由呼叫者決定，
@@ -105,7 +105,7 @@ const (
 //  3. slot.NewGame(gs, reg, core, omitExtend) 依設定 + registry 建出 Slot 遊戲執行核心
 //  4. 初始化 Machine 需要的 buffers（SpinRequest/SpinResult）
 //  5. 如果啟用優化（UseOptimal = true），使用 Problab 預先解析的共用 Artifact
-func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, omitExtend bool, optimal *optimalrt.Artifact, mode rngMode) (*Machine, error) {
+func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, omitExtend bool, optimal *optimalrt.Artifact, mode rngMode) (*Machine, error) {
 	if mode == rngProduction && omitExtend {
 		return nil, errs.NewFatal("production machine must not omit Extend")
 	}

@@ -73,7 +73,7 @@ func TestOmitExtendVisibleAtBuild(t *testing.T) {
 		}
 
 		seen = nil
-		m, err := newMachineWithSeed(gs, reg, core.Default(), core.EncodeInt64Seed(1), omit, nil, rngDeterministic)
+		m, err := newMachine(gs, reg, core.Default(), core.EncodeInt64Seed(1), omit, nil, rngDeterministic)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestOmitExtendVisibleAtBuild(t *testing.T) {
 func TestProductionMachineMustKeepExtend(t *testing.T) {
 	gs := probeOmitSetting(t)
 	var seen []bool
-	_, err := newMachineWithSeed(gs, probeOmitRegistry(t, &seen), core.Default(), core.EncodeInt64Seed(1), true, nil, rngProduction)
+	_, err := newMachine(gs, probeOmitRegistry(t, &seen), core.Default(), core.EncodeInt64Seed(1), true, nil, rngProduction)
 	if err == nil {
 		t.Fatal("production machine with omitExtend=true was accepted")
 	}
@@ -109,7 +109,7 @@ func TestOmitExtendAppliesToGrownGameModeResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, omit := range []bool{true, false} {
-		m, err := newMachineWithSeed(gs, lab.reg, lab.cf, core.EncodeInt64Seed(7), omit, nil, rngDeterministic)
+		m, err := newMachine(gs, lab.reg, lab.cf, core.EncodeInt64Seed(7), omit, nil, rngDeterministic)
 		if err != nil {
 			t.Fatal(err)
 		}

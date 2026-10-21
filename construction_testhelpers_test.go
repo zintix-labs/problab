@@ -21,7 +21,7 @@ func newProductionMachineForTest(p *Problab, id spec.GID) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(b.gs, p.reg, p.cf, b.seed, false, b.optimal, rngProduction)
+	return newMachine(b.gs, p.reg, p.cf, b.seed, false, b.optimal, rngProduction)
 }
 
 // detReader 是無限長、可重現的 reader：第 n 個 32 位元組區塊為

@@ -161,7 +161,7 @@ func (p *Problab) NewMachine(id spec.GID, cfg MachineConfig) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMachineWithSeed(b.gs, p.reg, p.cf, b.seed, false, b.optimal, rngDeterministic)
+	return newMachine(b.gs, p.reg, p.cf, b.seed, false, b.optimal, rngDeterministic)
 }
 
 // NewSimulator 建立一個 deterministic、省略 Extend 的 Simulator。Simulator 只產生
@@ -171,7 +171,7 @@ func (p *Problab) NewSimulator(id spec.GID, cfg MachineConfig) (*Simulator, erro
 	if err != nil {
 		return nil, err
 	}
-	return newSimulatorWithSeed(b.gs, p.reg, p.cf, b.seed, b.optimal)
+	return newSimulator(b.gs, p.reg, p.cf, b.seed, b.optimal)
 }
 
 func (p *Problab) validCfg(cfg *spec.GameSetting) error {
