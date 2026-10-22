@@ -124,7 +124,7 @@ func nilLike(v any) bool {
 type Options struct {
 	Lab        *problab.Problab
 	Strategies *StrategyRegistry
-	Tags       map[spec.GID]map[string]tag.IsTag
+	Tags       tag.GameTagCatalog
 	Reporter   Reporter
 }
 

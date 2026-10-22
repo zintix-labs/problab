@@ -17,6 +17,7 @@ package playerexp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"runtime"
@@ -89,9 +90,19 @@ func TestTagDiagnosticsDoNotAllocatePerPredicate(t *testing.T) {
 	cg := compiledGroup{factory: fixedFactory(1), initial: 500,
 		events: []compiledEvent{{lo: 0, hi: len(c.Analysis[0].WinBuckets) + 1}}}
 	measure := func(n int) float64 {
-		cg.events[0].tags = make([]tag.IsTag, n)
-		for i := range cg.events[0].tags {
-			cg.events[0].tags[i] = func(*buf.SpinResult) bool { return true }
+		defs := map[string]tag.IsTag{}
+		names := make([]string, n)
+		for i := range names {
+			names[i] = fmt.Sprintf("t%02d", i)
+			defs[names[i]] = func(*buf.SpinResult) bool { return true }
+		}
+		tagger, err := tag.GameTagCatalog{0: defs}.CompileBy(0, names...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cg.tagger = tagger
+		if cg.events[0].want, err = tagger.Want(names...); err != nil {
+			t.Fatal(err)
 		}
 		return testing.AllocsPerRun(100, func() {
 			if _, err := play(context.Background(), m, m.units, cg, c.Analysis[0], 0); err != nil {
@@ -356,8 +367,10 @@ func TestPartialCancellationAndPanics(t *testing.T) {
 			if e == nil {
 				t.Fatal("no error")
 			}
-			if operation == "tag" && !strings.Contains(e.Error(), "event \"any\" tag 0") {
-				t.Fatalf("missing lazy tag diagnostic: %v", e)
+			// Tags are evaluated as one batch per round, so a panic is located at
+			// the batch, not at an event (an accepted change of batch evaluation).
+			if operation == "tag" && !strings.Contains(e.Error(), "spin 1 tags: panic: tag failure") {
+				t.Fatalf("missing batch tag diagnostic: %v", e)
 			}
 			if operation == "cancel" && !errors.Is(e, context.Canceled) {
 				t.Fatal(e)
@@ -401,20 +414,49 @@ func TestEventsAndReproducibility(t *testing.T) {
 	}
 }
 
-func TestOrderedTagsANDAndUnmatched(t *testing.T) {
+// TestBatchTagsANDAndUnmatched: every referenced tag is evaluated once per
+// round in first-occurrence order (no short circuit), then events are matched
+// in order with AND semantics; unmatched rounds are still counted.
+func TestBatchTagsANDAndUnmatched(t *testing.T) {
 	c, o, m := fixture(1)
 	register(t, &o, fixedFactory(1))
-	c.Analysis[0].Events = []EventConfig{{Name: "first", Tags: []string{"a", "b", "never"}}, {Name: "second", Tags: []string{"c"}}}
+	c.Analysis[0].Events = []EventConfig{{Name: "first", Tags: []string{"a", "b", "late"}}, {Name: "second", Tags: []string{"c"}}}
 	var calls []string
 	o.Tags = map[spec.GID]map[string]tag.IsTag{0: {
-		"a":     func(*buf.SpinResult) bool { calls = append(calls, "a"); return true },
-		"b":     func(*buf.SpinResult) bool { calls = append(calls, "b"); return false },
-		"never": func(*buf.SpinResult) bool { t.Fatal("AND did not short circuit"); return false },
-		"c":     func(*buf.SpinResult) bool { calls = append(calls, "c"); return false },
+		"a":    func(*buf.SpinResult) bool { calls = append(calls, "a"); return true },
+		"b":    func(*buf.SpinResult) bool { calls = append(calls, "b"); return false },
+		"late": func(*buf.SpinResult) bool { calls = append(calls, "late"); return true },
+		"c":    func(*buf.SpinResult) bool { calls = append(calls, "c"); return false },
 	}}
 	r, e := runMachine(context.Background(), c, o, m, m.units)
-	if e != nil || !reflect.DeepEqual(calls, []string{"a", "b", "c"}) || r.Groups[0].Unmatched != 1 || r.Groups[0].Events[0].Counts[0] != 1 {
+	if e != nil || !reflect.DeepEqual(calls, []string{"a", "b", "late", "c"}) || r.Groups[0].Unmatched != 1 || r.Groups[0].Events[0].Counts[0] != 1 {
 		t.Fatal(r, calls, e)
+	}
+}
+
+// TestTagsEvaluatedOncePerRound: a duplicated tag is evaluated once, and tags
+// are evaluated even when no event's win range matches the round.
+func TestTagsEvaluatedOncePerRound(t *testing.T) {
+	c, o, m := fixture(1)
+	register(t, &o, fixedFactory(3))
+	c.Analysis[0].Events = []EventConfig{{Name: "never", WinRange: WinRange{Min: 0, Max: new(float64)}, Tags: []string{"x", "x"}}}
+	calls := 0
+	o.Tags = map[spec.GID]map[string]tag.IsTag{0: {"x": func(*buf.SpinResult) bool { calls++; return true }}}
+	r, e := runMachine(context.Background(), c, o, m, m.units)
+	if e != nil || calls != 3 || r.Groups[0].Events[0].Counts[0] != 1 { // the only player hit the event zero times
+		t.Fatal(r, calls, e)
+	}
+}
+
+// TestEmptyTagNameIsRejected: the catalog never resolves an empty name, even
+// when a non-nil predicate is registered under it (an accepted change).
+func TestEmptyTagNameIsRejected(t *testing.T) {
+	c, o, m := fixture(1)
+	register(t, &o, fixedFactory(1))
+	c.Analysis[0].Events = []EventConfig{{Name: "empty", Tags: []string{""}}}
+	o.Tags = map[spec.GID]map[string]tag.IsTag{0: {"": func(*buf.SpinResult) bool { return true }}}
+	if _, e := runMachine(context.Background(), c, o, m, m.units); e == nil || !strings.Contains(e.Error(), `event "empty": tag "" not registered`) {
+		t.Fatal(e)
 	}
 }
 

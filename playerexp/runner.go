@@ -32,14 +32,16 @@ type machine interface {
 }
 type compiledEvent struct {
 	lo, hi int
-	tags   []tag.IsTag
+	want   tag.BitMasks // read-only condition; zero when the event has no tags
 }
 type compiledGroup struct {
 	factory StrategyFactory
 	initial int
 	events  []compiledEvent
+	tagger  *tag.Tagger // nil when no event of the group references a tag
 }
 type session struct {
+	tags      tag.BitMasks // working mask owned by this player
 	state     PlayerState
 	buckets   []BucketStat
 	hits      []uint64
@@ -125,15 +127,35 @@ func compile(c Config, o Options, units []int) ([]compiledGroup, error) {
 			if err != nil {
 				return nil, err
 			}
-			ce := compiledEvent{lo: lo, hi: hi}
-			for _, name := range e.Tags {
-				fn := o.Tags[c.GameID][name]
-				if fn == nil {
+			// Validate this event's references before later events, so errors
+			// keep the event order.
+			if len(e.Tags) > 0 {
+				if _, err := o.Tags.CompileBy(c.GameID, e.Tags...); err != nil {
+					name := e.Tags[0]
+					var ce *tag.CompileError
+					if errors.As(err, &ce) && ce.Kind != tag.GameNotFound {
+						name = ce.Name
+					}
 					return nil, fmt.Errorf("group %q event %q: tag %q not registered; provide Options.Tags", g.Name, e.Name, name)
 				}
-				ce.tags = append(ce.tags, fn)
 			}
-			cg.events = append(cg.events, ce)
+			cg.events = append(cg.events, compiledEvent{lo: lo, hi: hi})
+		}
+		var names []string
+		for _, e := range g.Events {
+			names = append(names, e.Tags...)
+		}
+		if len(names) > 0 {
+			tagger, err := o.Tags.CompileBy(c.GameID, names...)
+			if err != nil {
+				return nil, err
+			}
+			cg.tagger = tagger
+			for j, e := range g.Events {
+				if cg.events[j].want, err = tagger.Want(e.Tags...); err != nil {
+					return nil, err
+				}
+			}
 		}
 		out[i] = cg
 	}
@@ -235,7 +257,6 @@ func emit(r Reporter, e ProgressEvent) (err error) {
 }
 func play(ctx context.Context, m machine, units []int, cg compiledGroup, g GroupConfig, player int) (s session, err error) {
 	op := "factory"
-	eventIndex, tagIndex := 0, 0
 	defer func() {
 		if p := recover(); p != nil {
 			if cause, ok := p.(error); ok {
@@ -245,13 +266,13 @@ func play(ctx context.Context, m machine, units []int, cg compiledGroup, g Group
 			}
 		}
 		if err != nil {
-			if op == "tag" {
-				op = fmt.Sprintf("event %q tag %d", g.Events[eventIndex].Name, tagIndex)
-			}
 			err = fmt.Errorf("group %q player %d spin %d %s: %w", g.Name, player, s.state.Spins, op, err)
 		}
 	}()
 	s = session{state: PlayerState{Balance: cg.initial}, buckets: bucketStats(g.WinBuckets), hits: make([]uint64, len(cg.events))}
+	if cg.tagger != nil {
+		s.tags = cg.tagger.NewMasks()
+	}
 	if err = ctx.Err(); err != nil {
 		return s, err
 	}
@@ -330,28 +351,23 @@ func play(ctx context.Context, m machine, units []int, cg compiledGroup, g Group
 		if !s.buckets[bi].ObservedMax.Defined || x > s.buckets[bi].ObservedMax.Value {
 			s.buckets[bi].ObservedMax = Estimate{x, true}
 		}
+		// Tags are evaluated once per round, then events are matched in order.
+		if cg.tagger != nil {
+			op = "tags"
+			if err = ctx.Err(); err != nil {
+				return s, err
+			}
+			cg.tagger.Tag(s.tags, result)
+			if err = ctx.Err(); err != nil {
+				return s, err
+			}
+		}
 		matched := false
 		for j, ev := range cg.events {
 			if bi < ev.lo || bi >= ev.hi {
 				continue
 			}
-			ok := true
-			for k, fn := range ev.tags {
-				op = "tag"
-				eventIndex, tagIndex = j, k
-				if err = ctx.Err(); err != nil {
-					return s, err
-				}
-				v := fn(result)
-				if err = ctx.Err(); err != nil {
-					return s, err
-				}
-				if !v {
-					ok = false
-					break
-				}
-			}
-			if ok {
+			if cg.tagger == nil || cg.tagger.Match(s.tags, ev.want) {
 				s.hits[j]++
 				matched = true
 				break
