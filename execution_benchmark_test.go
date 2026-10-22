@@ -16,7 +16,7 @@ import (
 // 執行入口的效能基準：Simulator 經由
 // SpinInternal 的吞吐，以及 playerexp 經由 SpinOffline 的吞吐。
 
-func benchmarkMachine(b *testing.B, optimal bool) *Machine {
+func benchmarkLab(b *testing.B, optimal bool) *Problab {
 	b.Helper()
 	opts := []ProblabOption{}
 	cfg := Configs(testManifestConfigFS(b))
@@ -30,7 +30,12 @@ func benchmarkMachine(b *testing.B, optimal bool) *Machine {
 		b.Fatalf("NewAuto: %v", err)
 	}
 	b.Cleanup(func() { _ = lab.Close() })
-	m, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(42)})
+	return lab
+}
+
+func benchmarkMachine(b *testing.B, optimal bool) *Machine {
+	b.Helper()
+	m, err := benchmarkLab(b, optimal).NewMachine(0, MachineConfig{Seed: SeedInt64(42)})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -66,6 +71,27 @@ func BenchmarkSpinOffline(b *testing.B) {
 				if _, err := m.SpinOffline(0, 1); err != nil {
 					b.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+// BenchmarkSimMP 量測 Simulator 兩個 worker 的整體吞吐；每次操作為一轉。
+func BenchmarkSimMP(b *testing.B) {
+	for _, c := range []struct {
+		name    string
+		optimal bool
+	}{{"off", false}, {"manifest", true}} {
+		b.Run(c.name, func(b *testing.B) {
+			s, err := benchmarkLab(b, c.optimal).NewSimulator(0, MachineConfig{Seed: SeedInt64(42)})
+			if err != nil {
+				b.Fatal(err)
+			}
+			rounds := max(b.N/2, 1)
+			b.ReportAllocs()
+			b.ResetTimer()
+			if _, _, err := s.SimMP(0, rounds, 2, false); err != nil {
+				b.Fatal(err)
 			}
 		})
 	}

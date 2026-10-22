@@ -1,0 +1,562 @@
+{
+ "report": {
+  "Config": {
+   "Analysis": [
+    {
+     "CI": "confidence_95",
+     "Name": "flat",
+     "Player": {
+      "InitBet": 300,
+      "Players": 12,
+      "Strategy": "flat"
+     },
+     "WinBuckets": [
+      0,
+      1,
+      2,
+      5
+     ]
+    },
+    {
+     "CI": "confidence_95",
+     "Name": "double",
+     "Player": {
+      "InitBet": 300,
+      "Players": 8,
+      "Strategy": "double"
+     },
+     "WinBuckets": [
+      0,
+      1,
+      2,
+      5
+     ]
+    }
+   ],
+   "GameID": 0,
+   "Seed": 77
+  },
+  "Error": "",
+  "Groups": [
+   {
+    "Buckets": [
+     {
+      "Count": 1670,
+      "IncludeMax": true,
+      "IncludeMin": true,
+      "Max": 0,
+      "Min": 0,
+      "ObservedMax": {
+       "Defined": true,
+       "Value": 0
+      }
+     },
+     {
+      "Count": 416,
+      "IncludeMax": false,
+      "IncludeMin": false,
+      "Max": 1,
+      "Min": 0,
+      "ObservedMax": {
+       "Defined": true
+      }
+     },
+     {
+      "Count": 141,
+      "IncludeMax": false,
+      "IncludeMin": true,
+      "Max": 2,
+      "Min": 1,
+      "ObservedMax": {
+       "Defined": true
+      }
+     },
+     {
+      "Count": 105,
+      "IncludeMax": false,
+      "IncludeMin": true,
+      "Max": 5,
+      "Min": 2,
+      "ObservedMax": {
+       "Defined": true
+      }
+     },
+     {
+      "Count": 68,
+      "IncludeMax": false,
+      "IncludeMin": true,
+      "Min": 5,
+      "ObservedMax": {
+       "Defined": true
+      }
+     }
+    ],
+    "CompleteSpins": 2400,
+    "Completed": 12,
+    "Config": {
+     "CI": "confidence_95",
+     "Name": "flat",
+     "Player": {
+      "InitBet": 300,
+      "Players": 12,
+      "Strategy": "flat"
+     },
+     "WinBuckets": [
+      0,
+      1,
+      2,
+      5
+     ]
+    },
+    "Error": "",
+    "Events": [],
+    "ExitStats": [
+     {
+      "CI": {
+       "Available": true,
+       "Lo": 0,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Defined": true,
+      "Value": 0
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Lo": 0,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Defined": true,
+      "Value": 0
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Hi": 1,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Defined": true,
+      "Value": 1
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Lo": 0,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Defined": true,
+      "Value": 0
+     }
+    ],
+    "Exits": [
+     0,
+     0,
+     12,
+     0
+    ],
+    "InitialBalance": 12000,
+    "MaxSpinReached": 0,
+    "MaxSpinStat": {
+     "CI": {
+      "Available": true,
+      "Lo": 0,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Defined": true,
+     "Value": 0
+    },
+    "PooledRTP": {
+     "Defined": true
+    },
+    "RTP": [
+     {
+      "CI": {
+       "Available": false,
+       "Hi": 0,
+       "Lo": 0,
+       "Method": "binomial_order_statistic",
+       "Reason": "insufficient_samples_for_finite_interval"
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 12
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "binomial_order_statistic",
+       "Reason": ""
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 12
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "binomial_order_statistic",
+       "Reason": ""
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 12
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "binomial_order_statistic",
+       "Reason": ""
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 12
+     },
+     {
+      "CI": {
+       "Available": false,
+       "Hi": 0,
+       "Lo": 0,
+       "Method": "binomial_order_statistic",
+       "Reason": "insufficient_samples_for_finite_interval"
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 12
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Count": 1,
+      "Defined": true,
+      "Metric": "threshold",
+      "N": 12
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Count": 3,
+      "Defined": true,
+      "Metric": "threshold",
+      "N": 12
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Count": 5,
+      "Defined": true,
+      "Metric": "threshold",
+      "N": 12
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Count": 6,
+      "Defined": true,
+      "Metric": "threshold",
+      "N": 12,
+      "Parameter": 1
+     }
+    ],
+    "Started": 12,
+    "Status": "COMPLETED",
+    "TotalBet": 96000,
+    "TotalWin": 88270,
+    "UndefinedRTPPlayers": 0,
+    "Unmatched": 2400
+   },
+   {
+    "Buckets": [
+     {
+      "Count": 1153,
+      "IncludeMax": true,
+      "IncludeMin": true,
+      "Max": 0,
+      "Min": 0,
+      "ObservedMax": {
+       "Defined": true,
+       "Value": 0
+      }
+     },
+     {
+      "Count": 256,
+      "IncludeMax": false,
+      "IncludeMin": false,
+      "Max": 1,
+      "Min": 0,
+      "ObservedMax": {
+       "Defined": true
+      }
+     },
+     {
+      "Count": 73,
+      "IncludeMax": false,
+      "IncludeMin": true,
+      "Max": 2,
+      "Min": 1,
+      "ObservedMax": {
+       "Defined": true
+      }
+     },
+     {
+      "Count": 76,
+      "IncludeMax": false,
+      "IncludeMin": true,
+      "Max": 5,
+      "Min": 2,
+      "ObservedMax": {
+       "Defined": true
+      }
+     },
+     {
+      "Count": 42,
+      "IncludeMax": false,
+      "IncludeMin": true,
+      "Min": 5,
+      "ObservedMax": {
+       "Defined": true,
+       "Value": 175
+      }
+     }
+    ],
+    "CompleteSpins": 1600,
+    "Completed": 8,
+    "Config": {
+     "CI": "confidence_95",
+     "Name": "double",
+     "Player": {
+      "InitBet": 300,
+      "Players": 8,
+      "Strategy": "double"
+     },
+     "WinBuckets": [
+      0,
+      1,
+      2,
+      5
+     ]
+    },
+    "Error": "",
+    "Events": [],
+    "ExitStats": [
+     {
+      "CI": {
+       "Available": true,
+       "Lo": 0,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Defined": true,
+      "Value": 0
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Lo": 0,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Defined": true,
+      "Value": 0
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Hi": 1,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Defined": true,
+      "Value": 1
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Lo": 0,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Defined": true,
+      "Value": 0
+     }
+    ],
+    "Exits": [
+     0,
+     0,
+     8,
+     0
+    ],
+    "InitialBalance": 12000,
+    "MaxSpinReached": 0,
+    "MaxSpinStat": {
+     "CI": {
+      "Available": true,
+      "Lo": 0,
+      "Method": "clopper_pearson",
+      "Reason": ""
+     },
+     "Defined": true,
+     "Value": 0
+    },
+    "PooledRTP": {
+     "Defined": true
+    },
+    "RTP": [
+     {
+      "CI": {
+       "Available": false,
+       "Hi": 0,
+       "Lo": 0,
+       "Method": "binomial_order_statistic",
+       "Reason": "insufficient_samples_for_finite_interval"
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 8
+     },
+     {
+      "CI": {
+       "Available": false,
+       "Hi": 0,
+       "Lo": 0,
+       "Method": "binomial_order_statistic",
+       "Reason": "insufficient_samples_for_finite_interval"
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 8
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "binomial_order_statistic",
+       "Reason": ""
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 8
+     },
+     {
+      "CI": {
+       "Available": false,
+       "Hi": 0,
+       "Lo": 0,
+       "Method": "binomial_order_statistic",
+       "Reason": "insufficient_samples_for_finite_interval"
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 8
+     },
+     {
+      "CI": {
+       "Available": false,
+       "Hi": 0,
+       "Lo": 0,
+       "Method": "binomial_order_statistic",
+       "Reason": "insufficient_samples_for_finite_interval"
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "quantile",
+      "N": 8
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Lo": 0,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Count": 0,
+      "Defined": true,
+      "Metric": "threshold",
+      "N": 8,
+      "Value": 0
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Count": 2,
+      "Defined": true,
+      "Metric": "threshold",
+      "N": 8
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Count": 6,
+      "Defined": true,
+      "Metric": "threshold",
+      "N": 8
+     },
+     {
+      "CI": {
+       "Available": true,
+       "Method": "clopper_pearson",
+       "Reason": ""
+      },
+      "Count": 7,
+      "Defined": true,
+      "Metric": "threshold",
+      "N": 8,
+      "Parameter": 1
+     }
+    ],
+    "Started": 8,
+    "Status": "COMPLETED",
+    "TotalBet": 128000,
+    "TotalWin": 93400,
+    "UndefinedRTPPlayers": 0,
+    "Unmatched": 1600
+   }
+  ],
+  "Modes": [
+   {
+    "BetUnit": 40,
+    "Source": "native"
+   }
+  ],
+  "Status": "COMPLETED"
+ },
+ "call_count": 4064,
+ "call_digest": "07055a70ae56e24c066ef118e93df64e3358db4ad1087e3a0daa1e71caa5d047",
+ "first_calls": [
+  "report|start|0|flat|0|12",
+  "new|flat|12000",
+  "first|flat|{Balance:12000 Spins:0 TotalBet:0 TotalWin:0}|{KeepPlay:true Bet:{BetMode:0 BetMult:1} EndType:0}",
+  "next|flat|{Balance:11960 Spins:1 TotalBet:40 TotalWin:0}|e050a20ee854bc877aeb1a9aa20a335864ec787774b89485a0396060d002dacf|{KeepPlay:true Bet:{BetMode:0 BetMult:1} EndType:0}",
+  "next|flat|{Balance:11920 Spins:2 TotalBet:80 TotalWin:0}|39a5e053783c77a7cee77eb51d31942a4fc228a46d3c2e3e08e811c94623049a|{KeepPlay:true Bet:{BetMode:0 BetMult:1} EndType:0}"
+ ]
+}
