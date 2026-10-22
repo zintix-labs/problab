@@ -325,10 +325,21 @@ func TestHotPathDoesNotAllocate(t *testing.T) {
 }
 
 // BenchmarkTaggerTag measures evaluating every compiled tag for one result.
+// 判斷式固定為交替的 yes／no 兩個函式，讓不同版本的量測使用相同的工作負載。
 func BenchmarkTaggerTag(b *testing.B) {
 	for _, n := range []int{3, 64, 65} {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
-			catalog, names := nTags(n, func(i int) bool { return i%2 == 0 })
+			defs := map[string]IsTag{}
+			names := make([]string, n)
+			for i := range n {
+				names[i] = fmt.Sprintf("t%03d", i)
+				if i%2 == 0 {
+					defs[names[i]] = yes
+				} else {
+					defs[names[i]] = no
+				}
+			}
+			catalog := GameTagCatalog{1: defs}
 			tg, err := catalog.CompileBy(1, names...)
 			if err != nil {
 				b.Fatal(err)
