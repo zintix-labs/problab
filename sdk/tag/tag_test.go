@@ -155,3 +155,36 @@ func TestFrozenBitSetConcurrentReadsAndIndependentRegistrations(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// BenchmarkBitSetTagging measures evaluating every compiled tag for one result.
+func BenchmarkBitSetTagging(b *testing.B) {
+	for _, n := range []int{3, 64} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			defs := map[string]IsTag{}
+			names := make([]string, n)
+			for i := range n {
+				names[i] = fmt.Sprintf("t%02d", i)
+				if i%2 == 0 {
+					defs[names[i]] = yes
+				} else {
+					defs[names[i]] = no
+				}
+			}
+			r, err := NewRegistry(defs)
+			if err != nil {
+				b.Fatal(err)
+			}
+			bs, err := r.BitSet(names...)
+			if err != nil {
+				b.Fatal(err)
+			}
+			sr := &buf.SpinResult{}
+			var sink uint64
+			b.ReportAllocs()
+			for b.Loop() {
+				sink |= bs.Tagging(sr)
+			}
+			_ = sink
+		})
+	}
+}

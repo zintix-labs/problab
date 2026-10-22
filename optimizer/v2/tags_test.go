@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/tag"
 	"github.com/zintix-labs/problab/spec"
@@ -165,5 +166,41 @@ func TestPreparedTagsSurviveSubsequentCollectorConfiguration(t *testing.T) {
 	prepared.tags = nil
 	if _, _, err := prepared.replayTags(); err == nil {
 		t.Fatal("custom tags without runtime context must fail closed")
+	}
+}
+
+// BenchmarkCollectWithTags measures fresh collection with tag-filtered classes;
+// every spin is evaluated against match and mismatch conditions. One op is one spin.
+func BenchmarkCollectWithTags(b *testing.B) {
+	lab, err := demo.NewProbLab()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = lab.Close() }()
+	collector := NewCollector(lab)
+	collector.GameTags = map[spec.GID]map[string]tag.IsTag{1: {
+		"fg":  func(sr *buf.SpinResult) bool { return sr.GameModeCount > 1 },
+		"win": func(sr *buf.SpinResult) bool { return sr.TotalWin > 0 },
+		"big": func(sr *buf.SpinResult) bool { return sr.TotalWin >= 3*sr.Bet },
+	}}
+	collector.WorkingDirectory = b.TempDir()
+	spins := uint64(max(b.N, 1))
+	all := ClosedInterval{0, 1e9}
+	plan := ResolvedPlan{
+		Plan: RunPlan{
+			Target:     Target{Game: spec.GID(1), BetModes: []int{0}},
+			Seed:       Int64Seed(4127483647),
+			Collection: CollectionOptions{Workers: 1, BatchSize: 1 << 20, MaxSpins: spins},
+			Intent:     "bench",
+		},
+		Intent: MathIntent{Classes: []ClassIntent{
+			{Name: "big_fg", Weight: 1, Collect: CollectIntent{Samples: spins, WinRange: all, Tags: TagFilters{Matches: []string{"big", "fg"}}}},
+			{Name: "win_not_fg", Weight: 1, Collect: CollectIntent{Samples: spins, WinRange: all, Tags: TagFilters{Matches: []string{"win"}, Mismatches: []string{"fg"}}}},
+			{Name: "rest", Weight: 1, Collect: CollectIntent{Samples: spins, WinRange: all}},
+		}},
+	}
+	b.ResetTimer()
+	if _, _, err := collector.Collect(context.Background(), plan, 0); err != nil {
+		b.Fatal(err)
 	}
 }

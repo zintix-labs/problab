@@ -26,6 +26,7 @@ import (
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/playerexp"
+	"github.com/zintix-labs/problab/playerexp/strategies"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
@@ -190,6 +191,44 @@ analysis:
 			if !bytes.Equal(raw.State.StartCoreSnap, want) {
 				t.Fatal("stream reset", i)
 			}
+		}
+	}
+}
+
+// BenchmarkRunWithEventTags measures a playerexp run whose events use tags.
+func BenchmarkRunWithEventTags(b *testing.B) {
+	lab, err := demo.NewProbLab()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = lab.Close() }()
+	c, err := playerexp.ParseConfig([]byte(`game_id: 0
+seed: 7
+analysis:
+  - name: g
+    player: {players: 20, init_bet: 300, strategy: flat}
+    win_buckets: [0, 1, 2, 5]
+    events:
+      - {event: fg_big, win_range: [2, null], tags: [fg, big]}
+      - {event: win, win_range: [0, null], tags: [win]}
+      - {event: rest, win_range: [0, null]}
+`))
+	if err != nil {
+		b.Fatal(err)
+	}
+	rg := playerexp.NewStrategyRegistry()
+	if err := rg.Register(0, "flat", strategies.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 200, SatisfiedRatio: 3}); err != nil {
+		b.Fatal(err)
+	}
+	tags := map[spec.GID]map[string]tag.IsTag{0: {
+		"fg":  func(sr *buf.SpinResult) bool { return sr.GameModeCount > 1 },
+		"win": func(sr *buf.SpinResult) bool { return sr.TotalWin > 0 },
+		"big": func(sr *buf.SpinResult) bool { return sr.TotalWin >= 3*sr.Bet },
+	}}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := playerexp.Run(context.Background(), c, playerexp.Options{Lab: lab, Strategies: rg, Tags: tags}); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

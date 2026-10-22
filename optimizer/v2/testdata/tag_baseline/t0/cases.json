@@ -1,0 +1,59 @@
+{
+ "cases": {
+  "bank-replay": {
+   "count": 31,
+   "digest": "36cdd6da352edf5eae1fea64c566a660bab77cce38f9bc56af6e5bf5f4ee1b97",
+   "first": [
+    "spins=200 fresh=200 replay_accepted=21",
+    "diag|CollectionInsufficient|collection stopped after 200 fresh spins with 4 requested samples still missing",
+    "c0|big_fg|2000|0x1.0aaaaaaaaaaabp+06|0|50434801eb96a914a6e54057ad87282fbd97edb5190bdae283b40a41d039b2373e9a2505ea4038c60ec8286d663c7f240000010338"
+   ]
+  },
+  "collect-1w": {
+   "count": 24,
+   "digest": "2763bddabb1e36698a8f92294dbb1f5b5b08f3ade8b30d70223e522987fa58fa",
+   "first": [
+    "spins=600 fresh=600 replay_accepted=0",
+    "diag|CollectionInsufficient|collection stopped after 600 fresh spins with 3 requested samples still missing",
+    "c0|big_fg|2000|0x1.0aaaaaaaaaaabp+06|18|50434801eb96a914a6e54057ad87282fbd97edb5190bdae283b40a41d039b2373e9a2505ea4038c60ec8286d663c7f240000010338"
+   ]
+  },
+  "collect-2w": {
+   "count": 24,
+   "digest": "0f8f6a3ae5322bc48c91e6795665b3a1141bdb2df4d0449f51c023ce09ccee97",
+   "first": [
+    "spins=600 fresh=600 replay_accepted=0",
+    "diag|CollectionInsufficient|collection stopped after 600 fresh spins with 2 requested samples still missing",
+    "c0|big_fg|2000|0x1.0aaaaaaaaaaabp+06|9|50434801eb96a914a6e54057ad87282fbd97edb5190bdae283b40a41d039b2373e9a2505ea4038c60ec8286d663c7f240000010338"
+   ]
+  },
+  "errors": {
+   "count": 8,
+   "digest": "af4a65e824f2179a46d15cd3a04d7a4cd760dd4719b441dab9be53c0a52efdab",
+   "first": [
+    "invalid-def-unreferenced|err=register collection tags: tag \"broken\" predicate is nil|diag=",
+    "empty-name-unreferenced|err=register collection tags: tag name is empty|diag=",
+    "no-game-unreferenced|err=\u003cnil\u003e|diag=CollectionInsufficient:collection stopped after 1 fresh spins with 3 requested samples still missing"
+   ]
+  },
+  "rgs": {
+   "count": 16,
+   "digest": "6af6498f93dcc6f96908f80fe92afb2d1ececc3b0239b7cca6aab727018e16ea",
+   "first": [
+    "row|0|big_fg|7823ccd8c0e3686e27fa65fa20742e2598a4f987ac7d1a0e13770061008d626a|validate=\u003cnil\u003e",
+    "row|1|big_fg|2545d8f5076cb8032fbdfa234e9536bd2d5ca6fdfeb3d43b13db5ee81b99e6b0|validate=\u003cnil\u003e",
+    "row|2|big_fg|753ab8c49c9539c3c1e4f4db09aa98d20c93f21adc9f97e815ecbef91c560623|validate=\u003cnil\u003e"
+   ]
+  },
+  "verify": {
+   "count": 18,
+   "digest": "b990883295edf8ace5ed293ba44ac4f67ffd1c98d63497f908534e931b9399f7",
+   "first": [
+    "collect-calls|1800:30d7fa6cf3819beb7d372604f23dcddb1b3b6be128acf79e851ef9f07888711d",
+    "check|true|replayed_outcomes=15",
+    "sample|big_fg|0x1.0aaaaaaaaaaabp+06|50434801eb96a914a6e54057ad87282fbd97edb5190bdae283b40a41d039b2373e9a2505ea4038c60ec8286d663c7f240000010338"
+   ]
+  }
+ },
+ "schema": "problab-tag-baseline/v1"
+}
