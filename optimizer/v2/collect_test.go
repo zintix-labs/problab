@@ -235,7 +235,7 @@ func TestCollectResolvesGameScopedCustomTag(t *testing.T) {
 		if err := replay.RestoreCore(sample.Snapshot); err != nil {
 			t.Fatalf("restore accepted sample[%d]: %v", index, err)
 		}
-		result := replay.SpinInternal(0)
+		result := replay.SpinUnsafe(problab.SpinInput{BetMode: 0, BetMult: 1})
 		if result == nil || !isZeroWin(result) {
 			t.Fatalf("accepted sample[%d] does not satisfy custom_tag: %+v", index, result)
 		}
@@ -283,7 +283,7 @@ func TestCollectCustomTagCanInspectExtendResult(t *testing.T) {
 	if err := replay.RestoreCore(collected.Classes[0].Samples[0].Snapshot); err != nil {
 		t.Fatalf("restore accepted sample: %v", err)
 	}
-	if result := replay.SpinInternal(0); result == nil || !hasExtend(result) {
+	if result := replay.SpinUnsafe(problab.SpinInput{BetMode: 0, BetMult: 1}); result == nil || !hasExtend(result) {
 		t.Fatalf("accepted sample does not expose ExtendResult: %+v", result)
 	}
 }

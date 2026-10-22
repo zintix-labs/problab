@@ -148,9 +148,9 @@ func TestExplicitSeedAndSimulationPathsRemainDeterministic(t *testing.T) {
 	if _, err := explicit.Spin(testSpinRequest()); err != nil {
 		t.Fatal(err)
 	}
-	explicit.SpinInternal(0)
+	explicit.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1})
 	if factory.reseedCalls.Load() != 0 {
-		t.Fatal("explicit seeded or SpinInternal path called Reseed")
+		t.Fatal("explicit seeded or SpinUnsafe path called Reseed")
 	}
 
 	simulated, err := lab.NewMachine(1, MachineConfig{})

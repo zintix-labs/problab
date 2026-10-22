@@ -186,9 +186,9 @@ analysis:
 			t.Fatal("Run closed borrowed Lab", e)
 		}
 		for i, want := range starts {
-			raw, e := m.SpinOffline(0, 1+i%2)
-			if e != nil || !bytes.Equal(raw.State.StartCoreSnap, want) {
-				t.Fatal("stream reset", i, e)
+			raw := m.SpinUnsafe(problab.SpinInput{BetMode: 0, BetMult: 1 + i%2, CaptureSnapshots: true})
+			if !bytes.Equal(raw.State.StartCoreSnap, want) {
+				t.Fatal("stream reset", i)
 			}
 		}
 	}

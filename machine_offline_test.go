@@ -40,7 +40,7 @@ func (p *offlineScratchPRNG) Snapshot() ([]byte, error) {
 	return p.scratch, err
 }
 
-func TestSpinOfflineReusesOwnedBuffers(t *testing.T) {
+func TestSpinUnsafeCaptureReusesOwnedBuffers(t *testing.T) {
 	for _, optimal := range []bool{false, true} {
 		t.Run(fmt.Sprint(optimal), func(t *testing.T) {
 			lab, err := NewAuto(core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testManifestFS(t, false)))
@@ -59,10 +59,7 @@ func TestSpinOfflineReusesOwnedBuffers(t *testing.T) {
 			m.core.PRNG = p
 			var startPtr, afterPtr *byte
 			for i := 0; i < 5; i++ {
-				r, err := m.SpinOffline(0, 1)
-				if err != nil {
-					t.Fatal(err)
-				}
+				r := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true})
 				start, after := r.State.StartCoreSnap, r.State.AfterCoreSnap
 				if len(start) == 0 || len(after) == 0 {
 					t.Fatal("missing snapshots")
@@ -87,7 +84,7 @@ func TestSpinOfflineReusesOwnedBuffers(t *testing.T) {
 	}
 }
 
-func TestSpinOfflineParity(t *testing.T) {
+func TestSpinUnsafeCaptureParity(t *testing.T) {
 	for _, optimal := range []bool{false, true} {
 		t.Run(map[bool]string{false: "native", true: "optimal"}[optimal], func(t *testing.T) {
 			cfg, err := fs.ReadFile(testManifestConfigFS(t), "game.yaml")
@@ -142,10 +139,7 @@ func TestSpinOfflineParity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				raw, err := b.SpinOffline(mode, mult)
-				if err != nil {
-					t.Fatal(err)
-				}
+				raw := b.SpinUnsafe(SpinInput{BetMode: mode, BetMult: mult, CaptureSnapshots: true})
 				r2, err := dto.NewSpinResultDTO(raw)
 				if err != nil {
 					t.Fatal(err)
@@ -165,26 +159,8 @@ func TestSpinOfflineParity(t *testing.T) {
 	}
 }
 
-func TestSpinOfflineValidationAndOptimalError(t *testing.T) {
-	lab := newOneGameLab(t, core.Default())
-	m, err := lab.NewMachine(1, MachineConfig{Seed: SeedInt64(77)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, _ := m.SnapshotCore()
-	for _, b := range [][2]int{{-1, 1}, {len(m.BetUnits), 1}, {0, 0}, {0, -1}, {0, int(^uint(0) >> 1)}} {
-		if _, err := m.SpinOffline(b[0], b[1]); err == nil {
-			t.Fatalf("accepted %v", b)
-		}
-	}
-	after, _ := m.SnapshotCore()
-	if !bytes.Equal(before, after) {
-		t.Fatal("invalid bet consumed RNG")
-	}
-	m.rngMode = rngProduction
-	if _, err := m.SpinOffline(0, 1); err == nil {
-		t.Fatal("accepted production")
-	}
+// SpinUnsafe 不驗證輸入；抽 seed 失敗屬於內部執行故障：panic，不得靜默改用原始 RNG。
+func TestSpinUnsafeClosedArtifactPanics(t *testing.T) {
 	optLab, err := NewAuto(core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testManifestFS(t, false)))
 	if err != nil {
 		t.Fatal(err)
@@ -196,8 +172,9 @@ func TestSpinOfflineValidationAndOptimalError(t *testing.T) {
 	if err := optLab.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// 抽 seed 失敗屬於內部執行故障：panic，不得靜默改用原始 RNG。
-	if p := catchPanic(func() { _, _ = om.SpinOffline(0, 1) }); p == nil {
-		t.Fatal("closed artifact silently fell back")
+	for _, capture := range []bool{false, true} {
+		if p := catchPanic(func() { om.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: capture}) }); p == nil {
+			t.Fatalf("capture=%t: closed artifact silently fell back", capture)
+		}
 	}
 }

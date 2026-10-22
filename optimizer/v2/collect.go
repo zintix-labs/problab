@@ -564,7 +564,7 @@ func collectWorker(
 			result.err = fmt.Errorf("snapshot raw machine for worker %d before local spin %d: %w", worker, result.spins, err)
 			return result
 		}
-		spin := machine.SpinInternal(betMode)
+		spin := machine.SpinUnsafe(problab.SpinInput{BetMode: betMode, BetMult: 1})
 		if spin == nil || spin.Bet <= 0 || spin.Bet != machine.BetUnits[betMode] || spin.TotalWin < 0 {
 			result.err = fmt.Errorf("raw machine for worker %d returned an invalid spin result at local sequence %d", worker, result.spins)
 			return result

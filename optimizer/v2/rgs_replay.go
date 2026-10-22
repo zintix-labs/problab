@@ -54,7 +54,7 @@ func (r *rgsReplay) spin(ctx context.Context, snapshot []byte, win float64) (*bu
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	result := r.machine.SpinInternal(r.mode)
+	result := r.machine.SpinUnsafe(problab.SpinInput{BetMode: r.mode, BetMult: 1})
 	r.previous = result
 	if err := ctx.Err(); err != nil {
 		return nil, err

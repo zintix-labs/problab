@@ -21,11 +21,11 @@ import (
 	"github.com/zintix-labs/problab/sdk/buf"
 )
 
-// 執行核心：Machine 的三個執行入口（Spin、SpinInternal、SpinOffline）共用這裡的
+// 執行核心：Machine 的執行入口（Spin、SpinUnsafe）共用這裡的
 // 私有請求、RNG 起點準備與隔離機制，以及 spin()。
 //
 // 職責：
-//   - 包裝層（三個入口）：鎖、重設與填入請求、選擇起點來源、production reseed、
+//   - 包裝層（各入口）：鎖、重設與填入請求、選擇起點來源、production reseed、
 //     抽庫、在恢復守衛的保護範圍內呼叫 spin()、擷取快照、轉換結果。
 //   - 起點機制（enterStart 與 rngGuard）：記錄恢復點、Restore 起點、首次 Restore
 //     失敗的清理、收尾還原、雙重故障的原因保留。
@@ -58,14 +58,14 @@ func (m *Machine) resetSpinRequest() {
 	m.reqSnap = m.reqSnap[:0]
 }
 
-// checkUsable 在 RNG 恢復失敗過的 Machine 上 panic。
+// checkUsable 在 RNG 恢復失敗過的 Machine 上 panic；只有 Spin 呼叫它。
 func (m *Machine) checkUsable() {
 	if m.faulted {
 		panic(errMachineFaulted)
 	}
 }
 
-// spin 以 Machine 持有的請求，從目前的 RNG 狀態執行遊戲。它是三個執行入口共用的
+// spin 以 Machine 持有的請求，從目前的 RNG 狀態執行遊戲。它是各執行入口共用的
 // 遊戲呼叫節點：不抽庫、不 Restore、不擷取快照，也不做任何驗證或結果檢查。
 func (m *Machine) spin() *buf.SpinResult {
 	return m.gh.GetResult(&m.spinRequest)

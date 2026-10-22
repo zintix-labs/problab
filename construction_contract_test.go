@@ -115,7 +115,7 @@ func TestOmitExtendAppliesToGrownGameModeResults(t *testing.T) {
 		}
 		before := fixtureSnapshotCalls.Load()
 		for spin := range 20 {
-			sr := m.SpinInternal(0)
+			sr := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1})
 			if len(sr.GameModeList) < fixtureBaseYield {
 				t.Fatalf("spin %d: only %d mode results; pool growth not exercised", spin, len(sr.GameModeList))
 			}

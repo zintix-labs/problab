@@ -56,7 +56,7 @@ func TestDefaultChaCha20OptimalArtifact(t *testing.T) {
 	if machine.optimal == nil || machine.optimal.Backend() != "memory" {
 		t.Fatal("fixture did not load its manifest memory artifact")
 	}
-	if result := machine.SpinInternal(0); result == nil {
+	if result := machine.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}); result == nil {
 		t.Fatal("fixture optimal spin returned nil")
 	}
 }
@@ -76,7 +76,7 @@ func TestExplicitPCG64LoadsLegacyCompatibleArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := machine.SpinInternal(0); result == nil {
+	if result := machine.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}); result == nil {
 		t.Fatal("PCG64 artifact replay returned nil")
 	}
 }
@@ -116,11 +116,11 @@ func TestLegacyOptimalDeterministic(t *testing.T) {
 		t.Fatalf("NewMachine m2: %v", err)
 	}
 
-	r1, err := json.Marshal(m1.SpinInternal(0))
+	r1, err := json.Marshal(m1.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
 	if err != nil {
 		t.Fatalf("marshal result 1: %v", err)
 	}
-	r2, err := json.Marshal(m2.SpinInternal(0))
+	r2, err := json.Marshal(m2.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
 	if err != nil {
 		t.Fatalf("marshal result 2: %v", err)
 	}
@@ -280,11 +280,11 @@ func TestManifestOptimalMatchesLegacyRuntime(t *testing.T) {
 	}
 
 	for i := 0; i < 100; i++ {
-		want, err := json.Marshal(legacy.SpinInternal(0))
+		want, err := json.Marshal(legacy.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
 		if err != nil {
 			t.Fatalf("marshal legacy result: %v", err)
 		}
-		got, err := json.Marshal(binaryMachine.SpinInternal(0))
+		got, err := json.Marshal(binaryMachine.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
 		if err != nil {
 			t.Fatalf("marshal manifest result: %v", err)
 		}

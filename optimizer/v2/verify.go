@@ -316,7 +316,7 @@ func replayMaterializedSnapshots(
 				"every seed-bank entry restores and reproduces its modeled payout, Class predicate, and atomic bucket",
 			), nil
 		}
-		result := machine.SpinInternal(mode.BetMode)
+		result := machine.SpinUnsafe(problab.SpinInput{BetMode: mode.BetMode, BetMult: 1})
 		actualBet := 0
 		if result != nil {
 			actualBet = result.Bet

@@ -178,8 +178,22 @@ type entry struct {
 
 var seedEntries = []entry{
 	{"Spin", func(m *Machine) error { _, err := m.Spin(spinReq(m)); return err }},
-	{"SpinInternal", func(m *Machine) error { m.SpinInternal(0); return nil }},
-	{"SpinOffline", func(m *Machine) error { _, err := m.SpinOffline(0, 1); return err }},
+	{"SpinUnsafe", func(m *Machine) error { m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}); return nil }},
+	{"SpinUnsafe/capture", func(m *Machine) error {
+		m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true})
+		return nil
+	}},
+}
+
+// unsafeInput 回傳 SpinUnsafe 入口使用的輸入；其他入口回傳 false。
+func unsafeInput(name string) (SpinInput, bool) {
+	switch name {
+	case "SpinUnsafe":
+		return SpinInput{BetMode: 0, BetMult: 1}, true
+	case "SpinUnsafe/capture":
+		return SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true}, true
+	}
+	return SpinInput{}, false
 }
 
 // externalEntry 以外部快照呼叫 Spin；快照取自同一台機台建立時的狀態。
@@ -210,11 +224,18 @@ func requireCore(t testing.TB, m *Machine, want []byte) {
 	}
 }
 
-// requireFaulted 斷言機台失效：任何入口都立即 panic，且不呼叫遊戲（F16）。
+// requireFaulted 確認 RNG 恢復失敗後機台標記為失效，且 Spin 立即 panic、不呼叫遊戲。
+// SpinUnsafe 不檢查失效狀態：發生內部執行 panic 後由呼叫端棄用機台。
 func requireFaulted(t testing.TB, m *Machine, logic *countingLogic) {
 	t.Helper()
+	if !m.faulted {
+		t.Fatal("machine was not marked faulted")
+	}
 	before := logic.calls
 	for _, e := range seedEntries {
+		if _, isUnsafe := unsafeInput(e.name); isUnsafe {
+			continue
+		}
 		p := catchPanic(func() { _ = e.call(m) })
 		if !errors.Is(asError(p), errMachineFaulted) {
 			t.Fatalf("%s on a faulted machine: panic=%v", e.name, p)
@@ -249,14 +270,8 @@ func TestScratchSnapshotPRNGMatchesPlainResults(t *testing.T) {
 					a, _ = json.Marshal(ra)
 					b, _ = json.Marshal(rb)
 				} else {
-					ra, err := plain.SpinOffline(0, 1)
-					if err != nil {
-						t.Fatal(err)
-					}
-					rb, err := scratch.SpinOffline(0, 1)
-					if err != nil {
-						t.Fatal(err)
-					}
+					ra := plain.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true})
+					rb := scratch.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true})
 					// 改寫 PRNG 的暫存緩衝區，不得影響已回傳的快照。
 					for j := range p.scratch {
 						p.scratch[j] ^= 0xff
@@ -529,7 +544,7 @@ func TestExecutionAndFinishFaults(t *testing.T) {
 					requireFaulted(t, m, logic)
 				})
 			}
-			if e.name != "SpinInternal" {
+			if e.name != "SpinUnsafe" { // 不擷取快照的 SpinUnsafe 沒有結束快照
 				t.Run("F11 after snapshot fails", func(t *testing.T) {
 					m := faultMachine(t, true)
 					p := injectFaults(m)
@@ -542,16 +557,21 @@ func TestExecutionAndFinishFaults(t *testing.T) {
 				m := faultMachine(t, true)
 				withCountingLogic(t, m).nilRes = true
 				var got *buf.SpinResult
+				in, isUnsafe := unsafeInput(e.name)
 				p := catchPanic(func() {
-					if e.name == "SpinInternal" {
-						got = m.SpinInternal(0)
+					if isUnsafe {
+						got = m.SpinUnsafe(in)
 						return
 					}
 					_ = e.call(m)
 				})
-				if e.name == "SpinInternal" {
+				if isUnsafe {
+					// SpinUnsafe 原樣回傳 nil，兩種快照模式都不觸碰 State。
 					if p != nil || got != nil {
-						t.Fatalf("SpinInternal: panic=%v result=%v, want nil result without panic", p, got)
+						t.Fatalf("%s: panic=%v result=%v, want nil result without panic", e.name, p, got)
+					}
+					if fs := m.fallbackState; fs.StartCoreSnap != nil || fs.AfterCoreSnap != nil || fs.Checkpoint != nil {
+						t.Fatalf("%s: nil result wrote the fallback State", e.name)
 					}
 				} else if p == nil {
 					t.Fatal("nil game result did not panic")
@@ -584,9 +604,6 @@ func TestExpectedInputErrorsDoNotRunTheGame(t *testing.T) {
 	bad.GameId++
 	if _, err := m.Spin(bad); err == nil {
 		t.Fatal("Spin accepted a wrong game id")
-	}
-	if _, err := m.SpinOffline(0, 0); err == nil {
-		t.Fatal("SpinOffline accepted betMult=0")
 	}
 	requireCore(t, m, before)
 	if logic.calls != 0 {

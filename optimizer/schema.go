@@ -208,7 +208,7 @@ func (t *Tuner) collect(gid spec.GID, betmode int, lab *problab.Problab, seed []
 
 	for range maxMine {
 		snap, _ := m.SnapshotCore()
-		sr := m.SpinInternal(betmode)
+		sr := m.SpinUnsafe(problab.SpinInput{BetMode: betmode, BetMult: 1})
 		label := t.tager.Tagging(sr)
 		win := float64(sr.TotalWin) / float64(sr.Bet)
 		for _, c := range t.Classes {

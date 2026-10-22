@@ -27,7 +27,7 @@ import (
 )
 
 type machine interface {
-	SpinOffline(int, int) (*buf.SpinResult, error)
+	SpinUnsafe(problab.SpinInput) *buf.SpinResult
 	UsesOptimal() bool
 }
 type compiledEvent struct {
@@ -293,14 +293,11 @@ func play(ctx context.Context, m machine, units []int, cg compiledGroup, g Group
 			s.end = Bust
 			return s, nil
 		}
-		op = "SpinOffline"
+		op = "SpinUnsafe"
 		if err = ctx.Err(); err != nil {
 			return s, err
 		}
-		result, e := m.SpinOffline(b.BetMode, b.BetMult)
-		if e != nil {
-			return s, e
-		}
+		result := m.SpinUnsafe(problab.SpinInput{BetMode: b.BetMode, BetMult: b.BetMult, CaptureSnapshots: true})
 		if err = ctx.Err(); err != nil {
 			return s, err
 		}
