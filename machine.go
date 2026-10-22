@@ -81,7 +81,7 @@ type Machine struct {
 	startBuf      []byte          // 不指定起點時擷取的起始快照
 	afterBuf      []byte          // 結束快照
 	fallbackState buf.SpinState   // 遊戲回傳的結果 State 為 nil 時使用
-	faulted       bool            // RNG 恢復失敗後為 true；之後任何執行入口都會 panic
+	faulted       bool            // RNG 恢復失敗後為 true；Spin 會主動檢查並 panic，SpinUnsafe 不檢查（由呼叫端棄用機台）
 
 	gameName string              // 遊戲名稱（來自 GameSetting.GameName，主要用於觀測/日誌）
 	gameId   spec.GID            // 遊戲 ID（Catalog 內唯一；用於路由與查表）
@@ -249,37 +249,48 @@ type SpinInput struct {
 // 狀態）與結束快照寫進結果的 State，快照借用 Machine 的緩衝區；為 false 時不擷取，
 // 並清除結果 State 中前一次留下的 RNG 快照（不碰遊戲輸出的 Checkpoint）。
 //
-// 遊戲回傳 nil 時原樣回傳，不觸碰 State；RNG 照常還原。內部執行故障以 panic 呈現。
+// 遊戲回傳 nil 時原樣回傳，不觸碰 State；RNG 照常還原。
+//
+// 內部執行故障以 panic 呈現。發生任何內部執行 panic 後，該 Machine 必須棄用：
+// SpinUnsafe 不檢查 Machine 是否曾經 RNG 恢復失敗，接住 panic 後繼續使用屬於違反契約。
 func (m *Machine) SpinUnsafe(in SpinInput) *buf.SpinResult {
-	m.checkUsable()
-	m.resetSpinRequest()
-	q := &m.spinRequest
-	q.BetMode, q.BetMult, q.Bet = in.BetMode, in.BetMult, m.BetUnits[in.BetMode]*in.BetMult
-
-	kind, start := startNone, []byte(nil)
-	var startSnap []byte
+	// 一次寫入整份請求。reqStart、reqSnap 只經由 StartState 交給遊戲，這裡的
+	// StartState 為 nil，所以不必重設；Spin 每次開始時會自行重設它們。
+	m.spinRequest = buf.SpinRequest{
+		GameId: m.gameId, GameName: m.gameName,
+		Bet: m.BetUnits[in.BetMode] * in.BetMult, BetMode: in.BetMode, BetMult: in.BetMult,
+	}
 	if m.optimal != nil {
-		start = m.pickSeed(in.BetMode, &m.seedBuf)
-		kind = startSeed
-	} else if in.CaptureSnapshots {
+		return m.spinUnsafeSeeded(in)
+	}
+	// 不指定起點：沒有恢復點，不需要恢復守衛。
+	var startSnap []byte
+	if in.CaptureSnapshots {
 		startSnap = m.snapshotInto(&m.startBuf, "start state")
 	}
-	g, _ := m.enterStart(kind, start) // startSeed 不會回傳格式錯誤
-	defer g.finish()
+	return m.finishUnsafe(m.spin(), in.CaptureSnapshots, startSnap)
+}
 
-	result := m.spin()
+// spinUnsafeSeeded 是 SpinUnsafe 的抽庫路徑：抽出的 seed 即起始快照，執行後由恢復守衛
+// 還原選取狀態。
+func (m *Machine) spinUnsafeSeeded(in SpinInput) *buf.SpinResult {
+	start := m.pickSeed(in.BetMode, &m.seedBuf)
+	g, _ := m.enterStart(startSeed, start) // startSeed 不會回傳格式錯誤
+	defer g.finish()
+	return m.finishUnsafe(m.spin(), in.CaptureSnapshots, start)
+}
+
+// finishUnsafe 依 capture 擷取或清除結果的 RNG 快照；必須在恢復守衛還原之前執行。
+func (m *Machine) finishUnsafe(result *buf.SpinResult, capture bool, startSnap []byte) *buf.SpinResult {
 	if result == nil {
 		return nil
 	}
-	if !in.CaptureSnapshots {
+	if !capture {
 		if result.State != nil {
 			result.State.StartCoreSnap = nil
 			result.State.AfterCoreSnap = nil
 		}
 		return result
-	}
-	if kind != startNone {
-		startSnap = start
 	}
 	afterSnap := m.snapshotInto(&m.afterBuf, "after state")
 	if result.State == nil {

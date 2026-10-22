@@ -58,7 +58,7 @@ func (m *Machine) resetSpinRequest() {
 	m.reqSnap = m.reqSnap[:0]
 }
 
-// checkUsable 在 RNG 恢復失敗過的 Machine 上 panic。
+// checkUsable 在 RNG 恢復失敗過的 Machine 上 panic；只有 Spin 呼叫它。
 func (m *Machine) checkUsable() {
 	if m.faulted {
 		panic(errMachineFaulted)

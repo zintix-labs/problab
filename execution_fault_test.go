@@ -224,11 +224,18 @@ func requireCore(t testing.TB, m *Machine, want []byte) {
 	}
 }
 
-// requireFaulted 斷言機台失效：任何入口都立即 panic，且不呼叫遊戲（F16）。
+// requireFaulted 確認 RNG 恢復失敗後機台標記為失效，且 Spin 立即 panic、不呼叫遊戲。
+// SpinUnsafe 不檢查失效狀態：發生內部執行 panic 後由呼叫端棄用機台。
 func requireFaulted(t testing.TB, m *Machine, logic *countingLogic) {
 	t.Helper()
+	if !m.faulted {
+		t.Fatal("machine was not marked faulted")
+	}
 	before := logic.calls
 	for _, e := range seedEntries {
+		if _, isUnsafe := unsafeInput(e.name); isUnsafe {
+			continue
+		}
 		p := catchPanic(func() { _ = e.call(m) })
 		if !errors.Is(asError(p), errMachineFaulted) {
 			t.Fatalf("%s on a faulted machine: panic=%v", e.name, p)
