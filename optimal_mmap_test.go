@@ -61,11 +61,11 @@ func TestMMapOptimalMatchesMemoryAndIsShared(t *testing.T) {
 	}
 
 	for i := 0; i < 100; i++ {
-		want, err := json.Marshal(memoryMachine.SpinInternal(0))
+		want, err := json.Marshal(memoryMachine.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
 		if err != nil {
 			t.Fatalf("marshal memory result: %v", err)
 		}
-		got, err := json.Marshal(mmapMachine1.SpinInternal(0))
+		got, err := json.Marshal(mmapMachine1.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
 		if err != nil {
 			t.Fatalf("marshal mmap result: %v", err)
 		}

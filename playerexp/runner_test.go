@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/tag"
 	"github.com/zintix-labs/problab/spec"
@@ -44,16 +45,17 @@ func (s *strategyFuncs) Next(p PlayerState, r *buf.SpinResult) Decision { return
 type fakeMachine struct {
 	units []int
 	spins int
-	fn    func(int, int, int) (*buf.SpinResult, error)
+	fn    func(int, int, int) *buf.SpinResult
 }
 
 func (m *fakeMachine) UsesOptimal() bool { return false }
-func (m *fakeMachine) SpinOffline(mode, mult int) (*buf.SpinResult, error) {
+func (m *fakeMachine) SpinUnsafe(in problab.SpinInput) *buf.SpinResult {
 	m.spins++
+	mode, mult := in.BetMode, in.BetMult
 	if m.fn != nil {
 		return m.fn(mode, mult, m.spins)
 	}
-	return &buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: m.units[mode] * mult, IsGameEnd: true}, nil
+	return &buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: m.units[mode] * mult, IsGameEnd: true}
 }
 
 type reporterFunc func(ProgressEvent)
@@ -122,12 +124,12 @@ func TestStateSettlementAndDynamicRTP(t *testing.T) {
 			return Decision{EndType: Dissatisfied}
 		}}
 	}))
-	m.fn = func(mode, mult, n int) (*buf.SpinResult, error) {
+	m.fn = func(mode, mult, n int) *buf.SpinResult {
 		win := 30
 		if n == 2 {
 			win = 4
 		}
-		return &buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: win, IsGameEnd: true}, nil
+		return &buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: win, IsGameEnd: true}
 	}
 	r, err := runMachine(context.Background(), c, o, m, m.units)
 	if err != nil {
@@ -265,8 +267,8 @@ func TestIncompleteResultsAndCheckpoint(t *testing.T) {
 	for i, cp := range []any{nil, ptr, struct{}{}, map[string]int{}, []int{}, "null"} {
 		c, o, m := fixture(1)
 		register(t, &o, fixedFactory(1))
-		m.fn = func(mode, mult, n int) (*buf.SpinResult, error) {
-			return &buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true, State: &buf.SpinState{Checkpoint: cp}}, nil
+		m.fn = func(mode, mult, n int) *buf.SpinResult {
+			return &buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true, State: &buf.SpinState{Checkpoint: cp}}
 		}
 		r, e := runMachine(context.Background(), c, o, m, m.units)
 		if (e != nil) != (i >= 2) {
@@ -279,10 +281,22 @@ func TestIncompleteResultsAndCheckpoint(t *testing.T) {
 	for _, r := range []*buf.SpinResult{nil, {Bet: 1, BetMult: 1}, {Bet: 2, BetMult: 1, IsGameEnd: true}, {Bet: 1, BetMult: 1, IsGameEnd: true, TotalWin: -1}} {
 		c, o, m := fixture(1)
 		register(t, &o, fixedFactory(1))
-		m.fn = func(int, int, int) (*buf.SpinResult, error) { return r, nil }
+		m.fn = func(int, int, int) *buf.SpinResult { return r }
 		if _, e := runMachine(context.Background(), c, o, m, m.units); e == nil {
 			t.Fatal("accepted invalid result")
 		}
+	}
+}
+
+// A nil game result is returned unchanged by SpinUnsafe; the session reports it
+// through the existing result check, labelled with the SpinUnsafe operation.
+func TestNilGameResultReportsSpinUnsafe(t *testing.T) {
+	c, o, m := fixture(1)
+	register(t, &o, fixedFactory(1))
+	m.fn = func(int, int, int) *buf.SpinResult { return nil }
+	_, e := runMachine(context.Background(), c, o, m, m.units)
+	if e == nil || !strings.Contains(e.Error(), "SpinUnsafe: requires complete spin result") {
+		t.Fatalf("error=%v", e)
 	}
 }
 
@@ -325,11 +339,11 @@ func TestPartialCancellationAndPanics(t *testing.T) {
 				}
 				return true
 			}}}
-			m.fn = func(mode, mult, n int) (*buf.SpinResult, error) {
+			m.fn = func(mode, mult, n int) *buf.SpinResult {
 				if created == 2 && operation == "game" {
 					panic("game failure")
 				}
-				return &buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true}, nil
+				return &buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true}
 			}
 			var events []ProgressEvent
 			o.Reporter = reporterFunc(func(e ProgressEvent) {
@@ -438,11 +452,11 @@ func TestCancellationBoundariesAndNilStrategies(t *testing.T) {
 					return Decision{}
 				}}
 			}))
-			m.fn = func(int, int, int) (*buf.SpinResult, error) {
+			m.fn = func(int, int, int) *buf.SpinResult {
 				if where == "spin" {
 					cancel()
 				}
-				return &buf.SpinResult{IsGameEnd: true, Bet: 1, BetMult: 1}, nil
+				return &buf.SpinResult{IsGameEnd: true, Bet: 1, BetMult: 1}
 			}
 			c.Analysis[0].Events[0].Tags = []string{"x"}
 			o.Tags = map[spec.GID]map[string]tag.IsTag{0: {"x": func(*buf.SpinResult) bool {

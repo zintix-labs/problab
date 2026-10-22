@@ -41,7 +41,9 @@ const (
 // playerexp runs players sequentially on the Run goroutine, so no lock is needed.
 type spinCallLog struct{ lines []string }
 
-func (l *spinCallLog) add(format string, a ...any) { l.lines = append(l.lines, fmt.Sprintf(format, a...)) }
+func (l *spinCallLog) add(format string, a ...any) {
+	l.lines = append(l.lines, fmt.Sprintf(format, a...))
+}
 
 func (l *spinCallLog) Report(e playerexp.ProgressEvent) {
 	l.add("report|%s|%d|%s|%d|%d", e.Kind, e.GroupIndex, e.GroupName, e.Completed, e.Total)
@@ -88,9 +90,9 @@ func (s spinRecordingStrategy) Next(st playerexp.PlayerState, r *buf.SpinResult)
 }
 
 type spinPlayerexpRecord struct {
-	Report     any    `json:"report"`
-	CallCount  int    `json:"call_count"`
-	CallDigest string `json:"call_digest"`
+	Report     any      `json:"report"`
+	CallCount  int      `json:"call_count"`
+	CallDigest string   `json:"call_digest"`
 	FirstCalls []string `json:"first_calls"`
 }
 

@@ -55,14 +55,14 @@ func TestUnoptimizedMachinePreservesReplayIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SnapshotCore: %v", err)
 	}
-	first, err := json.Marshal(raw.SpinInternal(0))
+	first, err := json.Marshal(raw.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
 	if err != nil {
 		t.Fatalf("marshal first raw spin: %v", err)
 	}
 	if err := raw.RestoreCore(before); err != nil {
 		t.Fatalf("RestoreCore: %v", err)
 	}
-	second, err := json.Marshal(raw.SpinInternal(0))
+	second, err := json.Marshal(raw.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
 	if err != nil {
 		t.Fatalf("marshal replayed raw spin: %v", err)
 	}

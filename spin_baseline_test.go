@@ -320,7 +320,7 @@ func spinInternalRun(t testing.TB, env spinEnv, id spec.GID) *spinRun {
 	for mode := range probe.BetUnits {
 		m := env.machine(t, id)
 		for range spinBaselineSpins {
-			acc.addBuf(t, m, m.SpinInternal(mode), nil)
+			acc.addBuf(t, m, m.SpinUnsafe(SpinInput{BetMode: mode, BetMult: 1}), nil)
 		}
 	}
 	return acc.finish()
@@ -334,7 +334,7 @@ func spinOfflineRun(t testing.TB, env spinEnv, id spec.GID) *spinRun {
 		for _, mult := range []int{1, 3} {
 			m := env.machine(t, id)
 			for range spinBaselineSpins {
-				sr, err := m.SpinOffline(mode, mult)
+				sr, err := m.SpinUnsafe(SpinInput{BetMode: mode, BetMult: mult, CaptureSnapshots: true}), error(nil)
 				acc.addBuf(t, m, sr, err)
 			}
 		}
@@ -354,23 +354,23 @@ func spinMixedRun(t testing.TB, env spinEnv, id spec.GID) *spinRun {
 	}
 	s1 := first.State.StartCoreSnapB64U
 	steps := []func(){
-		func() { acc.addBuf(t, m, m.SpinInternal(0), nil) },
-		func() { sr, e := m.SpinOffline(0, 2); acc.addBuf(t, m, sr, e) },
+		func() { acc.addBuf(t, m, m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}), nil) },
+		func() { sr, e := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 2, CaptureSnapshots: true}), error(nil); acc.addBuf(t, m, sr, e) },
 		func() { r, e := m.Spin(spinReplayRequest(m, 0, s1)); acc.addDTO(t, m, r, e) },
-		func() { acc.addBuf(t, m, m.SpinInternal(0), nil) },
-		func() { sr, e := m.SpinOffline(0, 1); acc.addBuf(t, m, sr, e) },
+		func() { acc.addBuf(t, m, m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}), nil) },
+		func() { sr, e := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true}), error(nil); acc.addBuf(t, m, sr, e) },
 		func() { r, e := m.Spin(spinRequest(m, 0, 1)); acc.addDTO(t, m, r, e) },
 		func() { r, e := m.Spin(spinReplayRequest(m, 0, s1)); acc.addDTO(t, m, r, e) },
-		func() { sr, e := m.SpinOffline(0, 3); acc.addBuf(t, m, sr, e) },
-		func() { acc.addBuf(t, m, m.SpinInternal(0), nil) },
+		func() { sr, e := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 3, CaptureSnapshots: true}), error(nil); acc.addBuf(t, m, sr, e) },
+		func() { acc.addBuf(t, m, m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}), nil) },
 		func() { r, e := m.Spin(spinRequest(m, 0, 1)); acc.addDTO(t, m, r, e) },
-		func() { acc.addBuf(t, m, m.SpinInternal(0), nil) },
+		func() { acc.addBuf(t, m, m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}), nil) },
 	}
 	if len(m.BetUnits) > 1 {
 		steps = append(steps,
 			func() { r, e := m.Spin(spinRequest(m, 1, 1)); acc.addDTO(t, m, r, e) },
-			func() { acc.addBuf(t, m, m.SpinInternal(1), nil) },
-			func() { sr, e := m.SpinOffline(1, 2); acc.addBuf(t, m, sr, e) },
+			func() { acc.addBuf(t, m, m.SpinUnsafe(SpinInput{BetMode: 1, BetMult: 1}), nil) },
+			func() { sr, e := m.SpinUnsafe(SpinInput{BetMode: 1, BetMult: 2, CaptureSnapshots: true}), error(nil); acc.addBuf(t, m, sr, e) },
 		)
 	}
 	for _, step := range steps {
@@ -387,10 +387,10 @@ func spinOfflineStaleRun(t testing.TB, env spinEnv, id spec.GID) *spinRun {
 	for _, step := range []string{"off1", "int", "off2", "int", "int", "off1", "off3", "int"} {
 		switch step {
 		case "int":
-			acc.addBuf(t, m, m.SpinInternal(0), nil)
+			acc.addBuf(t, m, m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}), nil)
 		default:
 			mult := int(step[3] - '0')
-			sr, err := m.SpinOffline(0, mult)
+			sr, err := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: mult, CaptureSnapshots: true}), error(nil)
 			acc.addBuf(t, m, sr, err)
 		}
 	}

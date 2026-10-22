@@ -128,12 +128,6 @@ func probeManifestLab(t testing.TB, log *[]probeRequest) *Problab {
 	return lab
 }
 
-// internalIdentity 是 SpinInternal 交給遊戲的 GameId／GameName。
-//
-// 執行核心收斂前，SpinInternal 交給遊戲的是零值；收斂後改為機台本身的值。收斂前後
-// 本測試只修改了這一個函式。
-func internalIdentity(m *Machine) (spec.GID, string) { return m.gameId, m.gameName }
-
 func probeLast(t testing.TB, log []probeRequest) probeRequest {
 	t.Helper()
 	if len(log) == 0 {
@@ -157,7 +151,6 @@ func TestGameReceivesRequestPerEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	unit := m.BetUnits[0]
-	internalID, internalName := internalIdentity(m)
 
 	// 1. Spin 不帶快照：遊戲收到 DTO 的值，StartState 為 nil。
 	plain := &dto.SpinRequest{UID: "u1", GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1}
@@ -188,25 +181,23 @@ func TestGameReceivesRequestPerEntry(t *testing.T) {
 		HasStart: true, StartSnap: snap, Checkpoint: probeCheckpoint{Stage: 3},
 	})
 
-	// 3. 緊接 SpinInternal：不帶上一段的任何殘留。
-	m.SpinInternal(0)
-	requireProbe(t, "internal-after-replay", probeLast(t, log), probeRequest{
-		GameName: internalName, GameId: internalID, Bet: unit, BetMode: 0, BetMult: 1,
+	// 3. 緊接不擷取快照的 SpinUnsafe：不帶上一段的任何殘留。
+	m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1})
+	requireProbe(t, "unsafe-after-replay", probeLast(t, log), probeRequest{
+		GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1,
 	})
 
-	// 4. 再帶外部快照與 checkpoint 的 Spin，緊接 SpinOffline：同樣不帶殘留。
+	// 4. 再帶外部快照與 checkpoint 的 Spin，緊接擷取快照、倍數 3 的 SpinUnsafe：同樣不帶殘留。
 	if _, err := m.Spin(replay); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.SpinOffline(0, 3); err != nil {
-		t.Fatal(err)
-	}
-	requireProbe(t, "offline-after-replay", probeLast(t, log), probeRequest{
+	m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 3, CaptureSnapshots: true})
+	requireProbe(t, "unsafe-capture-after-replay", probeLast(t, log), probeRequest{
 		GameName: m.gameName, GameId: m.gameId, Bet: unit * 3, BetMode: 0, BetMult: 3,
 	})
 
-	// 5. SpinInternal 與 SpinOffline 交錯後再 Spin：Spin 不帶離線入口的殘留。
-	m.SpinInternal(0)
+	// 5. 兩種 SpinUnsafe 交錯後再 Spin：Spin 不帶本機入口的殘留。
+	m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1})
 	if _, err := m.Spin(plain); err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +217,6 @@ func TestGameReceivesOptimalStartPerEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	unit := m.BetUnits[0]
-	internalID, internalName := internalIdentity(m)
 
 	// Spin 抽庫：抽出的 seed 填進 StartState 交給遊戲，checkpoint 為 nil。
 	res, err := m.Spin(&dto.SpinRequest{UID: "u1", GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1})
@@ -243,20 +233,17 @@ func TestGameReceivesOptimalStartPerEntry(t *testing.T) {
 		HasStart: true, StartSnap: seed,
 	})
 
-	// SpinInternal 與 SpinOffline 抽庫：不把 seed 交給遊戲。
-	m.SpinInternal(0)
-	requireProbe(t, "internal-optimal", probeLast(t, log), probeRequest{
-		GameName: internalName, GameId: internalID, Bet: unit, BetMode: 0, BetMult: 1,
+	// SpinUnsafe 兩種快照模式抽庫：不把 seed 交給遊戲。
+	m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1})
+	requireProbe(t, "unsafe-optimal", probeLast(t, log), probeRequest{
+		GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1,
 	})
-	sr, err := m.SpinOffline(0, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	requireProbe(t, "offline-optimal", probeLast(t, log), probeRequest{
+	sr := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 2, CaptureSnapshots: true})
+	requireProbe(t, "unsafe-capture-optimal", probeLast(t, log), probeRequest{
 		GameName: m.gameName, GameId: m.gameId, Bet: unit * 2, BetMode: 0, BetMult: 2,
 	})
-	// SpinOffline 的結果仍記錄抽出的 seed 作為起始快照（不經由請求交給遊戲）；
-	// 值由 E0 逐位元保護，這裡只確認存在。
+	// 擷取快照的結果仍記錄抽出的 seed 作為起始快照（不經由請求交給遊戲）；
+	// 值由 U0 逐位元保護，這裡只確認存在。
 	if len(sr.State.StartCoreSnap) == 0 {
 		t.Fatal("offline optimal start snapshot missing")
 	}

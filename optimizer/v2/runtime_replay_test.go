@@ -44,7 +44,7 @@ func TestReplayMaterializedSnapshotsUsesRawGameOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snapshot raw fixture machine: %v", err)
 	}
-	result := machine.SpinInternal(0)
+	result := machine.SpinUnsafe(problab.SpinInput{BetMode: 0, BetMult: 1})
 	if result == nil || result.Bet <= 0 {
 		t.Fatalf("fixture spin is invalid: %+v", result)
 	}

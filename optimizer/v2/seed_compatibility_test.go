@@ -273,7 +273,7 @@ func TestVerifyReplayMachineUsesSameSeedBytesAsCollection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spin := fixtureMachine.SpinInternal(0)
+	spin := fixtureMachine.SpinUnsafe(problab.SpinInput{BetMode: 0, BetMult: 1})
 	win := float64(spin.TotalWin) / float64(spin.Bet)
 	factory.reset()
 
