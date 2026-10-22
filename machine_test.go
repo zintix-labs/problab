@@ -2,13 +2,25 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package problab
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -17,11 +29,213 @@ import (
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
 	"github.com/zintix-labs/problab/dto"
+	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
 	"github.com/zintix-labs/problab/spec"
 )
+
+// stickyStateLogic 包住 demo 邏輯，但每次都把結果的 State 換成同一個物件，且不清除
+// 其中的 RNG 快照，並在 Checkpoint 寫入呼叫次數。用來驗證 CaptureSnapshots 為 false
+// 時，Machine 只清除前一次留下的 RNG 快照，不碰遊戲輸出的 Checkpoint。
+type stickyStateLogic struct {
+	inner slot.GameLogic
+	state buf.SpinState
+	calls int
+}
+
+func (l *stickyStateLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinResult {
+	sr := l.inner.GetResult(r, g)
+	l.calls++
+	l.state.Checkpoint = l.calls
+	sr.State = &l.state
+	return sr
+}
+
+func withStickyStateLogic(t testing.TB, m *Machine) *stickyStateLogic {
+	t.Helper()
+	key := m.gh.GameSetting.LogicKey
+	logic := &stickyStateLogic{}
+	reg := slot.NewLogicRegistry()
+	if err := reg.Register(key, func(g *slot.Game) (slot.GameLogic, error) {
+		inner, err := demo_logic.Logics.Build(key, g)
+		logic.inner = inner
+		return logic, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gh, err := slot.NewGame(m.gh.GameSetting, reg, m.core, m.gh.OmitExtend())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.gh = gh
+	return logic
+}
+
+func TestSpinUnsafeWithoutCaptureClearsOnlyRNGSnapshots(t *testing.T) {
+	for _, optimal := range []bool{false, true} {
+		t.Run(fmt.Sprint("optimal=", optimal), func(t *testing.T) {
+			m := faultMachine(t, optimal)
+			logic := withStickyStateLogic(t, m)
+
+			captured := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true})
+			if captured.State != &logic.state || len(logic.state.StartCoreSnap) == 0 || len(logic.state.AfterCoreSnap) == 0 {
+				t.Fatal("capturing call did not write snapshots into the game's State")
+			}
+
+			plain := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1})
+			if plain.State != &logic.state {
+				t.Fatal("result State was replaced")
+			}
+			if plain.State.StartCoreSnap != nil || plain.State.AfterCoreSnap != nil {
+				t.Fatal("non-capturing call kept the previous RNG snapshots")
+			}
+			if plain.State.Checkpoint != 2 {
+				t.Fatalf("non-capturing call changed the game's Checkpoint: %v", plain.State.Checkpoint)
+			}
+		})
+	}
+}
+
+func TestSpinUnsafeCaptureReusesOwnedBuffers(t *testing.T) {
+	for _, optimal := range []bool{false, true} {
+		t.Run(fmt.Sprint(optimal), func(t *testing.T) {
+			lab, err := NewAuto(core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testManifestFS(t, false)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = lab.Close() }()
+			m, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !optimal {
+				m.optimal = nil
+			}
+			p := &offlineScratchPRNG{PRNG: m.core.PRNG}
+			m.core.PRNG = p
+			var startPtr, afterPtr *byte
+			for i := 0; i < 5; i++ {
+				r := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true})
+				start, after := r.State.StartCoreSnap, r.State.AfterCoreSnap
+				if len(start) == 0 || len(after) == 0 {
+					t.Fatal("missing snapshots")
+				}
+				if i > 0 && (startPtr != &start[0] || afterPtr != &after[0]) {
+					t.Fatal("buffers reallocated")
+				}
+				startPtr, afterPtr = &start[0], &after[0]
+				savedStart, savedAfter := bytes.Clone(start), bytes.Clone(after)
+				// Scratch mutation must not corrupt either borrowed result snapshot.
+				for j := range p.scratch {
+					p.scratch[j] ^= 0xff
+				}
+				if !bytes.Equal(start, savedStart) || !bytes.Equal(after, savedAfter) {
+					t.Fatal("PRNG scratch aliases result")
+				}
+				if startPtr == afterPtr {
+					t.Fatal("start and after alias")
+				}
+			}
+		})
+	}
+}
+
+func TestSpinUnsafeCaptureParity(t *testing.T) {
+	for _, optimal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "native", true: "optimal"}[optimal], func(t *testing.T) {
+			cfg, err := fs.ReadFile(testManifestConfigFS(t), "game.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg = []byte(strings.Replace(string(cfg), "bet_units : [40]", "bet_units : [40, 80]", 1))
+			artifacts := testManifestFS(t, false).(fstest.MapFS)
+			var manifest optimalrt.Manifest
+			if err = json.Unmarshal(artifacts["game0/manifest.json"].Data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			second := manifest.Modes[0]
+			second.BetUnit = 80
+			manifest.Modes = append(manifest.Modes, second)
+			artifacts["game0/manifest.json"].Data, err = json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lab, err := NewAuto(core.Default(), Configs(fstest.MapFS{"game.yaml": &fstest.MapFile{Data: cfg}}), Logics(demo_logic.Logics), WithOptimalFS(artifacts))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = lab.Close() }()
+			var a, b *Machine
+			if optimal {
+				a, err = lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
+			} else {
+				a, err = lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77), Unoptimized: true})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if optimal {
+				b, err = lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
+			} else {
+				b, err = lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77), Unoptimized: true})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.UsesOptimal() != optimal {
+				t.Fatal("source mismatch")
+			}
+			if len(a.BetUnits) != 2 {
+				t.Fatal("multi-mode fixture was not applied")
+			}
+			for i := 0; i < 60; i++ {
+				mode := i % len(a.BetUnits)
+				mult := 1 + i%3
+				r, err := a.Spin(&dto.SpinRequest{GameId: a.gameId, GameName: a.gameName, BetMode: mode, BetMult: mult, Bet: a.BetUnits[mode] * mult})
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw := b.SpinUnsafe(SpinInput{BetMode: mode, BetMult: mult, CaptureSnapshots: true})
+				r2, err := dto.NewSpinResultDTO(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				x, _ := json.Marshal(r)
+				y, _ := json.Marshal(r2)
+				if !bytes.Equal(x, y) {
+					t.Fatalf("spin %d DTO mismatch", i)
+				}
+				sx, _ := a.SnapshotCore()
+				sy, _ := b.SnapshotCore()
+				if !bytes.Equal(sx, sy) {
+					t.Fatalf("spin %d RNG mismatch", i)
+				}
+			}
+		})
+	}
+}
+
+// SpinUnsafe 不驗證輸入；抽 seed 失敗屬於內部執行故障：panic，不得靜默改用原始 RNG。
+func TestSpinUnsafeClosedArtifactPanics(t *testing.T) {
+	optLab, err := NewAuto(core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testManifestFS(t, false)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	om, err := optLab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := optLab.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, capture := range []bool{false, true} {
+		if p := catchPanic(func() { om.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: capture}) }); p == nil {
+			t.Fatalf("capture=%t: closed artifact silently fell back", capture)
+		}
+	}
+}
 
 // 遊戲收到的請求契約：每個執行入口交給遊戲的請求內容。
 //

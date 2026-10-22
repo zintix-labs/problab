@@ -1,18 +1,31 @@
-// Copyright 2025 Zintix Labs
+// Copyright 2026 Zintix Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package problab
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"math"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -336,20 +349,6 @@ func testOptimalFS(t testing.TB) fs.FS {
 	}
 }
 
-func testManifestConfigFS(t testing.TB) fs.FS {
-	t.Helper()
-	raw, err := fs.ReadFile(demo_configs.FS, "game_0_demonormal.yaml")
-	if err != nil {
-		t.Fatalf("read demo config: %v", err)
-	}
-	enabled := enableTestOptimal(t, string(raw))
-	updated := strings.Replace(enabled, "artifact: manifest.json", "artifact: game0/manifest.json", 1)
-	if updated == enabled {
-		t.Fatal("test config manifest path was not replaced")
-	}
-	return fstest.MapFS{"game.yaml": &fstest.MapFile{Data: []byte(updated)}}
-}
-
 func testLegacyConfigFS(t testing.TB) fs.FS {
 	t.Helper()
 	raw, err := fs.ReadFile(demo_configs.FS, "game_0_demonormal.yaml")
@@ -372,48 +371,6 @@ func enableTestOptimal(t testing.TB, config string) string {
 		t.Fatal("test config optimal flag was not enabled")
 	}
 	return updated
-}
-
-func testManifestFS(t testing.TB, corrupt bool) fs.FS {
-	t.Helper()
-	snap1 := testDefaultSnapshot(t, 100)
-	snap2 := testDefaultSnapshot(t, 200)
-	table := sampler.BuildAliasTableF64([]float64{1, 1})
-	prob := make([]byte, table.Size*8)
-	aliases := make([]byte, table.Size*4)
-	for i := 0; i < table.Size; i++ {
-		binary.LittleEndian.PutUint64(prob[i*8:], math.Float64bits(table.Prob[i]))
-		binary.LittleEndian.PutUint32(aliases[i*4:], uint32(table.Aliases[i]))
-	}
-	bank := append(append([]byte(nil), snap1...), snap2...)
-	manifest := optimalrt.Manifest{
-		SchemaVersion:  optimalrt.ManifestSchemaV1,
-		ArtifactID:     "test-artifact",
-		SnapshotFormat: "problab.chacha20.rfc8439/state-v1",
-		Modes: []optimalrt.ManifestMode{{
-			BetUnit:   40,
-			Size:      table.Size,
-			SeedLen:   len(snap1),
-			SeedCount: table.Size,
-			Prob:      testFileRef("prob.bin", prob),
-			Aliases:   testFileRef("aliases.bin", aliases),
-			SeedBank:  testFileRef("seed_bank.bin", bank),
-		}},
-	}
-	manifestRaw, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
-	if corrupt {
-		prob = append([]byte(nil), prob...)
-		prob[0] ^= 0xff
-	}
-	return fstest.MapFS{
-		"game0/manifest.json": &fstest.MapFile{Data: manifestRaw},
-		"game0/prob.bin":      &fstest.MapFile{Data: prob},
-		"game0/aliases.bin":   &fstest.MapFile{Data: aliases},
-		"game0/seed_bank.bin": &fstest.MapFile{Data: bank},
-	}
 }
 
 func testPCGManifestFS(t testing.TB) fs.FS {
@@ -476,4 +433,205 @@ func testDefaultSnapshot(t testing.TB, seed int64) []byte {
 func testFileRef(name string, data []byte) optimalrt.FileRef {
 	sum := sha256.Sum256(data)
 	return optimalrt.FileRef{Path: name, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}
+}
+
+func TestOptimalLifecycleClosesPoolsBeforeArtifact(t *testing.T) {
+	lab, err := NewAuto(
+		core.Default(),
+		Configs(testLegacyConfigFS(t)),
+		Logics(demo_logic.Logics),
+		WithOptimalFS(testOptimalFS(t)),
+	)
+	if err != nil {
+		t.Fatalf("NewAuto: %v", err)
+	}
+	machine, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(1)})
+	if err != nil {
+		t.Fatalf("NewMachine: %v", err)
+	}
+	artifact := machine.optimal
+
+	runtime, err := lab.BuildRuntime(2)
+	if err != nil {
+		t.Fatalf("BuildRuntime: %v", err)
+	}
+	runtime.Close()
+	for _, id := range runtime.ids {
+		if !runtime.pools[id].Closed() {
+			t.Fatalf("pool %d was not closed with runtime", id)
+		}
+	}
+	if _, err := runtime.Spin(context.Background(), nil); err == nil {
+		t.Fatal("closed runtime accepted a spin")
+	}
+	if artifact.Closed() {
+		t.Fatal("runtime close must not close Problab-owned artifact")
+	}
+
+	if err := lab.Close(); err != nil {
+		t.Fatalf("Problab.Close: %v", err)
+	}
+	if err := lab.Close(); err != nil {
+		t.Fatalf("second Problab.Close: %v", err)
+	}
+	if !lab.Closed() || !artifact.Closed() {
+		t.Fatal("Problab close did not close its artifact store")
+	}
+	if _, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(2)}); err == nil {
+		t.Fatal("closed Problab created a new machine")
+	}
+}
+
+func TestMMapOptimalMatchesMemoryAndIsShared(t *testing.T) {
+	source := testManifestFS(t, false)
+	dir := materializeTestFS(t, source)
+	config := testManifestConfigFS(t)
+
+	memoryLab, err := NewAuto(
+		core.Default(), Configs(config), Logics(demo_logic.Logics), WithOptimalFS(source),
+	)
+	if err != nil {
+		t.Fatalf("memory NewAuto: %v", err)
+	}
+	mmapLab, err := NewAuto(
+		core.Default(), Configs(config), Logics(demo_logic.Logics), WithOptimalDir(dir),
+	)
+	if err != nil {
+		t.Fatalf("mmap NewAuto: %v", err)
+	}
+
+	memoryMachine, err := memoryLab.NewMachine(0, MachineConfig{Seed: SeedInt64(5150)})
+	if err != nil {
+		t.Fatalf("memory machine: %v", err)
+	}
+	mmapMachine1, err := mmapLab.NewMachine(0, MachineConfig{Seed: SeedInt64(5150)})
+	if err != nil {
+		t.Fatalf("mmap machine 1: %v", err)
+	}
+	mmapMachine2, err := mmapLab.NewMachine(0, MachineConfig{Seed: SeedInt64(5151)})
+	if err != nil {
+		t.Fatalf("mmap machine 2: %v", err)
+	}
+	if mmapMachine1.optimal != mmapMachine2.optimal || mmapLab.optimal.LoadCount() != 1 {
+		t.Fatal("mmap artifact was not shared exactly once")
+	}
+	wantBackend := "memory"
+	switch runtime.GOOS {
+	case "aix", "darwin", "dragonfly", "freebsd", "linux", "netbsd", "openbsd", "solaris":
+		wantBackend = "mmap"
+	}
+	if got := mmapMachine1.optimal.Backend(); got != wantBackend {
+		t.Fatalf("backend=%q, want %q", got, wantBackend)
+	}
+
+	for i := 0; i < 100; i++ {
+		want, err := json.Marshal(memoryMachine.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
+		if err != nil {
+			t.Fatalf("marshal memory result: %v", err)
+		}
+		got, err := json.Marshal(mmapMachine1.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
+		if err != nil {
+			t.Fatalf("marshal mmap result: %v", err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("spin %d differs between memory and mmap", i)
+		}
+	}
+	if err := mmapLab.Close(); err != nil {
+		t.Fatalf("mmap Problab.Close: %v", err)
+	}
+	if !mmapMachine1.optimal.Closed() {
+		t.Fatal("mmap artifact was not closed")
+	}
+}
+
+func TestOptimalSourcesAreMutuallyExclusive(t *testing.T) {
+	_, err := New(
+		core.Default(),
+		Configs(testManifestConfigFS(t)),
+		Logics(demo_logic.Logics),
+		WithOptimalFS(testManifestFS(t, false)),
+		WithOptimalDir(t.TempDir()),
+	)
+	if err == nil {
+		t.Fatal("expected mutually exclusive optimal source error")
+	}
+}
+
+func materializeTestFS(t *testing.T, source fs.FS) string {
+	t.Helper()
+	root := t.TempDir()
+	err := fs.WalkDir(source, ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if name == "." {
+			return nil
+		}
+		target := filepath.Join(root, filepath.FromSlash(name))
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := fs.ReadFile(source, name)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("materialize artifact FS: %v", err)
+	}
+	return root
+}
+
+// TestUnoptimizedMachinePreservesReplayIdentity locks the collection
+// boundary needed by optimizer/v2. Game 0 enables a published Optimal Artifact;
+// a normal Machine therefore owns that artifact, while the raw optimizer Machine
+// must bypass it and reproduce a spin directly from its pre-spin Core snapshot.
+func TestUnoptimizedMachinePreservesReplayIdentity(t *testing.T) {
+	lab, err := NewAuto(
+		core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
+		WithOptimalFS(testManifestFS(t, false)),
+	)
+	if err != nil {
+		t.Fatalf("NewAuto: %v", err)
+	}
+	defer func() { _ = lab.Close() }()
+
+	normal, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
+	if err != nil {
+		t.Fatalf("NewMachine: %v", err)
+	}
+	if normal.optimal == nil {
+		t.Fatal("game 0 fixture did not enable its existing Optimal Artifact")
+	}
+	raw, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(77), Unoptimized: true})
+	if err != nil {
+		t.Fatalf("NewMachine(Unoptimized): %v", err)
+	}
+	if raw.optimal != nil {
+		t.Fatal("raw optimizer Machine retained an Optimal Artifact")
+	}
+
+	before, err := raw.SnapshotCore()
+	if err != nil {
+		t.Fatalf("SnapshotCore: %v", err)
+	}
+	first, err := json.Marshal(raw.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
+	if err != nil {
+		t.Fatalf("marshal first raw spin: %v", err)
+	}
+	if err := raw.RestoreCore(before); err != nil {
+		t.Fatalf("RestoreCore: %v", err)
+	}
+	second, err := json.Marshal(raw.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
+	if err != nil {
+		t.Fatalf("marshal replayed raw spin: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatal("pre-spin raw Core snapshot did not reproduce the collected outcome")
+	}
 }

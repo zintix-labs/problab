@@ -2,6 +2,15 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package problab
 
@@ -132,15 +141,6 @@ func faultLab(t testing.TB, factory core.PRNGFactory, optimal bool, opts ...Prob
 	return lab
 }
 
-func faultMachine(t testing.TB, optimal bool) *Machine {
-	t.Helper()
-	m, err := faultLab(t, core.Default(), optimal).NewMachine(0, MachineConfig{Seed: SeedInt64(77)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m
-}
-
 // pickedRecoveryPoint 以相同設定的對照機台重現抽庫，回傳抽庫後的選取狀態。
 func pickedRecoveryPoint(t testing.TB) []byte {
 	t.Helper()
@@ -158,12 +158,6 @@ func coreState(t testing.TB, m *Machine) []byte {
 		t.Fatal(err)
 	}
 	return bytes.Clone(snap)
-}
-
-func catchPanic(f func()) (p any) {
-	defer func() { p = recover() }()
-	f()
-	return nil
 }
 
 func spinReq(m *Machine) *dto.SpinRequest {

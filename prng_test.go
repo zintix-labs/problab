@@ -1,7 +1,16 @@
-// Copyright 2025 Zintix Labs
+// Copyright 2026 Zintix Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package problab
 
@@ -9,7 +18,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"io/fs"
 	"math"
@@ -371,15 +379,6 @@ func TestSimulatorAndMachinePoolUseFactoryStreamOrdinals(t *testing.T) {
 	}
 }
 
-func newOneGameLab(t testing.TB, factory core.PRNGFactory, opts ...ProblabOption) *Problab {
-	t.Helper()
-	lab, err := newOneGameLabE(factory, opts...)
-	if err != nil {
-		t.Fatalf("new one-game Problab: %v", err)
-	}
-	return lab
-}
-
 func newOneGameLabE(factory core.PRNGFactory, opts ...ProblabOption) (*Problab, error) {
 	raw, err := fs.ReadFile(demo_configs.FS, "game_1_democascade.yaml")
 	if err != nil {
@@ -483,10 +482,6 @@ func (f *lifecycleFactory) recordedEvents() []string {
 	defer f.eventMu.Unlock()
 	return append([]string(nil), f.events...)
 }
-
-type errorReader struct{}
-
-func (errorReader) Read([]byte) (int, error) { return 0, errors.New("entropy unavailable") }
 
 type overlapSeedReader struct {
 	mu      sync.Mutex
