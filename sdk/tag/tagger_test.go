@@ -14,6 +14,9 @@ import (
 	"github.com/zintix-labs/problab/spec"
 )
 
+func yes(*buf.SpinResult) bool { return true }
+func no(*buf.SpinResult) bool  { return false }
+
 // nTags 建立 n 個 tag：t000、t001…；第 i 個 tag 的結果由 hit(i) 決定。
 func nTags(n int, hit func(i int) bool) (GameTagCatalog, []string) {
 	defs := map[string]IsTag{}
