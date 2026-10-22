@@ -26,7 +26,6 @@ import (
 	"github.com/zintix-labs/problab/dto"
 	optimizerv2 "github.com/zintix-labs/problab/optimizer/v2"
 	"github.com/zintix-labs/problab/sdk/tag"
-	"github.com/zintix-labs/problab/spec"
 )
 
 // Options supplies application-owned dependencies. Use keyed field literals.
@@ -40,7 +39,7 @@ type Options struct {
 	// Output receives text; nil disables text, not artifacts or CSV files.
 	Output io.Writer
 	// CollectionTags is game-scoped. No demo tags are supplied implicitly.
-	CollectionTags map[spec.GID]map[string]tag.IsTag
+	CollectionTags tag.GameTagCatalog
 	// ResultConverter is passed unchanged to Tuner. Nil uses IdentityConverter,
 	// which includes complete replay state; custom output is the caller's responsibility.
 	ResultConverter dto.ResultConverter
@@ -147,7 +146,7 @@ func runPlans(ctx context.Context, config optimizerv2.Config, output io.Writer, 
 	return exitCode, nil
 }
 
-func validateTagInjection(config optimizerv2.Config, tags map[spec.GID]map[string]tag.IsTag) error {
+func validateTagInjection(config optimizerv2.Config, tags tag.GameTagCatalog) error {
 	for _, plan := range config.Plans {
 		for _, class := range config.Intents[plan.Intent].Classes {
 			if len(class.Collect.Tags.Matches)+len(class.Collect.Tags.Mismatches) > 0 && len(tags[plan.Target.Game]) == 0 {

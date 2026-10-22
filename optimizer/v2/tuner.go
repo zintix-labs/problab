@@ -237,18 +237,19 @@ func WithReporter(reporter Reporter) TunerOption {
 // safe. This does not make a single Tuner safe for concurrent Run calls.
 // There are no built-in or reserved tag names. Every referenced tag must be
 // explicitly supplied for its game; nil supplies no tags.
-func WithCollectionTags(gameTags map[spec.GID]map[string]tag.IsTag) TunerOption {
+func WithCollectionTags(gameTags tag.GameTagCatalog) TunerOption {
 	return func(tuner *Tuner) error {
-		owned := make(map[spec.GID]map[string]tag.IsTag, len(gameTags))
+		owned := make(tag.GameTagCatalog, len(gameTags))
 		for gid, definitions := range gameTags {
 			ownedDefinitions := make(map[string]tag.IsTag, len(definitions))
 			for name, fn := range definitions {
 				ownedDefinitions[name] = fn
 			}
-			if _, err := newCollectionTagRegistry(ownedDefinitions); err != nil {
+			owned[gid] = ownedDefinitions
+			// Compile validates every definition of the game.
+			if _, err := owned.Compile(gid); err != nil {
 				return fmt.Errorf("game %d collection tags: %w", gid, err)
 			}
-			owned[gid] = ownedDefinitions
 		}
 		tuner.collector.GameTags = owned
 		return nil

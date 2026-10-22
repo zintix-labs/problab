@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/zintix-labs/problab"
+	"github.com/zintix-labs/problab/sdk/tag"
 )
 
 func resolveRunPath(workingDirectory, configured string) (string, error) {
@@ -438,6 +439,11 @@ func replayCollectionBanks(
 		return nil, fmt.Errorf("replay collection banks: %d cursor reports for %d configured sources", len(cursors), len(configured))
 	}
 	reports := make([]CollectionReplaySourceReport, len(configured))
+	// One working mask for this replay; records are replayed sequentially.
+	var tags tag.BitMasks
+	if runtime.tagger != nil {
+		tags = runtime.tagger.NewMasks()
+	}
 	for i, configuredPath := range configured {
 		resolved, err := resolveRunPath(collector.WorkingDirectory, configuredPath)
 		if err != nil {
@@ -532,11 +538,10 @@ func replayCollectionBanks(
 					return replayRecordContinue, &replaySourceIncompatibleError{record: recordIndex, cause: fmt.Errorf("invalid replay spin result")}
 				}
 				win := float64(spin.TotalWin) / float64(spin.Bet)
-				tags := uint64(0)
 				if runtime.tagger != nil {
-					tags = runtime.tagger.Tagging(spin)
+					runtime.tagger.Tag(tags, spin)
 				}
-				classIndex := firstAcceptingClass(plan.Intent.Classes, runtime.predicates, deficits, tags, win)
+				classIndex := firstAcceptingClass(plan.Intent.Classes, runtime.predicates, deficits, runtime.tagger, tags, win)
 				if classIndex < 0 {
 					report.Unmatched++
 					reportReplayProgress(collector.Reporter, plan, betMode, sourceIndex, report, *collected)
