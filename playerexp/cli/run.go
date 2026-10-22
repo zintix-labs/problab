@@ -27,7 +27,6 @@ import (
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/playerexp"
 	"github.com/zintix-labs/problab/sdk/tag"
-	"github.com/zintix-labs/problab/spec"
 )
 
 // Options exposes only application composition. Output=nil suppresses text,
@@ -37,7 +36,7 @@ type Options struct {
 	ConfigSource string
 	Lab          *problab.Problab
 	Strategies   *playerexp.StrategyRegistry
-	Tags         map[spec.GID]map[string]tag.IsTag
+	Tags         tag.GameTagCatalog
 	Output       io.Writer
 	OutputDir    string
 }

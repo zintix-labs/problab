@@ -21,6 +21,7 @@ import (
 	"sort"
 
 	"github.com/zintix-labs/problab"
+	"github.com/zintix-labs/problab/sdk/tag"
 )
 
 // expandedSampleRef keeps the atomic-bucket identity beside a collected replay
@@ -296,6 +297,11 @@ func replayMaterializedSnapshots(
 	if err != nil {
 		return MaterializedMode{}, VerificationCheck{}, fmt.Errorf("compile runtime-replay Class predicates: %w", err)
 	}
+	// One working mask for this replay; samples are replayed sequentially.
+	var tags tag.BitMasks
+	if tagger != nil {
+		tags = tagger.NewMasks()
+	}
 
 	classByID := make(map[string]int, len(compiled.Prepared.Classes))
 	for classIndex, class := range compiled.Prepared.Classes {
@@ -342,12 +348,11 @@ func replayMaterializedSnapshots(
 				"every seed-bank entry restores and reproduces its modeled payout, Class predicate, and atomic bucket",
 			), nil
 		}
-		tags := uint64(0)
 		if tagger != nil {
-			tags = tagger.Tagging(result)
+			tagger.Tag(tags, result)
 		}
 		intent := compiled.Prepared.Plan.Intent.Classes[classIndex]
-		if !classAccepts(intent, predicates[classIndex], tags, win) {
+		if !classAccepts(intent, predicates[classIndex], tagger, tags, win) {
 			return MaterializedMode{}, textVerificationCheck(
 				checkName, false,
 				fmt.Sprintf("sample[%d] replay payout/tags no longer satisfy assigned Class %q", sampleIndex, sample.ClassID),
