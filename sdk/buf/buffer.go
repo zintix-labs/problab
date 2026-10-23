@@ -32,6 +32,7 @@ type SpinResult struct {
 	BetMult       int               // 押注倍數
 	GameModeCount int               // 經過幾個GameMode
 	GameModeList  []*GameModeResult // 每個遊戲模式的完整結構
+	Cycle         int               // 第幾段，從 0 開始；由 Machine 在遊戲執行後覆寫，遊戲寫入的值不會保留
 	IsGameEnd     bool              // 遊戲結束旗標
 	State         *SpinState        // 遊戲狀態
 }
@@ -49,6 +50,7 @@ func NewSpinResult(gs *spec.GameSetting) *SpinResult {
 		BetMult:       0,
 		GameModeCount: 0,
 		GameModeList:  make([]*GameModeResult, 0, capSpinGrow),
+		Cycle:         0,
 		IsGameEnd:     false,
 		State: &SpinState{
 			StartCoreSnap: nil,
@@ -82,6 +84,7 @@ func (s *SpinResult) Reset() {
 	s.BetMode = 0
 	s.GameModeCount = 0
 	s.GameModeList = s.GameModeList[:0]
+	s.Cycle = 0
 	s.IsGameEnd = false
 	if s.State != nil {
 		s.State.StartCoreSnap = nil
