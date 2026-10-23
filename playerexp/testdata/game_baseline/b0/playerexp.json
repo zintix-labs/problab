@@ -1,0 +1,1093 @@
+{
+ "report": {
+  "Config": {
+   "GameID": 0,
+   "Seed": 77,
+   "Analysis": [
+    {
+     "Name": "flat",
+     "CI": "confidence_95",
+     "Player": {
+      "Players": 12,
+      "InitBet": 300,
+      "Strategy": "flat"
+     },
+     "WinBuckets": [
+      0,
+      1,
+      2,
+      5
+     ],
+     "Events": [
+      {
+       "Name": "fg_big",
+       "WinRange": {
+        "Min": 2,
+        "Max": null
+       },
+       "Tags": [
+        "fg",
+        "big"
+       ]
+      },
+      {
+       "Name": "fg",
+       "WinRange": {
+        "Min": 0,
+        "Max": null
+       },
+       "Tags": [
+        "fg"
+       ]
+      },
+      {
+       "Name": "win",
+       "WinRange": {
+        "Min": 0,
+        "Max": null
+       },
+       "Tags": [
+        "win"
+       ]
+      },
+      {
+       "Name": "rest",
+       "WinRange": {
+        "Min": 0,
+        "Max": null
+       },
+       "Tags": null
+      }
+     ]
+    },
+    {
+     "Name": "double",
+     "CI": "confidence_95",
+     "Player": {
+      "Players": 8,
+      "InitBet": 300,
+      "Strategy": "double"
+     },
+     "WinBuckets": [
+      0,
+      1,
+      2,
+      5
+     ],
+     "Events": [
+      {
+       "Name": "big",
+       "WinRange": {
+        "Min": 1,
+        "Max": null
+       },
+       "Tags": [
+        "big"
+       ]
+      },
+      {
+       "Name": "rest",
+       "WinRange": {
+        "Min": 0,
+        "Max": null
+       },
+       "Tags": null
+      }
+     ]
+    }
+   ]
+  },
+  "Status": "COMPLETED",
+  "Modes": [
+   {
+    "BetUnit": 40,
+    "Source": "native"
+   }
+  ],
+  "Groups": [
+   {
+    "Config": {
+     "Name": "flat",
+     "CI": "confidence_95",
+     "Player": {
+      "Players": 12,
+      "InitBet": 300,
+      "Strategy": "flat"
+     },
+     "WinBuckets": [
+      0,
+      1,
+      2,
+      5
+     ],
+     "Events": [
+      {
+       "Name": "fg_big",
+       "WinRange": {
+        "Min": 2,
+        "Max": null
+       },
+       "Tags": [
+        "fg",
+        "big"
+       ]
+      },
+      {
+       "Name": "fg",
+       "WinRange": {
+        "Min": 0,
+        "Max": null
+       },
+       "Tags": [
+        "fg"
+       ]
+      },
+      {
+       "Name": "win",
+       "WinRange": {
+        "Min": 0,
+        "Max": null
+       },
+       "Tags": [
+        "win"
+       ]
+      },
+      {
+       "Name": "rest",
+       "WinRange": {
+        "Min": 0,
+        "Max": null
+       },
+       "Tags": null
+      }
+     ]
+    },
+    "Status": "COMPLETED",
+    "InitialBalance": 12000,
+    "Started": 12,
+    "Completed": 12,
+    "CompleteSpins": 2400,
+    "TotalBet": 96000,
+    "TotalWin": 88270,
+    "UndefinedRTPPlayers": 0,
+    "Unmatched": 0,
+    "Buckets": [
+     {
+      "Min": 0,
+      "Max": 0,
+      "IncludeMin": true,
+      "IncludeMax": true,
+      "Count": 1670,
+      "ObservedMax": {
+       "Value": 0,
+       "Defined": true
+      }
+     },
+     {
+      "Min": 0,
+      "Max": 1,
+      "IncludeMin": false,
+      "IncludeMax": false,
+      "Count": 416,
+      "ObservedMax": {
+       "Value": 0.75,
+       "Defined": true
+      }
+     },
+     {
+      "Min": 1,
+      "Max": 2,
+      "IncludeMin": true,
+      "IncludeMax": false,
+      "Count": 141,
+      "ObservedMax": {
+       "Value": 1.75,
+       "Defined": true
+      }
+     },
+     {
+      "Min": 2,
+      "Max": 5,
+      "IncludeMin": true,
+      "IncludeMax": false,
+      "Count": 105,
+      "ObservedMax": {
+       "Value": 4.75,
+       "Defined": true
+      }
+     },
+     {
+      "Min": 5,
+      "Max": null,
+      "IncludeMin": true,
+      "IncludeMax": false,
+      "Count": 68,
+      "ObservedMax": {
+       "Value": 187.75,
+       "Defined": true
+      }
+     }
+    ],
+    "Events": [
+     {
+      "Counts": [
+       4,
+       3,
+       2,
+       3
+      ],
+      "Hits": 18,
+      "Stats": [
+       {
+        "Value": 0.3333333333333333,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.0992460911495834,
+         "Hi": 0.6511244935811858,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0.25,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.05486064452799281,
+         "Hi": 0.571858461878189,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0.16666666666666666,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.020862525460092412,
+         "Hi": 0.48413774868596693,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0.25,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.05486064452799281,
+         "Hi": 0.571858461878189,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       }
+      ]
+     },
+     {
+      "Counts": [
+       11,
+       1,
+       0,
+       0
+      ],
+      "Hits": 1,
+      "Stats": [
+       {
+        "Value": 0.9166666666666666,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.615203834849056,
+         "Hi": 0.9978924067681397,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0.08333333333333333,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.0021075932318602325,
+         "Hi": 0.38479616515094395,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.2646484693970511,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.2646484693970511,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       }
+      ]
+     },
+     {
+      "Counts": [
+       0,
+       0,
+       0,
+       12
+      ],
+      "Hits": 711,
+      "Stats": [
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.2646484693970511,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.2646484693970511,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.2646484693970511,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 1,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.735351530602949,
+         "Hi": 1,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       }
+      ]
+     },
+     {
+      "Counts": [
+       0,
+       0,
+       0,
+       12
+      ],
+      "Hits": 1670,
+      "Stats": [
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.2646484693970511,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.2646484693970511,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.2646484693970511,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 1,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.735351530602949,
+         "Hi": 1,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       }
+      ]
+     }
+    ],
+    "Exits": [
+     0,
+     0,
+     12,
+     0
+    ],
+    "ExitStats": [
+     {
+      "Value": 0,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0.2646484693970511,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Value": 0,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0.2646484693970511,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Value": 1,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.735351530602949,
+       "Hi": 1,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Value": 0,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0.2646484693970511,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     }
+    ],
+    "MaxSpinReached": 0,
+    "MaxSpinStat": {
+     "Value": 0,
+     "Defined": true,
+     "CI": {
+      "Lo": 0,
+      "Hi": 0.2646484693970511,
+      "Available": true,
+      "Reason": "",
+      "Method": "clopper_pearson"
+     }
+    },
+    "PooledRTP": {
+     "Value": 0.9194791666666666,
+     "Defined": true
+    },
+    "RTP": [
+     {
+      "Metric": "quantile",
+      "Parameter": 0.1,
+      "N": 12,
+      "Count": 0,
+      "Value": 0.35875,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0,
+       "Available": false,
+       "Reason": "insufficient_samples_for_finite_interval",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "quantile",
+      "Parameter": 0.3333333333333333,
+      "N": 12,
+      "Count": 0,
+      "Value": 0.625,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.29,
+       "Hi": 1.1725,
+       "Available": true,
+       "Reason": "",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "quantile",
+      "Parameter": 0.5,
+      "N": 12,
+      "Count": 0,
+      "Value": 1.03375,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.45375,
+       "Hi": 1.33,
+       "Available": true,
+       "Reason": "",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "quantile",
+      "Parameter": 0.6666666666666666,
+      "N": 12,
+      "Count": 0,
+      "Value": 1.27375,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.625,
+       "Hi": 1.6525,
+       "Available": true,
+       "Reason": "",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "quantile",
+      "Parameter": 0.9,
+      "N": 12,
+      "Count": 0,
+      "Value": 1.4025,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0,
+       "Available": false,
+       "Reason": "insufficient_samples_for_finite_interval",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "threshold",
+      "Parameter": 0.3,
+      "N": 12,
+      "Count": 1,
+      "Value": 0.08333333333333333,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.0021075932318602325,
+       "Hi": 0.38479616515094395,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Metric": "threshold",
+      "Parameter": 0.5,
+      "N": 12,
+      "Count": 3,
+      "Value": 0.25,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.05486064452799281,
+       "Hi": 0.571858461878189,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Metric": "threshold",
+      "Parameter": 0.7,
+      "N": 12,
+      "Count": 5,
+      "Value": 0.4166666666666667,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.15165222980843016,
+       "Hi": 0.7233303143178941,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Metric": "threshold",
+      "Parameter": 1,
+      "N": 12,
+      "Count": 6,
+      "Value": 0.5,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.2109446382392968,
+       "Hi": 0.7890553617607032,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     }
+    ],
+    "Error": ""
+   },
+   {
+    "Config": {
+     "Name": "double",
+     "CI": "confidence_95",
+     "Player": {
+      "Players": 8,
+      "InitBet": 300,
+      "Strategy": "double"
+     },
+     "WinBuckets": [
+      0,
+      1,
+      2,
+      5
+     ],
+     "Events": [
+      {
+       "Name": "big",
+       "WinRange": {
+        "Min": 1,
+        "Max": null
+       },
+       "Tags": [
+        "big"
+       ]
+      },
+      {
+       "Name": "rest",
+       "WinRange": {
+        "Min": 0,
+        "Max": null
+       },
+       "Tags": null
+      }
+     ]
+    },
+    "Status": "COMPLETED",
+    "InitialBalance": 12000,
+    "Started": 8,
+    "Completed": 8,
+    "CompleteSpins": 1600,
+    "TotalBet": 128000,
+    "TotalWin": 93400,
+    "UndefinedRTPPlayers": 0,
+    "Unmatched": 0,
+    "Buckets": [
+     {
+      "Min": 0,
+      "Max": 0,
+      "IncludeMin": true,
+      "IncludeMax": true,
+      "Count": 1153,
+      "ObservedMax": {
+       "Value": 0,
+       "Defined": true
+      }
+     },
+     {
+      "Min": 0,
+      "Max": 1,
+      "IncludeMin": false,
+      "IncludeMax": false,
+      "Count": 256,
+      "ObservedMax": {
+       "Value": 0.75,
+       "Defined": true
+      }
+     },
+     {
+      "Min": 1,
+      "Max": 2,
+      "IncludeMin": true,
+      "IncludeMax": false,
+      "Count": 73,
+      "ObservedMax": {
+       "Value": 1.75,
+       "Defined": true
+      }
+     },
+     {
+      "Min": 2,
+      "Max": 5,
+      "IncludeMin": true,
+      "IncludeMax": false,
+      "Count": 76,
+      "ObservedMax": {
+       "Value": 4.75,
+       "Defined": true
+      }
+     },
+     {
+      "Min": 5,
+      "Max": null,
+      "IncludeMin": true,
+      "IncludeMax": false,
+      "Count": 42,
+      "ObservedMax": {
+       "Value": 175,
+       "Defined": true
+      }
+     }
+    ],
+    "Events": [
+     {
+      "Counts": [
+       0,
+       0,
+       0,
+       8
+      ],
+      "Hits": 65,
+      "Stats": [
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.36941664755281967,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.36941664755281967,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.36941664755281967,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 1,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.6305833524471806,
+         "Hi": 1,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       }
+      ]
+     },
+     {
+      "Counts": [
+       0,
+       0,
+       0,
+       8
+      ],
+      "Hits": 1535,
+      "Stats": [
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.36941664755281967,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.36941664755281967,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 0,
+        "Defined": true,
+        "CI": {
+         "Lo": 0,
+         "Hi": 0.36941664755281967,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       },
+       {
+        "Value": 1,
+        "Defined": true,
+        "CI": {
+         "Lo": 0.6305833524471806,
+         "Hi": 1,
+         "Available": true,
+         "Reason": "",
+         "Method": "clopper_pearson"
+        }
+       }
+      ]
+     }
+    ],
+    "Exits": [
+     0,
+     0,
+     8,
+     0
+    ],
+    "ExitStats": [
+     {
+      "Value": 0,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0.36941664755281967,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Value": 0,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0.36941664755281967,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Value": 1,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.6305833524471806,
+       "Hi": 1,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Value": 0,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0.36941664755281967,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     }
+    ],
+    "MaxSpinReached": 0,
+    "MaxSpinStat": {
+     "Value": 0,
+     "Defined": true,
+     "CI": {
+      "Lo": 0,
+      "Hi": 0.36941664755281967,
+      "Available": true,
+      "Reason": "",
+      "Method": "clopper_pearson"
+     }
+    },
+    "PooledRTP": {
+     "Value": 0.7296875,
+     "Defined": true
+    },
+    "RTP": [
+     {
+      "Metric": "quantile",
+      "Parameter": 0.1,
+      "N": 8,
+      "Count": 0,
+      "Value": 0.33625,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0,
+       "Available": false,
+       "Reason": "insufficient_samples_for_finite_interval",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "quantile",
+      "Parameter": 0.3333333333333333,
+      "N": 8,
+      "Count": 0,
+      "Value": 0.60375,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0,
+       "Available": false,
+       "Reason": "insufficient_samples_for_finite_interval",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "quantile",
+      "Parameter": 0.5,
+      "N": 8,
+      "Count": 0,
+      "Value": 0.6725,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.33625,
+       "Hi": 1.405,
+       "Available": true,
+       "Reason": "",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "quantile",
+      "Parameter": 0.6666666666666666,
+      "N": 8,
+      "Count": 0,
+      "Value": 0.69,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0,
+       "Available": false,
+       "Reason": "insufficient_samples_for_finite_interval",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "quantile",
+      "Parameter": 0.9,
+      "N": 8,
+      "Count": 0,
+      "Value": 1.405,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0,
+       "Available": false,
+       "Reason": "insufficient_samples_for_finite_interval",
+       "Method": "binomial_order_statistic"
+      }
+     },
+     {
+      "Metric": "threshold",
+      "Parameter": 0.3,
+      "N": 8,
+      "Count": 0,
+      "Value": 0,
+      "Defined": true,
+      "CI": {
+       "Lo": 0,
+       "Hi": 0.36941664755281967,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Metric": "threshold",
+      "Parameter": 0.5,
+      "N": 8,
+      "Count": 2,
+      "Value": 0.25,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.031854026249944205,
+       "Hi": 0.6508557944128244,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Metric": "threshold",
+      "Parameter": 0.7,
+      "N": 8,
+      "Count": 6,
+      "Value": 0.75,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.3491442055871756,
+       "Hi": 0.9681459737500558,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     },
+     {
+      "Metric": "threshold",
+      "Parameter": 1,
+      "N": 8,
+      "Count": 7,
+      "Value": 0.875,
+      "Defined": true,
+      "CI": {
+       "Lo": 0.47349032912479333,
+       "Hi": 0.9968402764687481,
+       "Available": true,
+       "Reason": "",
+       "Method": "clopper_pearson"
+      }
+     }
+    ],
+    "Error": ""
+   }
+  ],
+  "Error": ""
+ },
+ "call_count": 4064,
+ "call_digest": "fa357a3e8afb84a6931984037bb856b1cc4a49339268d36085a292d95294e16f",
+ "first_calls": [
+  "report|start|0|flat|0|12",
+  "new|flat|12000",
+  "first|flat|{Balance:12000 Spins:0 TotalBet:0 TotalWin:0}|{KeepPlay:true Bet:{BetMode:0 BetMult:1} EndType:0}",
+  "next|flat|{Balance:11960 Spins:1 TotalBet:40 TotalWin:0}|e050a20ee854bc877aeb1a9aa20a335864ec787774b89485a0396060d002dacf|50434801b41c83b106bf575fad2f83837ee75bf0befe6c14fb1a853ac9bf0271d8385af1f4fdd0b99b17378a17a480020000000000/50434801b41c83b106bf575fad2f83837ee75bf0befe6c14fb1a853ac9bf0271d8385af1f4fdd0b99b17378a17a480020000000030|{KeepPlay:true Bet:{BetMode:0 BetMult:1} EndType:0}",
+  "next|flat|{Balance:11920 Spins:2 TotalBet:80 TotalWin:0}|39a5e053783c77a7cee77eb51d31942a4fc228a46d3c2e3e08e811c94623049a|50434801b41c83b106bf575fad2f83837ee75bf0befe6c14fb1a853ac9bf0271d8385af1f4fdd0b99b17378a17a480020000000030/50434801b41c83b106bf575fad2f83837ee75bf0befe6c14fb1a853ac9bf0271d8385af1f4fdd0b99b17378a17a480020000000120|{KeepPlay:true Bet:{BetMode:0 BetMult:1} EndType:0}"
+ ]
+}
