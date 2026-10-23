@@ -462,3 +462,111 @@ func TestGameReceivesOptimalStartPerEntry(t *testing.T) {
 		t.Fatal("offline optimal start snapshot missing")
 	}
 }
+
+// cycleLogic 包住 demo 邏輯：在結果寫入自己的 Cycle（模擬遊戲寫入引擎擁有的欄位），並保留
+// 回傳的結果，讓測試在入口返回後讀取引擎最後寫入的值；nilResult 為 true 時回傳 nil。
+type cycleLogic struct {
+	inner     slot.GameLogic
+	last      *buf.SpinResult
+	nilResult bool
+}
+
+func (l *cycleLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinResult {
+	if l.nilResult {
+		l.last = nil
+		return nil
+	}
+	sr := l.inner.GetResult(r, g)
+	sr.Cycle = 99
+	l.last = sr
+	return sr
+}
+
+func withCycleLogic(t testing.TB, m *Machine) *cycleLogic {
+	t.Helper()
+	key := m.gh.GameSetting.LogicKey
+	logic := &cycleLogic{}
+	reg := slot.NewLogicRegistry()
+	if err := reg.Register(key, func(g *slot.Game) (slot.GameLogic, error) {
+		inner, err := demo_logic.Logics.Build(key, g)
+		logic.inner = inner
+		return logic, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gh, err := slot.NewGame(m.gh.GameSetting, reg, m.core, m.gh.OmitExtend())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.gh = gh
+	return logic
+}
+
+// 結果的 Cycle 由引擎在遊戲執行後覆寫：SpinUnsafe 一律為 0（輸入沒有 Cycle），Spin 為請求的
+// Cycle；遊戲寫入的值不保留，DTO 不輸出這個欄位，nil 結果原樣回傳。
+func TestResultCycleIsFilledByEngine(t *testing.T) {
+	for _, optimal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("optimal=%v", optimal), func(t *testing.T) {
+			var log []probeRequest
+			lab := probeOffLab(t, &log)
+			if optimal {
+				lab = probeManifestLab(t, &log)
+			}
+			m, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(42)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (m.optimal != nil) != optimal {
+				t.Fatalf("machine optimal=%v, want %v", m.optimal != nil, optimal)
+			}
+			l := withCycleLogic(t, m)
+			unsafe := func(step string, capture bool) {
+				t.Helper()
+				sr := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: capture})
+				if sr == nil || sr != l.last {
+					t.Fatalf("%s: SpinUnsafe returned %p, the game returned %p", step, sr, l.last)
+				}
+				if sr.Cycle != 0 {
+					t.Fatalf("%s: SpinUnsafe result cycle %d, want 0", step, sr.Cycle)
+				}
+			}
+			unsafe("unsafe", false)
+			unsafe("unsafe-capture", true)
+
+			req := &dto.SpinRequest{UID: "c", GameName: m.gameName, GameId: m.gameId, Bet: m.BetUnits[0], BetMode: 0, BetMult: 1, Cycle: 3}
+			res, err := m.Spin(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if l.last == nil {
+				t.Fatal("Spin: the game was not called")
+			}
+			if l.last.Cycle != 3 {
+				t.Fatalf("Spin: result cycle %d, want the request cycle 3", l.last.Cycle)
+			}
+			raw, err := json.Marshal(res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var top map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &top); err != nil {
+				t.Fatal(err)
+			}
+			for key := range top {
+				if strings.Contains(strings.ToLower(key), "cycle") {
+					t.Fatalf("DTO must not output the cycle: key %q in %s", key, raw)
+				}
+			}
+			// Spin 之後的 SpinUnsafe 不帶 Spin 的段號。
+			unsafe("unsafe-after-spin", false)
+
+			l.nilResult = true
+			if sr := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}); sr != nil {
+				t.Fatalf("a nil game result must be returned as nil, got %p", sr)
+			}
+			if sr := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true}); sr != nil {
+				t.Fatalf("a nil game result must be returned as nil with capture, got %p", sr)
+			}
+		})
+	}
+}
