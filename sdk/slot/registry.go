@@ -29,10 +29,12 @@ import (
 // `g` provides access to the (already-initialized) runtime objects for this game instance.
 //
 // Every non-nil result must be a legal segment result with at least one valid
-// GameModeResult; consumers read GameModeList[0] as the base game. Returning nil is
-// handled differently by the two Machine entries and is not unified: SpinUnsafe
-// returns nil unchanged, while the production Spin does not support a nil result
-// and panics. The engine overwrites the result's Cycle after GetResult returns.
+// GameModeResult. The first GameModeResult of a whole game (the first one of cycle 0)
+// is reported as the base game win; the first one of a later segment may be a free
+// game. Returning nil is handled differently by the two Machine entries and is not
+// unified: SpinUnsafe returns nil unchanged, while the production Spin does not
+// support a nil result and panics. The engine overwrites the result's Cycle after
+// GetResult returns.
 //
 // The request is owned by the Machine and reset before every execution. Treat it as
 // read-only and do not retain `r` or anything it references (StartState, snapshots,
