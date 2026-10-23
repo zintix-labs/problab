@@ -15,6 +15,7 @@
 package problab
 
 import (
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/recorder"
+	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
 	"github.com/zintix-labs/problab/spec"
@@ -109,9 +111,9 @@ func (s *Simulator) Sim(betMode int, round int, showpb bool) (*stats.StatReport,
 		bar.SetWriter(io.Discard)
 	}
 	in := SpinInput{BetMode: betMode, BetMult: 1}
+	asm := buf.NewSpinAssembler()
 	for i := 0; i < round; i++ {
-		sr := m.SpinUnsafe(in)
-		r.Record(sr)
+		r.Record(assembleOne(asm, m.SpinUnsafe(in), m.gameId, betMode, i))
 		bar.Increment()
 	}
 	used := time.Since(bar.StartTime())
@@ -167,9 +169,9 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 			g := s.mBuf[i]
 			st := s.rBuf[i]
 			in := SpinInput{BetMode: betMode, BetMult: 1}
+			asm := buf.NewSpinAssembler()
 			for r := 0; r < rounds; r++ {
-				sr := g.SpinUnsafe(in)
-				st.Record(sr)
+				st.Record(assembleOne(asm, g.SpinUnsafe(in), g.gameId, betMode, r))
 				bar.Increment()
 			}
 		}(i)
@@ -258,13 +260,29 @@ func (s *Simulator) SimPlayers(mp int, players int, initBets int, betMode int, r
 	return st, est, used, nil
 }
 
+// assembleOne 把一段結果交給 Assembler，回傳完整的一局。Simulator 沒有續段輸入，
+// nil、未完成與對帳失敗都屬於內部故障，直接 panic；round 是該迴圈中從 0 起算的局號。
+func assembleOne(a *buf.SpinAssembler, sr *buf.SpinResult, gid spec.GID, betMode, round int) *buf.SpinResult {
+	if sr == nil {
+		panic(fmt.Errorf("simulator: game %d bet mode %d round %d: nil spin result", gid, betMode, round))
+	}
+	res, err := a.Add(sr)
+	if err != nil {
+		panic(fmt.Errorf("simulator: game %d bet mode %d round %d: %w", gid, betMode, round, err))
+	}
+	if res == nil {
+		panic(fmt.Errorf("simulator: game %d bet mode %d round %d: incomplete game result", gid, betMode, round))
+	}
+	return res
+}
+
 func sim(wg *sync.WaitGroup, m *Machine, jobs chan *recorder.SpinRecorder, betMode int, rounds int, bar *pb.ProgressBar) {
 	defer wg.Done()
 	in := SpinInput{BetMode: betMode, BetMult: 1}
+	asm := buf.NewSpinAssembler()
 	for j := range jobs { // j := <- jobs
-		for range rounds {
-			sr := m.SpinUnsafe(in)
-			if j.RecordWithPlayer(sr) {
+		for r := range rounds {
+			if j.RecordWithPlayer(assembleOne(asm, m.SpinUnsafe(in), m.gameId, betMode, r)) {
 				break
 			}
 		}

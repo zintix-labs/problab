@@ -50,13 +50,21 @@ type fakeMachine struct {
 }
 
 func (m *fakeMachine) UsesOptimal() bool { return false }
+
+// withMode 替假結果補上一個贏分等於總贏分的 GameModeResult，符合「非 nil 的合法結果至少
+// 包含一個 GameModeResult」的約定；刻意不合法的假結果也用它，讓每筆只違反一個前提。
+func withMode(sr *buf.SpinResult) *buf.SpinResult {
+	sr.GameModeList = []*buf.GameModeResult{{TotalWin: sr.TotalWin}}
+	sr.GameModeCount = 1
+	return sr
+}
 func (m *fakeMachine) SpinUnsafe(in problab.SpinInput) *buf.SpinResult {
 	m.spins++
 	mode, mult := in.BetMode, in.BetMult
 	if m.fn != nil {
 		return m.fn(mode, mult, m.spins)
 	}
-	return &buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: m.units[mode] * mult, IsGameEnd: true}
+	return withMode(&buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: m.units[mode] * mult, IsGameEnd: true})
 }
 
 type reporterFunc func(ProgressEvent)
@@ -104,8 +112,9 @@ func TestTagDiagnosticsDoNotAllocatePerPredicate(t *testing.T) {
 		if cg.events[0].want, err = tagger.Want(names...); err != nil {
 			t.Fatal(err)
 		}
+		asm := buf.NewSpinAssembler()
 		return testing.AllocsPerRun(100, func() {
-			if _, err := play(context.Background(), m, m.units, cg, c.Analysis[0], 0); err != nil {
+			if _, err := play(context.Background(), m, asm, m.units, cg, c.Analysis[0], 0); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -140,7 +149,7 @@ func TestStateSettlementAndDynamicRTP(t *testing.T) {
 		if n == 2 {
 			win = 4
 		}
-		return &buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: win, IsGameEnd: true}
+		return withMode(&buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: win, IsGameEnd: true})
 	}
 	r, err := runMachine(context.Background(), c, o, m, m.units)
 	if err != nil {
@@ -279,7 +288,7 @@ func TestIncompleteResultsAndCheckpoint(t *testing.T) {
 		c, o, m := fixture(1)
 		register(t, &o, fixedFactory(1))
 		m.fn = func(mode, mult, n int) *buf.SpinResult {
-			return &buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true, State: &buf.SpinState{Checkpoint: cp}}
+			return withMode(&buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true, State: &buf.SpinState{Checkpoint: cp}})
 		}
 		r, e := runMachine(context.Background(), c, o, m, m.units)
 		if (e != nil) != (i >= 2) {
@@ -289,7 +298,8 @@ func TestIncompleteResultsAndCheckpoint(t *testing.T) {
 			t.Fatal("committed invalid player")
 		}
 	}
-	for _, r := range []*buf.SpinResult{nil, {Bet: 1, BetMult: 1}, {Bet: 2, BetMult: 1, IsGameEnd: true}, {Bet: 1, BetMult: 1, IsGameEnd: true, TotalWin: -1}} {
+	// nil 維持原樣；其餘各只違反一個前提：未結束、投注錯誤、負贏分。
+	for _, r := range []*buf.SpinResult{nil, withMode(&buf.SpinResult{Bet: 1, BetMult: 1}), withMode(&buf.SpinResult{Bet: 2, BetMult: 1, IsGameEnd: true}), withMode(&buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true, TotalWin: -1})} {
 		c, o, m := fixture(1)
 		register(t, &o, fixedFactory(1))
 		m.fn = func(int, int, int) *buf.SpinResult { return r }
@@ -308,6 +318,39 @@ func TestNilGameResultReportsSpinUnsafe(t *testing.T) {
 	_, e := runMachine(context.Background(), c, o, m, m.units)
 	if e == nil || !strings.Contains(e.Error(), "SpinUnsafe: requires complete spin result") {
 		t.Fatalf("error=%v", e)
+	}
+}
+
+// An unfinished game result (with a valid game mode) goes through the assembler
+// and is still reported by the existing check, labelled with the SpinUnsafe operation.
+func TestUnfinishedGameReportsSpinUnsafe(t *testing.T) {
+	c, o, m := fixture(1)
+	register(t, &o, fixedFactory(1))
+	m.fn = func(mode, mult, n int) *buf.SpinResult {
+		return withMode(&buf.SpinResult{Bet: m.units[mode] * mult, BetMode: mode, BetMult: mult, TotalWin: 1})
+	}
+	_, e := runMachine(context.Background(), c, o, m, m.units)
+	if e == nil || !strings.Contains(e.Error(), "spin 0 SpinUnsafe: requires complete spin result") {
+		t.Fatalf("error=%v", e)
+	}
+}
+
+// Every player starts from a clean assembler: an unfinished game left in the
+// assembler does not reach the next player's first spin.
+func TestPlayResetsAssemblerForEachPlayer(t *testing.T) {
+	c, _, m := fixture(1)
+	cg := compiledGroup{factory: fixedFactory(2), initial: 500,
+		events: []compiledEvent{{lo: 0, hi: len(c.Analysis[0].WinBuckets) + 1}}}
+	asm := buf.NewSpinAssembler()
+	if res, err := asm.Add(withMode(&buf.SpinResult{Bet: 1, BetMult: 1})); res != nil || err != nil {
+		t.Fatalf("leaving an unfinished game: %v %v", res, err)
+	}
+	s, err := play(context.Background(), m, asm, m.units, cg, c.Analysis[0], 0)
+	if err != nil {
+		t.Fatalf("the next player saw the unfinished game: %v", err)
+	}
+	if s.state.Spins != 2 {
+		t.Fatalf("spins=%d, want 2", s.state.Spins)
 	}
 }
 
@@ -354,7 +397,7 @@ func TestPartialCancellationAndPanics(t *testing.T) {
 				if created == 2 && operation == "game" {
 					panic("game failure")
 				}
-				return &buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true}
+				return withMode(&buf.SpinResult{Bet: 1, BetMult: 1, IsGameEnd: true})
 			}
 			var events []ProgressEvent
 			o.Reporter = reporterFunc(func(e ProgressEvent) {
@@ -498,7 +541,7 @@ func TestCancellationBoundariesAndNilStrategies(t *testing.T) {
 				if where == "spin" {
 					cancel()
 				}
-				return &buf.SpinResult{IsGameEnd: true, Bet: 1, BetMult: 1}
+				return withMode(&buf.SpinResult{IsGameEnd: true, Bet: 1, BetMult: 1})
 			}
 			c.Analysis[0].Events[0].Tags = []string{"x"}
 			o.Tags = map[spec.GID]map[string]tag.IsTag{0: {"x": func(*buf.SpinResult) bool {

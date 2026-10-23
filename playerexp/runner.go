@@ -184,6 +184,9 @@ func runMachine(ctx context.Context, c Config, o Options, m machine, units []int
 	for i, cg := range groups {
 		r.Groups[i].InitialBalance = cg.initial
 	}
+	// One assembler for the machine; every player resets it, so no player
+	// starts with another player's unfinished game.
+	asm := buf.NewSpinAssembler()
 	for i, cg := range groups {
 		g := &r.Groups[i]
 		g.InitialBalance = cg.initial
@@ -200,7 +203,7 @@ func runMachine(ctx context.Context, c Config, o Options, m machine, units []int
 			}
 			g.Started++
 			var s session
-			s, err = play(ctx, m, units, cg, g.Config, p)
+			s, err = play(ctx, m, asm, units, cg, g.Config, p)
 			if err != nil {
 				break
 			}
@@ -255,7 +258,7 @@ func emit(r Reporter, e ProgressEvent) (err error) {
 	r.Report(e)
 	return nil
 }
-func play(ctx context.Context, m machine, units []int, cg compiledGroup, g GroupConfig, player int) (s session, err error) {
+func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, cg compiledGroup, g GroupConfig, player int) (s session, err error) {
 	op := "factory"
 	defer func() {
 		if p := recover(); p != nil {
@@ -270,6 +273,7 @@ func play(ctx context.Context, m machine, units []int, cg compiledGroup, g Group
 		}
 	}()
 	s = session{state: PlayerState{Balance: cg.initial}, buckets: bucketStats(g.WinBuckets), hits: make([]uint64, len(cg.events))}
+	asm.Reset()
 	if cg.tagger != nil {
 		s.tags = cg.tagger.NewMasks()
 	}
@@ -322,9 +326,17 @@ func play(ctx context.Context, m machine, units []int, cg compiledGroup, g Group
 		if err = ctx.Err(); err != nil {
 			return s, err
 		}
-		if result == nil || !result.IsGameEnd {
+		if result == nil {
 			return s, fmt.Errorf("requires complete spin result")
 		}
+		full, e := asm.Add(result)
+		if e != nil {
+			return s, e
+		}
+		if full == nil { // no continuation input yet: an unfinished game cannot go on
+			return s, fmt.Errorf("requires complete spin result")
+		}
+		result = full
 		if result.State != nil && !emptyCheckpoint(result.State.Checkpoint) {
 			return s, fmt.Errorf("checkpoint games are not supported")
 		}
