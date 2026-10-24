@@ -79,6 +79,7 @@ func Stat(w http.ResponseWriter, r *http.Request) {
 		BetMult:       dst.BetMult,
 		GameModeCount: 0,
 		GameModeList:  make([]*buf.GameModeResult, 0, 2), // 預留2個作為fg判斷
+		IsGameEnd:     true,                              // 每筆資料都是完整的一局，符合 Recorder 的契約
 	}
 	m1 := &buf.GameModeResult{}
 	m2 := &buf.GameModeResult{}

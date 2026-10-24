@@ -148,13 +148,18 @@ func MergeSpinRecorder(r []*SpinRecorder) (*SpinRecorder, error) {
 	return s, nil
 }
 
-// Record 以單次 SpinResult 更新基本統計（不含玩家與倍數）
+// Record 以完整的一局更新基本統計（不含玩家與倍數）。
+//
+// sr 必須是完整的一局（IsGameEnd 為 true，至少一個 GameModeResult），由呼叫端保證，
+// 這裡不逐局檢查；分段遊戲先以 buf.SpinAssembler 組成完整局再記錄。報表定義：本局第一個
+// GameModeResult 的贏分為 BG，其餘為 FG；GameModeResult 數大於 1 為觸發。
 func (s *SpinRecorder) Record(sr *buf.SpinResult) {
 	s.recordBasic(sr) // Basic
 	s.recordDist(sr)  // Dist
 }
 
 // RecordWithPlayer 在 Record 的基礎上，進一步更新玩家餘額／離場狀態，並回傳玩家是否停止遊戲。
+// sr 的要求與 Record 相同。
 func (s *SpinRecorder) RecordWithPlayer(sr *buf.SpinResult) bool {
 	if s.Player.Balance < s.BetUnit {
 		return true

@@ -85,6 +85,26 @@ func BenchmarkSpinUnsafeCapture(b *testing.B) {
 	}
 }
 
+// BenchmarkSim 量測 Simulator 單一 worker 的吞吐（執行加上記錄）；每次操作為一轉。
+func BenchmarkSim(b *testing.B) {
+	for _, c := range []struct {
+		name    string
+		optimal bool
+	}{{"off", false}, {"manifest", true}} {
+		b.Run(c.name, func(b *testing.B) {
+			s, err := benchmarkLab(b, c.optimal).NewSimulator(0, MachineConfig{Seed: SeedInt64(42)})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			if _, _, err := s.Sim(0, max(b.N, 1), false); err != nil {
+				b.Fatal(err)
+			}
+		})
+	}
+}
+
 // BenchmarkSimMP 量測 Simulator 兩個 worker 的整體吞吐；每次操作為一轉。
 func BenchmarkSimMP(b *testing.B) {
 	for _, c := range []struct {

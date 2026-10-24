@@ -374,3 +374,70 @@ func BenchmarkTaggerMatch(b *testing.B) {
 		})
 	}
 }
+
+// Tags read an assembled whole game like any other result: modes, acts and
+// Extend from earlier segments are visible, and a condition on the game total
+// holds even when no single segment meets it.
+func TestTaggerOnAssembledGame(t *testing.T) {
+	mode := func(id, win int, ext any) *buf.GameModeResult {
+		return &buf.GameModeResult{GameModeId: id, TotalWin: win, TmpAct: &buf.TmpAct{},
+			ActResults: []buf.ActResult{{ActWin: win, ExtendResult: ext}}}
+	}
+	seg := func(cycle int, end bool, modes ...*buf.GameModeResult) *buf.SpinResult {
+		sr := &buf.SpinResult{Bet: 10, BetMult: 1, Cycle: cycle, IsGameEnd: end}
+		for _, m := range modes {
+			sr.TotalWin += m.TotalWin
+			sr.GameModeCount++
+			sr.GameModeList = append(sr.GameModeList, m)
+		}
+		return sr
+	}
+	marker := &struct{ Scatter int }{Scatter: 3}
+	segments := []*buf.SpinResult{
+		seg(0, false, mode(0, 30, marker)),
+		seg(1, false, mode(1, 20, nil)),
+		seg(2, true, mode(1, 40, nil)),
+	}
+	catalog := GameTagCatalog{1: {
+		"first_has_extend": func(sr *buf.SpinResult) bool {
+			return len(sr.GameModeList) > 0 && sr.GameModeList[0].ActResults[0].ExtendResult == marker
+		},
+		"free_after_base": func(sr *buf.SpinResult) bool {
+			return len(sr.GameModeList) == 3 && sr.GameModeList[0].GameModeId == 0 && sr.GameModeList[2].GameModeId == 1
+		},
+		"big_total": func(sr *buf.SpinResult) bool { return sr.TotalWin >= 8*sr.Bet },
+	}}
+	tagger, err := catalog.Compile(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := tagger.Want("first_has_extend", "free_after_base", "big_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bigOnly, err := tagger.Want("big_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	masks := tagger.NewMasks()
+	for i, sr := range segments {
+		tagger.Tag(masks, sr)
+		if tagger.Match(masks, bigOnly) {
+			t.Fatalf("segment %d alone meets the game-total condition; the test needs a total that only the whole game reaches", i)
+		}
+	}
+	a := buf.NewSpinAssembler()
+	var game *buf.SpinResult
+	for _, sr := range segments {
+		if game, err = a.Add(sr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if game == nil {
+		t.Fatal("the game was not completed")
+	}
+	tagger.Tag(masks, game)
+	if !tagger.Match(masks, want) {
+		t.Fatalf("assembled game tags=%v, want all of first_has_extend, free_after_base, big_total", tagger.ToNames(masks))
+	}
+}

@@ -32,6 +32,7 @@ type SpinResult struct {
 	BetMult       int               // 押注倍數
 	GameModeCount int               // 經過幾個GameMode
 	GameModeList  []*GameModeResult // 每個遊戲模式的完整結構
+	Cycle         int               // 第幾段，從 0 開始；由 Machine 在遊戲執行後覆寫，遊戲寫入的值不會保留
 	IsGameEnd     bool              // 遊戲結束旗標
 	State         *SpinState        // 遊戲狀態
 }
@@ -49,6 +50,7 @@ func NewSpinResult(gs *spec.GameSetting) *SpinResult {
 		BetMult:       0,
 		GameModeCount: 0,
 		GameModeList:  make([]*GameModeResult, 0, capSpinGrow),
+		Cycle:         0,
 		IsGameEnd:     false,
 		State: &SpinState{
 			StartCoreSnap: nil,
@@ -82,6 +84,7 @@ func (s *SpinResult) Reset() {
 	s.BetMode = 0
 	s.GameModeCount = 0
 	s.GameModeList = s.GameModeList[:0]
+	s.Cycle = 0
 	s.IsGameEnd = false
 	if s.State != nil {
 		s.State.StartCoreSnap = nil
@@ -543,7 +546,10 @@ type ExtendResult interface {
 	//    「不呼叫」才與「呼叫後回傳 nil」等價。違反此契約的遊戲，在省略模式下行為會改變。
 	//  - 是否產生 Extend 由引擎決定，遊戲不需要自行判斷；回傳 nil 會觸發 JSON omitempty。
 	//  - 回傳型別使用 any 是為了相容 JSON 序列化，避免強轉型。
-	//  - 建議：總是實作深拷貝，確保回傳值交出之後不再被遊戲修改。
+	//  - 契約：回傳的快照，以及它可以修改的參照資料，不得被後續的遊戲執行修改；消費端只能讀取。
+	//    同一段內的多個 Act 與 SpinAssembler 組出的完整局都會保留並共享這些參照；違反時，
+	//    前面 Act 或前面各段的 Extend 可能被覆寫。深拷貝是常見的達成方式；不可變的資料可以
+	//    直接共享，不必每次重新配置。
 	Snapshot() any
 }
 

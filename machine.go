@@ -208,6 +208,7 @@ func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 		startSnap = start
 	}
 	sr := m.spin()
+	sr.Cycle = m.spinRequest.Cycle // 段號由引擎填入，遊戲寫入的值不保留
 	afterSnap := m.snapshotInto(&m.afterBuf, "after state")
 	state := sr.State
 	state.StartCoreSnap = startSnap
@@ -280,11 +281,13 @@ func (m *Machine) spinUnsafeSeeded(in SpinInput) *buf.SpinResult {
 	return m.finishUnsafe(m.spin(), in.CaptureSnapshots, start)
 }
 
-// finishUnsafe 依 capture 擷取或清除結果的 RNG 快照；必須在恢復守衛還原之前執行。
+// finishUnsafe 以請求的 Cycle 覆寫結果的段號，並依 capture 擷取或清除結果的 RNG 快照；
+// 必須在恢復守衛還原之前執行。
 func (m *Machine) finishUnsafe(result *buf.SpinResult, capture bool, startSnap []byte) *buf.SpinResult {
 	if result == nil {
 		return nil
 	}
+	result.Cycle = m.spinRequest.Cycle // 段號由引擎填入，遊戲寫入的值不保留
 	if !capture {
 		if result.State != nil {
 			result.State.StartCoreSnap = nil
