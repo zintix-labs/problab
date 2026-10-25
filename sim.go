@@ -276,7 +276,8 @@ var (
 
 // runBet 以 m 執行一局，經 a 組成完整局後回傳。目前一局只有一段：遊戲回傳 nil、
 // 結果未結束或 Assembler 對帳失敗時回傳錯誤；遊戲與 RNG 的內部 panic 照常向外傳遞。
-// 回傳的結果借用 m 或 a 的緩衝，到下一次 runBet 為止有效。
+// 回傳的結果借用 m 或 a 的緩衝，到 m 的下一次執行（runBet 或直接 Spin）、a 的下一次
+// Add 或 Reset 為止有效。
 func runBet(m *Machine, a *buf.SpinAssembler, in SpinInput) (*buf.SpinResult, error) {
 	sr := m.SpinUnsafe(in)
 	if sr == nil {

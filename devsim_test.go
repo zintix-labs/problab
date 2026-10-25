@@ -79,6 +79,20 @@ func TestDevRestoreSpinsReplaysBatch(t *testing.T) {
 	}
 }
 
+// PRNG 可以重用 Snapshot 的回傳緩衝區；整批期間的快照不得改寫已取得的 Before。
+func TestDevSpinsBeforeSurvivesReusedSnapshotBuffer(t *testing.T) {
+	d := devSimulator(t, faultLab(t, core.Default(), false), 77)
+	d.m.core.PRNG = &offlineScratchPRNG{PRNG: d.m.core.PRNG}
+	start := corefmt.EncodeBase64URL(coreState(t, d.m))
+	rep, err := d.Spins(0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Before != start {
+		t.Fatal("before was overwritten by a later snapshot")
+	}
+}
+
 func TestDevRestoreSimReplays(t *testing.T) {
 	for _, optimal := range []bool{false, true} {
 		lab := faultLab(t, core.Default(), optimal)

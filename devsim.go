@@ -59,10 +59,12 @@ func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 	if err != nil {
 		return DevSpinReport{}, err
 	}
+	// PRNG 可以重用 Snapshot 的緩衝區，整批期間還會擷取快照，所以立即編碼。
 	be, err := m.SnapshotCore()
 	if err != nil {
 		return DevSpinReport{}, err
 	}
+	before := corefmt.EncodeBase64URL(be)
 
 	// spin
 	in := SpinInput{BetMode: betmode, BetMult: 1, CaptureSnapshots: true}
@@ -88,7 +90,7 @@ func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 	// 統計；RTP 維持百分比與原本的運算順序
 	b := rec.Basic
 	de := DevSpinReport{
-		Before:   corefmt.EncodeBase64URL(be),
+		Before:   before,
 		After:    corefmt.EncodeBase64URL(af),
 		Round:    len(ds),
 		Rtp:      100.0 * float64(b.TotalWin) / float64(b.TotalBet),
