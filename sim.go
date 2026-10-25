@@ -15,6 +15,7 @@
 package problab
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -113,7 +114,11 @@ func (s *Simulator) Sim(betMode int, round int, showpb bool) (*stats.StatReport,
 	in := SpinInput{BetMode: betMode, BetMult: 1}
 	asm := buf.NewSpinAssembler()
 	for i := 0; i < round; i++ {
-		r.Record(assembleOne(asm, m.SpinUnsafe(in), m.gameId, betMode, i))
+		res, err := runBet(m, asm, in)
+		if err != nil {
+			panic(simFault(m.gameId, betMode, i, err))
+		}
+		r.Record(res)
 		bar.Increment()
 	}
 	used := time.Since(bar.StartTime())
@@ -171,7 +176,11 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 			in := SpinInput{BetMode: betMode, BetMult: 1}
 			asm := buf.NewSpinAssembler()
 			for r := 0; r < rounds; r++ {
-				st.Record(assembleOne(asm, g.SpinUnsafe(in), g.gameId, betMode, r))
+				res, err := runBet(g, asm, in)
+				if err != nil {
+					panic(simFault(g.gameId, betMode, r, err))
+				}
+				st.Record(res)
 				bar.Increment()
 			}
 		}(i)
@@ -260,20 +269,34 @@ func (s *Simulator) SimPlayers(mp int, players int, initBets int, betMode int, r
 	return st, est, used, nil
 }
 
-// assembleOne 把一段結果交給 Assembler，回傳完整的一局。Simulator 沒有續段輸入，
-// nil、未完成與對帳失敗都屬於內部故障，直接 panic；round 是該迴圈中從 0 起算的局號。
-func assembleOne(a *buf.SpinAssembler, sr *buf.SpinResult, gid spec.GID, betMode, round int) *buf.SpinResult {
+var (
+	errNilSpinResult  = errors.New("nil spin result")
+	errIncompleteGame = errors.New("incomplete game result")
+)
+
+// runBet 以 m 執行一局，經 a 組成完整局後回傳。目前一局只有一段：遊戲回傳 nil、
+// 結果未結束或 Assembler 對帳失敗時回傳錯誤；遊戲與 RNG 的內部 panic 照常向外傳遞。
+// 回傳的結果借用 m 或 a 的緩衝，到 m 的下一次執行（runBet 或直接 Spin）、a 的下一次
+// Add 或 Reset 為止有效。
+func runBet(m *Machine, a *buf.SpinAssembler, in SpinInput) (*buf.SpinResult, error) {
+	sr := m.SpinUnsafe(in)
 	if sr == nil {
-		panic(fmt.Errorf("simulator: game %d bet mode %d round %d: nil spin result", gid, betMode, round))
+		return nil, errNilSpinResult
 	}
 	res, err := a.Add(sr)
 	if err != nil {
-		panic(fmt.Errorf("simulator: game %d bet mode %d round %d: %w", gid, betMode, round, err))
+		return nil, err
 	}
 	if res == nil {
-		panic(fmt.Errorf("simulator: game %d bet mode %d round %d: incomplete game result", gid, betMode, round))
+		return nil, errIncompleteGame
 	}
-	return res
+	return res, nil
+}
+
+// simFault 為 Simulator 的 runBet 錯誤補上遊戲、投注模式與局號；Simulator 沒有續段輸入，
+// 這些錯誤都屬於內部故障，由呼叫端 panic。round 是該迴圈中從 0 起算的局號。
+func simFault(gid spec.GID, betMode, round int, err error) error {
+	return fmt.Errorf("simulator: game %d bet mode %d round %d: %w", gid, betMode, round, err)
 }
 
 func sim(wg *sync.WaitGroup, m *Machine, jobs chan *recorder.SpinRecorder, betMode int, rounds int, bar *pb.ProgressBar) {
@@ -282,7 +305,11 @@ func sim(wg *sync.WaitGroup, m *Machine, jobs chan *recorder.SpinRecorder, betMo
 	asm := buf.NewSpinAssembler()
 	for j := range jobs { // j := <- jobs
 		for r := range rounds {
-			if j.RecordWithPlayer(assembleOne(asm, m.SpinUnsafe(in), m.gameId, betMode, r)) {
+			res, err := runBet(m, asm, in)
+			if err != nil {
+				panic(simFault(m.gameId, betMode, r, err))
+			}
+			if j.RecordWithPlayer(res) {
 				break
 			}
 		}
