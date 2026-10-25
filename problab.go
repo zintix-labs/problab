@@ -602,10 +602,8 @@ func (p *Problab) NewDevSimulator(gid spec.GID, seed int64) (*DevSimulator, erro
 		return nil, errs.NewFatal("seeds are not equal")
 	}
 	dev := &DevSimulator{
-		sim:      sim,
-		m:        m,
-		before:   mBe,
-		before64: mBe64,
+		sim: sim,
+		m:   m,
 	}
 	return dev, nil
 }

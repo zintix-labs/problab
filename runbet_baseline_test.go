@@ -300,10 +300,11 @@ func TestRunBetBaseline(t *testing.T) {
 	}
 	// 兩邊都經 JSON 往返（Marshal 會壓縮 RawMessage），讓格式一致。
 	got, want = rbCanon(t, got), rbCanon(t, want)
-	for k, w := range want.Spins {
-		g := got.Spins[k]
-		if !reflect.DeepEqual(g, w) {
-			t.Errorf("spins %s differ:\n got %s\nwant %s", k, rbBrief(g), rbBrief(w))
+	for _, gm := range rbGames {
+		lab := rbLab(t, gm.optimal)
+		for _, seed := range []int64{77, 2026} {
+			key := fmt.Sprintf("%s/%d", gm.name, seed)
+			rbCheckSpins(t, lab, gm, seed, key, got.Spins[key], want.Spins[key])
 		}
 	}
 	for k, w := range want.Sim {
@@ -337,4 +338,46 @@ func rbCanon(t *testing.T, b rbBaseline) rbBaseline {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// rbCheckSpins 依驗收表比對 Spins：每局結果與其餘欄位逐位元相同；FreeWin 改為
+// TotalWin-BaseWin；Before／After 為機台在整批前後的位置（未開 optimal 時與舊版相同）；
+// 以 Before 重跑重現同一批與最終 RNG；以舊版的還原輸入重跑，結果與舊版相同。
+func rbCheckSpins(t *testing.T, lab *Problab, gm rbGame, seed int64, key string, g, w rbSpins) {
+	t.Helper()
+	fail := func(format string, args ...any) { t.Errorf("spins %s: "+format, append([]any{key}, args...)...) }
+	if g.Round != w.Round || g.Rtp != w.Rtp || g.TotalBet != w.TotalBet || g.TotalWin != w.TotalWin || g.BaseWin != w.BaseWin {
+		fail("report fields differ:\n got %s\nwant %s", rbBrief(g), rbBrief(w))
+	}
+	if g.ResultsHash != w.ResultsHash || !reflect.DeepEqual(g.ResultHashes, w.ResultHashes) {
+		fail("per-game results differ")
+	}
+	if g.FreeWin != g.TotalWin-g.BaseWin {
+		fail("free_win %d, want total_win-base_win %d", g.FreeWin, g.TotalWin-g.BaseWin)
+	}
+	if g.MachineAfter != w.MachineAfter {
+		fail("machine position after the batch moved")
+	}
+	fresh, err := lab.NewMachine(gm.gid, MachineConfig{Seed: SeedInt64(seed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Before != rbCore(t, fresh) {
+		fail("before is not the machine position before the batch")
+	}
+	if g.After != g.MachineAfter {
+		fail("after is not the machine position after the batch")
+	}
+	if !gm.optimal && (g.Before != w.Before || g.After != w.After) {
+		fail("before/after changed for a game without optimal")
+	}
+	if g.RestoreResults != g.ResultsHash || g.RestoreMachine != g.MachineAfter {
+		fail("RestoreSpins(before) does not reproduce the batch and its final position")
+	}
+	rr, rm := rbRestoreSpins(t, lab, gm, seed, w.RestoreInput)
+	if rbHash(rr.Results) != w.RestoreResults || rm != w.RestoreMachine {
+		fail("RestoreSpins with the old input no longer matches the old results")
+	}
+	t.Logf("%s: free_win old %d new %d; before changed %v; old restore reproduced batch %v",
+		key, w.FreeWin, g.FreeWin, g.Before != w.Before, w.RestoreResults == w.ResultsHash)
 }

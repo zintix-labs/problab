@@ -70,6 +70,16 @@ func (l *brokenResultLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.Spi
 
 func brokenResultSimulator(t testing.TB, kind string) *Simulator {
 	t.Helper()
+	s, err := brokenResultLab(t, kind).NewSimulator(0, MachineConfig{Seed: SeedInt64(42)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// brokenResultLab 建立只有 game 0 的 Lab，遊戲邏輯為 brokenResultLogic。
+func brokenResultLab(t testing.TB, kind string) *Problab {
+	t.Helper()
 	reg := slot.NewLogicRegistry()
 	if err := reg.Register("demo_normal", func(g *slot.Game) (slot.GameLogic, error) {
 		inner, err := demo_logic.Logics.Build("demo_normal", g)
@@ -86,11 +96,7 @@ func brokenResultSimulator(t testing.TB, kind string) *Simulator {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = lab.Close() })
-	s, err := lab.NewSimulator(0, MachineConfig{Seed: SeedInt64(42)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
+	return lab
 }
 
 // Sim runs on the calling goroutine, so its panic can be recovered here.
