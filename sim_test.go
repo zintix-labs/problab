@@ -22,35 +22,34 @@ import (
 	"github.com/zintix-labs/problab/sdk/slot"
 )
 
-func TestAssembleOnePanics(t *testing.T) {
-	seg := func(cycle int, end bool) *buf.SpinResult {
-		return &buf.SpinResult{Cycle: cycle, IsGameEnd: end, GameModeList: []*buf.GameModeResult{{}}, GameModeCount: 1}
+// runBet 把 nil 與未結束的結果回報為錯誤，不 panic；完成的單段局直接交出。
+func TestRunBetErrors(t *testing.T) {
+	in := SpinInput{BetMode: 0, BetMult: 1}
+	for _, c := range []struct {
+		kind string
+		want error
+	}{{"nil", errNilSpinResult}, {"incomplete", errIncompleteGame}} {
+		m := brokenResultSimulator(t, c.kind).mBuf[0]
+		if res, err := runBet(m, buf.NewSpinAssembler(), in); res != nil || !errors.Is(err, c.want) {
+			t.Fatalf("%s: runBet = %v, %v; want nil, %v", c.kind, res, err, c.want)
+		}
 	}
-	cases := []struct {
-		name string
-		sr   *buf.SpinResult
-		want string
-		is   error
-	}{
-		{"nil", nil, "simulator: game 3 bet mode 1 round 7: nil spin result", nil},
-		{"incomplete", seg(0, false), "simulator: game 3 bet mode 1 round 7: incomplete game result", nil},
-		{"cycle", seg(2, true), "simulator: game 3 bet mode 1 round 7: spin assembler: cycle out of order: got cycle 2, want 0", buf.ErrCycleOutOfOrder},
+	m := faultMachine(t, false)
+	res, err := runBet(m, buf.NewSpinAssembler(), in)
+	if err != nil || res == nil || !res.IsGameEnd {
+		t.Fatalf("finished game: runBet = %v, %v", res, err)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			p := catchPanic(func() { assembleOne(buf.NewSpinAssembler(), c.sr, 3, 1, 7) })
-			err, ok := p.(error)
-			if !ok || err.Error() != c.want {
-				t.Fatalf("panic %v, want %q", p, c.want)
-			}
-			if c.is != nil && !errors.Is(err, c.is) {
-				t.Fatalf("panic %v does not wrap %v", err, c.is)
-			}
-		})
+}
+
+// simFault 補上遊戲、投注模式與局號，並保留原始錯誤。
+func TestSimFault(t *testing.T) {
+	_, cause := buf.NewSpinAssembler().Add(&buf.SpinResult{Cycle: 2, IsGameEnd: true, GameModeList: []*buf.GameModeResult{{}}, GameModeCount: 1})
+	err := simFault(3, 1, 7, cause)
+	if want := "simulator: game 3 bet mode 1 round 7: spin assembler: cycle out of order: got cycle 2, want 0"; err.Error() != want {
+		t.Fatalf("simFault = %q, want %q", err, want)
 	}
-	finished := seg(0, true)
-	if got := assembleOne(buf.NewSpinAssembler(), finished, 3, 1, 7); got != finished {
-		t.Fatal("a finished single segment must pass through")
+	if !errors.Is(err, buf.ErrCycleOutOfOrder) {
+		t.Fatalf("simFault %v does not wrap %v", err, buf.ErrCycleOutOfOrder)
 	}
 }
 
