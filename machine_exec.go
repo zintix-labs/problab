@@ -62,14 +62,22 @@ func (m *Machine) resetSpinRequest() {
 // fillSegment 一次寫入整份私有請求。ChooseNext 複製進 reqChooseNext，snap（本段的指定
 // 起始快照，可為空）複製進 reqSnap，之後修改輸入不影響遊戲讀到的值。Bet 由 BetUnits
 // 推導；betMode 必須在範圍內，由呼叫端保證。
+//
+// 逐欄寫入私有請求的每一個欄位（不經暫存的複合字面值，避免熱路徑上的清零與複製）；
+// buf.SpinRequest 新增欄位時必須同步，TestFillSegmentWritesEveryField 會檢查。
 func (m *Machine) fillSegment(betMode, betMult, cycle, choice int, chooseNext []int, cp any, snap []byte) {
-	m.reqChooseNext = append(m.reqChooseNext[:0], chooseNext...)
-	m.reqSnap = append(m.reqSnap[:0], snap...)
-	m.spinRequest = buf.SpinRequest{
-		GameId: m.gameId, GameName: m.gameName,
-		Bet: m.BetUnits[betMode] * betMult, BetMode: betMode, BetMult: betMult,
-		Cycle: cycle, Choice: choice, ChooseNext: m.reqChooseNext, Checkpoint: cp,
+	m.reqChooseNext = m.reqChooseNext[:0]
+	if len(chooseNext) != 0 {
+		m.reqChooseNext = append(m.reqChooseNext, chooseNext...)
 	}
+	m.reqSnap = m.reqSnap[:0]
+	if len(snap) != 0 {
+		m.reqSnap = append(m.reqSnap, snap...)
+	}
+	q := &m.spinRequest
+	q.GameName, q.GameId = m.gameName, m.gameId
+	q.Bet, q.BetMode, q.BetMult = m.BetUnits[betMode]*betMult, betMode, betMult
+	q.Cycle, q.Choice, q.ChooseNext, q.Checkpoint = cycle, choice, m.reqChooseNext, cp
 }
 
 // validSegment 檢查結構不變量：Cycle >= 0；Cycle 為 0 時沒有選項、Choice 為 0；
@@ -138,6 +146,12 @@ func (m *Machine) execSegment(o segmentOpts) (*buf.SpinResult, error) {
 		// 不指定起點：沒有恢復點，不需要恢復守衛。
 		return m.finishSegment(m.spin(), o, kind, startSnap)
 	}
+	return m.execGuarded(o, kind, start)
+}
+
+// execGuarded 在恢復守衛的保護範圍內執行指定起點的一段。與 execSegment 分開，讓不指定起點的
+// 熱路徑不帶 defer。
+func (m *Machine) execGuarded(o segmentOpts, kind startKind, start []byte) (*buf.SpinResult, error) {
 	g, formatErr := m.enterStart(kind, start)
 	if formatErr != nil {
 		return nil, &startRejected{err: formatErr}

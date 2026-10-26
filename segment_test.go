@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/zintix-labs/problab/corefmt"
@@ -268,5 +269,24 @@ func TestSegmentOutputChecks(t *testing.T) {
 	res, err := m.Spin(segmentRequest(m, 0, nil, nil))
 	if err != nil || res.IsGameEnd || len(res.ChooseNext) != 2 {
 		t.Fatalf("choice point without optimal: %+v %v", res, err)
+	}
+}
+
+// fillSegment 逐欄寫入私有請求；buf.SpinRequest 新增欄位時，這裡提醒必須同步寫入。
+func TestFillSegmentWritesEveryField(t *testing.T) {
+	if n := reflect.TypeOf(buf.SpinRequest{}).NumField(); n != 9 {
+		t.Fatalf("buf.SpinRequest has %d fields; update fillSegment and this test", n)
+	}
+	m := faultMachine(t, false)
+	m.spinRequest = buf.SpinRequest{GameName: "x", GameId: 9, Bet: 1, BetMode: 1, BetMult: 1, Cycle: 1, Choice: 1, ChooseNext: []int{1}, Checkpoint: 1}
+	m.fillSegment(0, 2, 0, 0, nil, nil, nil)
+	want := buf.SpinRequest{GameName: m.gameName, GameId: m.gameId, Bet: 2 * m.BetUnits[0], BetMode: 0, BetMult: 2}
+	got := m.spinRequest
+	if len(got.ChooseNext) != 0 {
+		t.Fatalf("stale ChooseNext %v", got.ChooseNext)
+	}
+	got.ChooseNext = nil
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fillSegment left stale fields:\n got %+v\nwant %+v", got, want)
 	}
 }
