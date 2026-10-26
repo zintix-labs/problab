@@ -21,7 +21,6 @@ b  ?=
 m  ?=
 r  ?=
 s  ?=
-c  ?=
 
 # default flag value
 game     ?= 0
@@ -31,7 +30,6 @@ bets     ?= 200
 betmode  ?= 0
 rounds   ?= 10000000
 seed     ?= 2305843009213693951
-choose   ?=
 
 # alias
 GAME_E    := $(if $(g),$(g),$(game))
@@ -41,11 +39,12 @@ BETS_E    := $(if $(b),$(b),$(bets))
 BETMODE_E := $(if $(m),$(m),$(betmode))
 ROUNDS_E  := $(if $(r),$(r),$(rounds))
 SEED_E    := $(if $(s),$(s),$(seed))
-CHOOSE_E  := $(if $(c),$(c),$(choose))
 
 
 # combine args
-RUN_ARGS = -game $(GAME_E) -worker $(WORKER_E) -player $(PLAYERS_E) -bets $(BETS_E) -mode $(BETMODE_E) -spins $(ROUNDS_E) -seed $(SEED_E) $(if $(CHOOSE_E),-choose $(CHOOSE_E))
+# make targets are not interactive: choice games always pick first.
+# For another choose mode, run the CLI directly: go run ./cmd/run -choose last
+RUN_ARGS = -game $(GAME_E) -worker $(WORKER_E) -player $(PLAYERS_E) -bets $(BETS_E) -mode $(BETMODE_E) -spins $(ROUNDS_E) -seed $(SEED_E) -choose first
 
 # pprof args: Go flag: var ProfileType = flag.String("p", ...))
 PPROF_CPU_ARGS    = -p=cpu    $(RUN_ARGS)
@@ -251,7 +250,6 @@ help:
 	@printf "  $(BLUE)%-13s$(RESET) = %-20s (%s)\n" "bets    / b" "$(BETS_E)" "Initial balance in bets"
 	@printf "  $(BLUE)%-13s$(RESET) = %-20s (%s)\n" "betmode / m" "$(BETMODE_E)" "Bet mode index"
 	@printf "  $(BLUE)%-13s$(RESET) = %-20s (%s)\n" "seed    / s" "$(SEED_E)" "int64 seed for RNG init"
-	@printf "  $(BLUE)%-13s$(RESET) = %-20s (%s)\n" "choose  / c" "$(CHOOSE_E)" "Choice games: first or last (empty = not set)"
 	@echo ""
 	@echo "Docker Arguments:"
 	@printf "  $(BLUE)%-13s$(RESET) = %-12s (%s)\n" "DOCKER_IMAGE" "$(DOCKER_IMAGE)" "Docker image name"
