@@ -87,7 +87,7 @@ func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 	in := SpinInput{BetMode: betmode, BetMult: 1, CaptureSnapshots: true}
 	ds := make([]dto.SpinResult, 0, round)
 	for i := range round {
-		res, err := playBet(br, in, cfg.choose)
+		res, err := playBet(br, &in, cfg.choose)
 		if err != nil {
 			if isSettingError(err) {
 				return DevSpinReport{}, &errs.E{ErrLv: errs.Warn, Message: "spin error", Cause: simFault(m.gameId, betmode, i, err)}

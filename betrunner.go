@@ -183,10 +183,17 @@ func (r *BetRunner) Bet(in SpinInput, mode ChooseMode) (*buf.SpinResult, error) 
 	if err := r.validBet(in.BetMode, in.BetMult); err != nil {
 		return nil, err
 	}
-	r.clear()
+	// 到這裡時沒有進行中的局，Assembler 不在局中，第 0 段的 Add 會清空它的緩衝；
+	// 只重設 Runner 自己的進度，不必呼叫 Assembler 的 Reset。
+	r.next, r.cp, r.result = r.next[:0], nil, nil
+	r.cycle, r.segments, r.state = 0, 0, runnerIdle
 	r.mode = mode
 	r.betMode, r.betMult, r.capture = in.BetMode, in.BetMult, in.CaptureSnapshots
-	return r.drive(r.run(0, 0, nil, nil, in.StartSnap))
+	sr, err := r.run(0, 0, nil, nil, in.StartSnap)
+	if err == nil && r.state == runnerDone {
+		return r.result, nil // 第 0 段就結束：單段遊戲的常見路徑，不進 drive
+	}
+	return r.drive(sr, err)
 }
 
 // Next 在 ChoosePlayer 的局停在選擇點時，以上一段 ChooseNext 的位置索引 choice 執行下一段。

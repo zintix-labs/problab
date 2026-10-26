@@ -27,23 +27,23 @@ import (
 func TestPlayBet(t *testing.T) {
 	in := SpinInput{BetMode: 0, BetMult: 1}
 	br, _, _ := chainRunner(t, 2)
-	res, err := playBet(br, in, ChoosePlayer)
+	res, err := playBet(br, &in, ChoosePlayer)
 	if res != nil || !errors.Is(err, ErrChooseModeRequired) || !isSettingError(err) {
 		t.Fatalf("player at a choice point: %v, %v", res, err)
 	}
 	if br.state != runnerIdle {
 		t.Fatalf("state %d after ErrChooseModeRequired", br.state)
 	}
-	if res, err := playBet(br, in, ChooseFirst); err != nil || !res.IsGameEnd {
+	if res, err := playBet(br, &in, ChooseFirst); err != nil || !res.IsGameEnd {
 		t.Fatalf("first: %v, %v", res, err)
 	}
 	limited, _, _ := chainRunner(t, 3, WithMaxSegments(2))
-	if _, err := playBet(limited, in, ChooseLast); !errors.Is(err, ErrSegmentLimit) || !isSettingError(err) || limited.state != runnerIdle {
+	if _, err := playBet(limited, &in, ChooseLast); !errors.Is(err, ErrSegmentLimit) || !isSettingError(err) || limited.state != runnerIdle {
 		t.Fatalf("limit: %v, state %d", err, limited.state)
 	}
 	rejected, logic, _ := chainRunner(t, 2)
 	logic.nilAt = 0
-	if _, err := playBet(rejected, in, ChooseFirst); !errors.Is(err, ErrGameRejected) || isSettingError(err) {
+	if _, err := playBet(rejected, &in, ChooseFirst); !errors.Is(err, ErrGameRejected) || isSettingError(err) {
 		t.Fatalf("game rejection: %v", err)
 	}
 }

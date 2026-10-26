@@ -181,7 +181,7 @@ func (s *Simulator) Sim(betMode int, round int, showpb bool) (*stats.StatReport,
 	}
 	in := SpinInput{BetMode: betMode, BetMult: 1}
 	for i := 0; i < round; i++ {
-		res, err := playBet(br, in, cfg.choose)
+		res, err := playBet(br, &in, cfg.choose)
 		if err != nil {
 			if isSettingError(err) {
 				bar.Finish()
@@ -261,7 +261,7 @@ func (s *Simulator) SimMP(betMode int, rounds int, mp int, showpb bool) (*stats.
 				if run.stopped() {
 					return
 				}
-				res, err := playBet(br, in, cfg.choose)
+				res, err := playBet(br, &in, cfg.choose)
 				if err != nil {
 					if isSettingError(err) {
 						run.fail(simStopped(g.gameId, betMode, r, err))
@@ -388,8 +388,8 @@ var ErrChooseModeRequired = errors.New("a choice game requires choose mode first
 // playBet 以 br 執行一筆下注並回傳完整局，是不會做選擇的消費端共用的包裝：ChoosePlayer
 // 停在選擇點時回傳 ErrChooseModeRequired。任何 error 之後都 Reset br，下一局可以直接開始。
 // 回傳的結果借用 br 與其 Machine 的緩衝，到下一次 playBet 為止有效。
-func playBet(br *BetRunner, in SpinInput, mode ChooseMode) (*buf.SpinResult, error) {
-	res, err := br.Bet(in, mode)
+func playBet(br *BetRunner, in *SpinInput, mode ChooseMode) (*buf.SpinResult, error) {
+	res, err := br.Bet(*in, mode)
 	if err != nil {
 		br.Reset()
 		return nil, err
@@ -453,7 +453,7 @@ func sim(wg *sync.WaitGroup, run *simRun, br *BetRunner, mode ChooseMode, jobs c
 			if run.stopped() {
 				return
 			}
-			res, err := playBet(br, in, mode)
+			res, err := playBet(br, &in, mode)
 			if err != nil {
 				if isSettingError(err) {
 					run.fail(simStopped(m.gameId, betMode, r, err))
