@@ -124,3 +124,56 @@ func TestDevSpinsBrokenResults(t *testing.T) {
 		t.Fatalf("incomplete: panic %v", p)
 	}
 }
+
+// SetCfg 同時設定 Spins 與 Sim 的執行設定；失敗時兩者都不變。
+func TestDevSimulatorSetCfg(t *testing.T) {
+	d := choiceDevSimulator(t, demoChoiceLab(t), 3)
+	if err := d.SetCfg(BetConfig{Choose: ChooseFirst, MaxSegments: 5}); err != nil || d.cfg != d.sim.cfg || d.cfg != (betCfg{ChooseFirst, 5}) {
+		t.Fatalf("SetCfg: %+v %+v %v", d.cfg, d.sim.cfg, err)
+	}
+	if err := d.SetCfg(BetConfig{MaxSegments: -1}); err == nil || d.cfg != (betCfg{ChooseFirst, 5}) || d.sim.cfg != d.cfg {
+		t.Fatal("a rejected SetCfg changed the settings")
+	}
+}
+
+// 選擇類遊戲：未指定選擇方式或段數上限不足時回傳 Warn；指定 first、last 時一筆一局，
+// 報告標示選擇方式，RestoreSpins 重跑得到相同的一批，Sim 的報表同樣標示。
+func TestDevSpinsChoiceGame(t *testing.T) {
+	lab := demoChoiceLab(t)
+	_, err := choiceDevSimulator(t, lab, 5).Spins(0, 2000)
+	requireWarnIs(t, "no choose mode", err, ErrChooseModeRequired)
+	d := choiceDevSimulator(t, lab, 5)
+	if err := d.SetCfg(BetConfig{Choose: ChooseLast, MaxSegments: 1}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = d.Spins(0, 2000)
+	requireWarnIs(t, "segment limit", err, ErrSegmentLimit)
+
+	for _, mode := range []ChooseMode{ChooseFirst, ChooseLast} {
+		d := choiceDevSimulator(t, lab, 9)
+		if err := d.SetCfg(BetConfig{Choose: mode}); err != nil {
+			t.Fatal(err)
+		}
+		rep, err := d.Spins(0, 1500)
+		if err != nil {
+			t.Fatal(err)
+		}
+		multi := 0
+		for _, r := range rep.Results {
+			if r.Cycle > 0 {
+				multi++
+			}
+		}
+		if rep.Round != 1500 || len(rep.Results) != 1500 || rep.TotalBet != 1500*d.m.BetUnits[0] || rep.Choose != mode.String() || multi == 0 {
+			t.Fatalf("%v: round %d results %d bet %d choose %q multi %d", mode, rep.Round, len(rep.Results), rep.TotalBet, rep.Choose, multi)
+		}
+		again, err := d.RestoreSpins(rep.Before, 0, 1500)
+		if err != nil || mustJSONString(t, again) != mustJSONString(t, rep) {
+			t.Fatalf("%v: RestoreSpins differs: %v", mode, err)
+		}
+		sim, err := d.Sim(0, 2000)
+		if err != nil || sim.Stat.Summary.Choose != mode.String() {
+			t.Fatalf("%v: Sim: %v", mode, err)
+		}
+	}
+}

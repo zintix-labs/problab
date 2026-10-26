@@ -28,6 +28,9 @@ import (
 	"testing/fstest"
 
 	"github.com/zintix-labs/problab/demo/demo_configs"
+	"github.com/zintix-labs/problab/demo/demo_logic"
+	"github.com/zintix-labs/problab/dto"
+	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
@@ -309,4 +312,91 @@ func (r *detReader) Read(dst []byte) (int, error) {
 	}
 	r.read += int64(n)
 	return n, nil
+}
+
+func requireWarnIs(t testing.TB, step string, err, target error) {
+	t.Helper()
+	if !errors.Is(err, target) {
+		t.Fatalf("%s: err %v, want %v", step, err, target)
+	}
+	if e, ok := err.(*errs.E); !ok || e.ErrLv != errs.Warn {
+		t.Fatalf("%s: err %T %v, want *errs.E at Warn", step, err, err)
+	}
+}
+
+func intp(v int) *int { return &v }
+
+// demo_choice（game 2）：BG 觸發後二選一的分段遊戲，供分段相關的測試共用。
+
+const demoChoiceID spec.GID = 2
+
+func demoChoiceLab(t testing.TB) *Problab {
+	t.Helper()
+	lab, err := NewAuto(core.Default(), Configs(demo_configs.FS), Logics(demo_logic.Logics))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lab.Close() })
+	return lab
+}
+
+func demoChoiceMachine(t testing.TB, lab *Problab, seed int64) *Machine {
+	t.Helper()
+	m, err := lab.NewMachine(demoChoiceID, MachineConfig{Seed: SeedInt64(seed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func choiceRequest(m *Machine, cycle int, choice *int, next []int, cp json.RawMessage, start string) *dto.SpinRequest {
+	req := &dto.SpinRequest{BetID: "bet-1", GameName: m.gameName, GameId: m.gameId, Bet: m.BetUnits[0], BetMode: 0, BetMult: 1,
+		Cycle: cycle, Choice: choice, ChooseNext: next}
+	if len(cp) != 0 || start != "" {
+		req.StartState = &dto.StartState{StartCoreSnapB64U: start, Checkpoint: cp}
+	}
+	return req
+}
+
+// spinTriggered 以 Spin 反覆開局，直到第 0 段停在選擇點。
+func spinTriggered(t *testing.T, m *Machine) dto.SpinResult {
+	t.Helper()
+	for range 5000 {
+		res, err := m.Spin(choiceRequest(m, 0, nil, nil, nil, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.IsGameEnd {
+			return res
+		}
+	}
+	t.Fatal("the choice game never triggered")
+	return dto.SpinResult{}
+}
+
+func mustJSONString(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func choiceSimulator(t testing.TB, lab *Problab, seed int64) *Simulator {
+	t.Helper()
+	s, err := lab.NewSimulator(demoChoiceID, MachineConfig{Seed: SeedInt64(seed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func choiceDevSimulator(t testing.TB, lab *Problab, seed int64) *DevSimulator {
+	t.Helper()
+	d, err := lab.NewDevSimulator(demoChoiceID, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

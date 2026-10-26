@@ -566,3 +566,74 @@ func TestResultCycleIsFilledByEngine(t *testing.T) {
 		})
 	}
 }
+
+// 跨 Machine 接手：以第 0 段結果的 choose_next 與 cp 組出續段請求，送到另一台位置相同的
+// Machine，結果與原機台繼續執行相同；結果回帶 bet_id、cycle 與 choice。
+func TestDemoChoiceTakeoverAcrossMachines(t *testing.T) {
+	lab := demoChoiceLab(t)
+	a, b := demoChoiceMachine(t, lab, 21), demoChoiceMachine(t, lab, 99)
+	seg0 := spinTriggered(t, a)
+	if seg0.BetID != "bet-1" || seg0.Choice != nil || len(seg0.ChooseNext) != 2 || len(seg0.State.Checkpoint) == 0 {
+		t.Fatalf("segment 0: %+v", seg0)
+	}
+	if err := b.RestoreCore(coreState(t, a)); err != nil {
+		t.Fatal(err)
+	}
+	cont := choiceRequest(a, 1, intp(1), seg0.ChooseNext, seg0.State.Checkpoint, "")
+	resA, err := a.Spin(cont)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resB, err := b.Spin(cont)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mustJSONString(t, resA) != mustJSONString(t, resB) {
+		t.Fatal("the continuation differs across machines")
+	}
+	if !resA.IsGameEnd || resA.Cycle != 1 || resA.Choice == nil || *resA.Choice != 1 || resA.BetID != "bet-1" {
+		t.Fatalf("continuation: %+v", resA)
+	}
+
+	// 逐段回放：第 1 段以自己的起始快照、choice，以及第 0 段的 choose_next 與 cp 重送。
+	c := demoChoiceMachine(t, lab, 5)
+	replay := choiceRequest(c, 1, intp(1), seg0.ChooseNext, seg0.State.Checkpoint, resA.State.StartCoreSnapB64U)
+	before := coreState(t, c)
+	got, err := c.Spin(replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mustJSONString(t, got) != mustJSONString(t, resA) {
+		t.Fatal("replaying segment 1 differs")
+	}
+	requireCore(t, c, before)
+	// 第 0 段同樣可以回放。
+	if got, err := c.Spin(choiceRequest(c, 0, nil, nil, nil, seg0.State.StartCoreSnapB64U)); err != nil || mustJSONString(t, got) != mustJSONString(t, seg0) {
+		t.Fatalf("replaying segment 0 differs: %v", err)
+	}
+}
+
+// optimal 開啟的機台：以起始快照重播第 0 段時跳過抽庫，得到相同的結果，機台恢復到執行前。
+func TestOptimalSegmentReplaySkipsDraw(t *testing.T) {
+	m := faultMachine(t, true)
+	req := &dto.SpinRequest{GameName: m.gameName, GameId: m.gameId, Bet: m.BetUnits[0], BetMode: 0, BetMult: 1}
+	first, err := m.Spin(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := coreState(t, m)
+	req.StartState = &dto.StartState{StartCoreSnapB64U: first.State.StartCoreSnapB64U}
+	again, err := m.Spin(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mustJSONString(t, again) != mustJSONString(t, first) {
+		t.Fatal("replay differs")
+	}
+	requireCore(t, m, before)
+	snap, _ := corefmt.DecodeBase64URL(first.State.StartCoreSnapB64U)
+	if sr := m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1, StartSnap: snap, CaptureSnapshots: true}); sr == nil || sr.TotalWin != first.TotalWin {
+		t.Fatal("SpinUnsafe replay with StartSnap differs")
+	}
+	requireCore(t, m, before)
+}
