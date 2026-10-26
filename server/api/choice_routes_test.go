@@ -53,7 +53,7 @@ func newTestServer(t *testing.T, lab *problab.Problab) *httptest.Server {
 
 func choiceLab(t *testing.T) *problab.Problab {
 	t.Helper()
-	lab, err := problab.NewAuto(core.Default(), problab.Configs(demo_configs.FS, demo_configs.StagedFS), problab.Logics(demo_logic.Logics))
+	lab, err := problab.NewAuto(core.Default(), problab.Configs(demo_configs.FS), problab.Logics(demo_logic.Logics))
 	if err != nil {
 		t.Fatal(err)
 	}

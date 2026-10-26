@@ -43,7 +43,7 @@ func callCountChoiceLab(t testing.TB) (*Problab, *atomic.Int64) {
 			t.Fatal(err)
 		}
 	}
-	lab, err := NewAuto(core.Default(), Configs(demo_configs.FS, demo_configs.StagedFS), Logics(reg))
+	lab, err := NewAuto(core.Default(), Configs(demo_configs.FS), Logics(reg))
 	if err != nil {
 		t.Fatal(err)
 	}

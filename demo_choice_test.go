@@ -2,6 +2,7 @@ package problab
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"testing"
@@ -15,13 +16,13 @@ import (
 	"github.com/zintix-labs/problab/spec"
 )
 
-// demo_choice（game 2）：BG 觸發後二選一的分段遊戲，設定在 StagedFS。
+// demo_choice（game 2）：BG 觸發後二選一的分段遊戲。
 
 const demoChoiceID spec.GID = 2
 
 func demoChoiceLab(t testing.TB) *Problab {
 	t.Helper()
-	lab, err := NewAuto(core.Default(), Configs(demo_configs.FS, demo_configs.StagedFS), Logics(demo_logic.Logics))
+	lab, err := NewAuto(core.Default(), Configs(demo_configs.FS), Logics(demo_logic.Logics))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,22 +39,21 @@ func demoChoiceMachine(t testing.TB, lab *Problab, seed int64) *Machine {
 	return m
 }
 
-// 預設的 demo 設定不包含 game 2；明確載入 StagedFS 時才能建立並執行。
-func TestDemoChoiceIsStaged(t *testing.T) {
-	lab, err := NewAuto(core.Default(), Configs(demo_configs.FS), Logics(demo_logic.Logics))
+// 預設的 demo 設定包含 game 2；未指定選擇方式時，模擬回報錯誤而不是 panic。
+func TestDemoChoiceInDefaultConfigs(t *testing.T) {
+	lab := demoChoiceLab(t)
+	if !slices.Contains(lab.IDs(), demoChoiceID) {
+		t.Fatal("the default demo configs do not include the choice game")
+	}
+	if demoChoiceMachine(t, lab, 1).SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}) == nil {
+		t.Fatal("the choice game did not run")
+	}
+	s, err := lab.NewSimulator(demoChoiceID, MachineConfig{Seed: SeedInt64(1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = lab.Close() }()
-	if slices.Contains(lab.IDs(), demoChoiceID) {
-		t.Fatal("the default demo configs include the staged choice game")
-	}
-	staged := demoChoiceLab(t)
-	if !slices.Contains(staged.IDs(), demoChoiceID) {
-		t.Fatal("StagedFS does not provide the choice game")
-	}
-	if demoChoiceMachine(t, staged, 1).SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}) == nil {
-		t.Fatal("the staged game did not run")
+	if _, _, err := s.Sim(0, 2000, false); !errors.Is(err, ErrChooseModeRequired) {
+		t.Fatalf("Sim without a choose mode: %v", err)
 	}
 }
 
