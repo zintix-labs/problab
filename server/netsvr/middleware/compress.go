@@ -159,6 +159,14 @@ func (cw *compressResponseWriter) Push(target string, opts *http.PushOptions) er
 	return errors.New("underlying response writer does not support Pusher")
 }
 
+// abandonCompression 在 handler 沒有正常返回（panic）時移除壓縮標頭；呼叫端同時把壓縮器
+// 導向 io.Discard。否則壓縮器 Close 時寫出的結尾會先送出 200，外層 Recoverer 的 500 失效。
+// 不攔截 panic，讓它帶著原本的 stack 繼續往外傳；handler 已送出的內容無法撤回。
+func abandonCompression(w http.ResponseWriter) {
+	w.Header().Del("Content-Encoding")
+	w.Header().Del("Vary")
+}
+
 // --- Middleware 入口 ---
 
 func Compression(next http.Handler) http.Handler {
@@ -186,14 +194,19 @@ func Compression(next http.Handler) http.Handler {
 			// [關鍵修復] 如果 response 被標記為 disabled，將 Writer 重置到 io.Discard
 			// 這樣 Close() 時產生的 Footer 就會被丟棄，不會污染 204/304 回應
 			cw := &compressResponseWriter{ResponseWriter: w, w: zw}
+			completed := false
 			defer func() {
-				if cw.disabled {
+				if !completed {
+					abandonCompression(w)
+				}
+				if cw.disabled || !completed {
 					zw.Reset(io.Discard)
 				}
 				releaseZstdWriter(zw)
 			}()
 
 			next.ServeHTTP(cw, r)
+			completed = true
 			return
 		}
 
@@ -205,14 +218,19 @@ func Compression(next http.Handler) http.Handler {
 			gw := getGzipWriter(w)
 			// 同上，防止 204/304 寫入 Gzip Footer
 			cw := &compressResponseWriter{ResponseWriter: w, w: gw}
+			completed := false
 			defer func() {
-				if cw.disabled {
+				if !completed {
+					abandonCompression(w)
+				}
+				if cw.disabled || !completed {
 					gw.Reset(io.Discard)
 				}
 				releaseGzipWriter(gw)
 			}()
 
 			next.ServeHTTP(cw, r)
+			completed = true
 			return
 		}
 
