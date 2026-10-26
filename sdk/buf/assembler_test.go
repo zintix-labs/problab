@@ -344,9 +344,22 @@ func TestSpinAssemblerAllocations(t *testing.T) {
 func TestSpinResultResetClearsCycle(t *testing.T) {
 	sr := NewSpinResult(testGameSetting())
 	sr.Cycle = 3
+	sr.ChooseNext = append(sr.ChooseNext, 1, 2)
 	sr.Reset()
-	if sr.Cycle != 0 {
-		t.Fatalf("Reset left Cycle = %d", sr.Cycle)
+	if sr.Cycle != 0 || len(sr.ChooseNext) != 0 || cap(sr.ChooseNext) == 0 {
+		t.Fatalf("Reset left Cycle = %d, ChooseNext = %v (cap %d)", sr.Cycle, sr.ChooseNext, cap(sr.ChooseNext))
+	}
+}
+
+// 組裝的完整局已結束，不帶任何一段的選項。
+func TestSpinAssemblerGameHasNoChooseNext(t *testing.T) {
+	a := NewSpinAssembler()
+	s0 := testSegment(0, false, 0, 1, testMode(1, 2, 15, 1, 0))
+	s0.ChooseNext = []int{1, 2}
+	mustAdd(t, a, s0)
+	res := mustAdd(t, a, testSegment(1, true, 0, 1, testMode(2, 3, 15, 1, 0)))
+	if res == nil || len(res.ChooseNext) != 0 {
+		t.Fatalf("assembled game ChooseNext = %v", res.ChooseNext)
 	}
 }
 

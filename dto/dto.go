@@ -33,6 +33,13 @@ type SpinResult struct {
 	GameModes []GameModeResultDTO `json:"gamemodes,omitempty"` // 每個遊戲模式的完整結構
 	IsGameEnd bool                `json:"isend"`               // 遊戲結束旗標
 	State     SpinState           `json:"spin_state"`          // 遊戲狀態
+
+	// 分段欄位，為空時不輸出。BetID、Choice 由 Spin 從請求填入；Choice 只在有選擇的段出現，
+	// 選了索引 0 時輸出 "choice": 0。
+	BetID      string `json:"bet_id,omitempty"`
+	Cycle      int    `json:"cycle,omitempty"`
+	Choice     *int   `json:"choice,omitempty"`
+	ChooseNext []int  `json:"choose_next,omitempty"`
 }
 
 // GameModeResultDTO 為對外輸出的 GameModeResult 序列化結構。
@@ -102,6 +109,10 @@ func NewSpinResultDTO(sr *buf.SpinResult) (SpinResult, error) {
 		BetMult:   sr.BetMult,
 		IsGameEnd: sr.IsGameEnd,
 		State:     state,
+		Cycle:     sr.Cycle,
+	}
+	if len(sr.ChooseNext) > 0 {
+		dto.ChooseNext = append([]int(nil), sr.ChooseNext...)
 	}
 
 	if len(sr.GameModeList) > 0 {
@@ -225,12 +236,13 @@ func hitMapFromSnap(d buf.CalcScreenDetail, snap *gameModeSnapshot) []int16 {
 }
 
 type SpinState struct {
-	// 續玩／回放協議的一半：業務端把 AfterCoreSnapB64U 當作下一段的
-	// StartCoreSnapB64U 送回，即可延續 RNG 流水；StartCoreSnapB64U 是回放與
-	// 稽核的唯一入口。對業務端必回。
+	// StartCoreSnapB64U 是本段實際使用的起始快照（抽庫時為抽出的 seed），可作為回放請求的
+	// start_b64u；AfterCoreSnapB64U 是本段結束時的狀態，只供審計存證。續段請求不帶快照，
+	// 不得把 AfterCoreSnapB64U 當作下一段的 start_b64u 送回。對受信任的後端必回。
 	//
-	// 但這兩個欄位就是可重現整個 RNG 流的種子材料。交付給 RGS、平台或任何
-	// 非數學擁有者的結果庫，converter 必須刪除它們——見 dto.ResultConverter。
+	// 這兩個欄位是可重現 RNG 的種子材料。是否輸出由 dto.ResultConverter 決定：
+	// IdentityConverter 保留、WithoutSnapshotConverter 移除。交付給不應取得重播材料的對象時，
+	// 應選用移除快照的 converter。
 	StartCoreSnapB64U string          `json:"start_b64u"`   // 必回
 	AfterCoreSnapB64U string          `json:"after_b64u"`   // 必回
 	Checkpoint        json.RawMessage `json:"cp,omitempty"` // 視你是否要每局都回；若審計要強制，也可以去掉 omitempty

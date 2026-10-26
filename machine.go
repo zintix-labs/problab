@@ -15,6 +15,7 @@
 package problab
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/zintix-labs/problab/dto"
@@ -73,10 +74,10 @@ type Machine struct {
 	// 請求與快照緩衝區由 Machine 持有，借用到下一次呼叫為止。
 	// restoreBuf、reqSnap、seedBuf、startBuf、afterBuf 必須是彼此獨立的底層陣列：
 	// 第三方 PRNG 的 snapshot 可能重用自己的緩衝區，artifact 的 bank 則是唯讀的共用資料。
-	spinRequest   buf.SpinRequest // 交給遊戲的請求；每次執行前以 resetSpinRequest 重設
-	reqStart      buf.StartState  // spinRequest.StartState 有內容時指向它
-	reqSnap       []byte          // Spin 交給遊戲、也作為結果起始快照的起點（外部快照或抽出的 seed）
-	seedBuf       []byte          // SpinUnsafe 抽出的 seed
+	spinRequest   buf.SpinRequest // 交給遊戲的請求；每次執行前以 fillSegment 整份寫入
+	reqChooseNext []int           // spinRequest.ChooseNext 的底層陣列（輸入的複製）
+	reqSnap       []byte          // 本段的指定起始快照（外部快照或 SpinInput.StartSnap），不交給遊戲
+	seedBuf       []byte          // 抽出的 seed
 	restoreBuf    []byte          // 恢復點
 	startBuf      []byte          // 不指定起點時擷取的起始快照
 	afterBuf      []byte          // 結束快照
@@ -147,11 +148,13 @@ func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFacto
 	return m, nil
 }
 
-// Spin 為主要公開入口，會驗證投注請求，執行遊戲並回傳Spin結果。
+// Spin 為主要公開入口，會驗證投注請求，執行一段遊戲並回傳該段的結果。
 //
-// 可預期的輸入錯誤（請求驗證、DTO 解析、被 PRNG 拒絕的外部起始快照）回傳 errs.Warn；
-// production reseed 失敗回傳 errs.Fatal。其他內部執行故障以 panic 呈現，由 MachinePool
-// 汰換機台；RNG 恢復失敗後 Machine 不可再用。
+// 可預期的輸入錯誤回傳 errs.Warn：請求驗證、DTO 解析、被 PRNG 拒絕的外部起始快照、
+// 違反結構不變量的續段請求（ErrSegmentInput）、目前的 optimal 設定不支援續段
+// （ErrContinuationUnsupported），以及遊戲拒絕請求（ErrGameRejected）。後三者可以
+// errors.Is 判斷。production reseed 失敗回傳 errs.Fatal。其他內部執行故障以 panic 呈現，
+// 由 MachinePool 汰換機台；RNG 恢復失敗後 Machine 不可再用。
 func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -163,59 +166,48 @@ func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 		return dto.SpinResult{}, err
 	}
 	// 2. 解析 DTO，填入 Machine 持有的請求（GameId、GameName 保留機台值）
-	req, err := r.Parse(m.gh.GameSetting.LogicKey)
+	p, err := r.Parse(m.gh.GameSetting.LogicKey)
 	if err != nil {
 		return dto.SpinResult{}, err
 	}
-	q := &m.spinRequest
-	q.UID, q.Bet, q.BetMode, q.BetMult = req.UID, req.Bet, req.BetMode, req.BetMult
-	q.Cycle, q.Choice, q.HasChoice = req.Cycle, req.Choice, req.HasChoice
-	if req.StartState != nil {
-		m.reqSnap = append(m.reqSnap[:0], req.StartState.StartCoreSnap...)
-		m.reqStart = buf.StartState{StartCoreSnap: m.reqSnap, Checkpoint: req.StartState.Checkpoint}
-		q.StartState = &m.reqStart
+	m.fillSegment(r.BetMode, r.BetMult, p.Cycle, p.Choice, p.ChooseNext, p.Checkpoint, p.StartSnap)
+
+	// 3. 執行一段：外部快照（回放）；否則 production 先 reseed，optimal 開啟時抽庫
+	sr, err := m.execSegment(segmentOpts{
+		external:    len(p.StartSnap) != 0,
+		reseed:      m.rngMode == rngProduction,
+		capture:     true,
+		checkOutput: true,
+	})
+	if err != nil {
+		return dto.SpinResult{}, spinError(err)
 	}
 
-	// 3. 選擇起點：外部快照（回放）；否則 production 先 reseed，optimal 開啟時抽庫
-	kind, start := startNone, []byte(nil)
-	var startSnap []byte
-	if req.StartState != nil && len(req.StartState.StartCoreSnap) != 0 {
-		kind, start = startExternal, m.reqSnap
-	} else {
-		if m.rngMode == rngProduction {
-			if err := m.core.Reseed(); err != nil {
-				return dto.SpinResult{}, errs.NewFatal("reseed PRNG before new game cycle: " + err.Error())
-			}
-		}
-		if m.optimal != nil {
-			// 先把 seed 填進請求，再記錄恢復點（與既有順序相同）。
-			m.reqSnap = m.pickSeed(q.BetMode, &m.reqSnap)
-			m.reqStart.StartCoreSnap = m.reqSnap
-			q.StartState = &m.reqStart
-			kind, start = startSeed, m.reqSnap
-		} else {
-			startSnap = m.snapshotInto(&m.startBuf, "start state")
-		}
+	// 4. 轉成 DTO（複製），補上入口回填的欄位
+	res, err := dto.NewSpinResultDTO(sr)
+	if err != nil {
+		return res, err
 	}
+	res.BetID = p.BetID
+	if p.HasChoice {
+		choice := p.Choice
+		res.Choice = &choice
+	}
+	return res, nil
+}
 
-	// 4. 準備起點並執行
-	g, formatErr := m.enterStart(kind, start)
-	if formatErr != nil {
-		return dto.SpinResult{}, errs.NewWarn("restore core err " + formatErr.Error())
+// spinError 把單段執行的錯誤轉成 Spin 的錯誤。既有的錯誤維持原本的訊息與等級；新增的
+// 拒絕以 errs.Warn 承載，Cause 為可以 errors.Is 判斷的 sentinel。
+func spinError(err error) error {
+	var rejected *startRejected
+	switch {
+	case errors.As(err, &rejected):
+		return errs.NewWarn("restore core err " + rejected.err.Error())
+	case errors.Is(err, ErrSegmentInput), errors.Is(err, ErrContinuationUnsupported), errors.Is(err, ErrGameRejected):
+		return &errs.E{ErrLv: errs.Warn, Message: "spin request rejected", Cause: err}
+	default:
+		return err
 	}
-	defer g.finish()
-	if kind != startNone {
-		startSnap = start
-	}
-	sr := m.spin()
-	sr.Cycle = m.spinRequest.Cycle // 段號由引擎填入，遊戲寫入的值不保留
-	afterSnap := m.snapshotInto(&m.afterBuf, "after state")
-	state := sr.State
-	state.StartCoreSnap = startSnap
-	state.AfterCoreSnap = afterSnap
-
-	// 5. 轉成 DTO（複製），在恢復守衛還原 RNG 之前完成
-	return dto.NewSpinResultDTO(sr)
 }
 
 // UsesOptimal reports the loaded runtime source, not merely a config flag.
@@ -224,85 +216,68 @@ func (m *Machine) UsesOptimal() bool { return m.optimal != nil }
 // OmitExtend 回傳此 Machine 的 Extend 省略政策（true 表示結果不含 Extend）。
 func (m *Machine) OmitExtend() bool { return m.gh.OmitExtend() }
 
+// 單段執行的拒絕原因。執行前的拒絕（ErrSegmentInput、ErrStartSnapshotRejected、
+// ErrContinuationUnsupported）不改變 RNG 與 Machine 狀態；ErrGameRejected 發生在遊戲執行
+// 之後，RNG 可能已消耗（指定快照或抽庫時由恢復守衛還原）。
+var (
+	// ErrSegmentInput 表示輸入違反結構不變量：Cycle < 0；Cycle 為 0 卻帶選項或 Choice；
+	// Cycle > 0 卻沒有選項，或 Choice 不在 [0, len(ChooseNext)) 內。
+	ErrSegmentInput = errors.New("invalid segment input")
+	// ErrStartSnapshotRejected 表示指定的起始快照被 PRNG 拒絕，且已還原到執行前。
+	ErrStartSnapshotRejected = errors.New("start snapshot rejected")
+	// ErrContinuationUnsupported 表示機台開啟 optimal、未指定快照而請求續段，但目前的
+	// optimal 設定沒有續段可抽的庫。
+	ErrContinuationUnsupported = errors.New("continuation is not supported by the optimal setting")
+	// ErrGameRejected 表示遊戲回傳 nil，拒絕了這次請求（例如不合法的入口或 checkpoint）。
+	ErrGameRejected = errors.New("game rejected the request")
+)
+
 // SpinInput 是 SpinUnsafe 的輸入。呼叫端應使用帶欄位名的 literal，之後新增欄位時
 // 不必修改；新增欄位的零值等於新增前的行為。
 type SpinInput struct {
 	BetMode          int  // 必須在 Machine 的 bet mode 範圍內
 	BetMult          int  // 必須 >= 1；零值不合法。下注單位 × BetMult 不得溢位
 	CaptureSnapshots bool // 是否把起始／結束 RNG 快照寫進結果的 State
+
+	Cycle      int    // 第幾段，0 為新局
+	Choice     int    // ChooseNext 的位置索引；Cycle 為 0 時必須為 0
+	ChooseNext []int  // 上一段結果的 ChooseNext；Cycle 為 0 時必須為空。Machine 會複製
+	Checkpoint any    // 上一段結果的 checkpoint；遊戲註冊的型別
+	StartSnap  []byte // 本段的指定起始快照，空表示不指定。Machine 會複製
 }
 
-// SpinUnsafe 是本機執行入口：一次執行一段（目前所有遊戲一段就是一局），回傳借用的
-// 結果，到同一台 Machine 的下一次呼叫為止；需要保留的呼叫端自行複製（轉 DTO 即是複製）。
+// SpinUnsafe 是本機執行入口：一次執行一段，回傳借用的結果，到同一台 Machine 的下一次
+// 呼叫為止；需要保留的呼叫端自行複製（轉 DTO 即是複製）。
 //
 // Unsafe 指的是呼叫端責任，不是記憶體安全：
-//   - 不驗證輸入。BetMode 在範圍內、BetMult >= 1、投注額乘法不溢位由呼叫端保證；
-//     不合法的輸入行為未定義（例如 bet mode 越界時 panic）。
+//   - 跳過對外入口的完整請求驗證。BetMode 在範圍內、BetMult >= 1、投注額乘法不溢位由
+//     呼叫端保證；不合法時行為未定義（例如 bet mode 越界時 panic）。
+//   - 仍維護 Machine 執行所需的前置條件：違反結構不變量、指定的起始快照被拒絕、或目前的
+//     optimal 設定不支援續段時回傳 nil，不執行遊戲、不消耗 RNG。
 //   - 不上鎖。呼叫期間由呼叫端獨占 Machine，不得與 Spin、RestoreCore、SnapshotCore
 //     等任何操作並行；同步完成後交給另一個 goroutine 是允許的。
 //   - 不執行 production reseed，只供呼叫端已掌握 RNG 生命週期的本機執行使用；
 //     正式服務使用 Spin。
 //
-// 起點：optimal 開啟時抽庫並在執行後還原選取狀態；未啟用時從機台目前的 RNG 執行。
-// 因此只有在不會抽庫的機台上，RestoreCore 之後呼叫才等於從指定快照回放。
+// 起點：StartSnap 非空時從它執行本段（跳過抽庫），回傳後機台恢復到執行前，只作用於
+// 這一次呼叫；否則 optimal 開啟時抽庫並在執行後還原選取狀態，未啟用時從機台目前的 RNG
+// 執行。
 //
-// CaptureSnapshots 為 true 時，把起始快照（抽庫時為抽出的 seed，否則為執行前的機台
-// 狀態）與結束快照寫進結果的 State，快照借用 Machine 的緩衝區；為 false 時不擷取，
-// 並清除結果 State 中前一次留下的 RNG 快照（不碰遊戲輸出的 Checkpoint）。
+// CaptureSnapshots 為 true 時，把起始快照（指定快照、抽出的 seed，或執行前的機台狀態）
+// 與結束快照寫進結果的 State，快照借用 Machine 的緩衝區；為 false 時不擷取，並清除結果
+// State 中前一次留下的 RNG 快照（不碰遊戲輸出的 Checkpoint）。
 //
-// 遊戲回傳 nil 時原樣回傳，不觸碰 State；RNG 照常還原。
+// 遊戲回傳 nil 時原樣回傳，不觸碰 State；RNG 照常還原。nil 一律表示這次呼叫沒有有效結果。
 //
 // 內部執行故障以 panic 呈現。發生任何內部執行 panic 後，該 Machine 必須棄用：
 // SpinUnsafe 不檢查 Machine 是否曾經 RNG 恢復失敗，接住 panic 後繼續使用屬於違反契約。
 func (m *Machine) SpinUnsafe(in SpinInput) *buf.SpinResult {
-	// 一次寫入整份請求。reqStart、reqSnap 只經由 StartState 交給遊戲，這裡的
-	// StartState 為 nil，所以不必重設；Spin 每次開始時會自行重設它們。
-	m.spinRequest = buf.SpinRequest{
-		GameId: m.gameId, GameName: m.gameName,
-		Bet: m.BetUnits[in.BetMode] * in.BetMult, BetMode: in.BetMode, BetMult: in.BetMult,
-	}
-	if m.optimal != nil {
-		return m.spinUnsafeSeeded(in)
-	}
-	// 不指定起點：沒有恢復點，不需要恢復守衛。
-	var startSnap []byte
-	if in.CaptureSnapshots {
-		startSnap = m.snapshotInto(&m.startBuf, "start state")
-	}
-	return m.finishUnsafe(m.spin(), in.CaptureSnapshots, startSnap)
-}
-
-// spinUnsafeSeeded 是 SpinUnsafe 的抽庫路徑：抽出的 seed 即起始快照，執行後由恢復守衛
-// 還原選取狀態。
-func (m *Machine) spinUnsafeSeeded(in SpinInput) *buf.SpinResult {
-	start := m.pickSeed(in.BetMode, &m.seedBuf)
-	g, _ := m.enterStart(startSeed, start) // startSeed 不會回傳格式錯誤
-	defer g.finish()
-	return m.finishUnsafe(m.spin(), in.CaptureSnapshots, start)
-}
-
-// finishUnsafe 以請求的 Cycle 覆寫結果的段號，並依 capture 擷取或清除結果的 RNG 快照；
-// 必須在恢復守衛還原之前執行。
-func (m *Machine) finishUnsafe(result *buf.SpinResult, capture bool, startSnap []byte) *buf.SpinResult {
-	if result == nil {
+	m.fillSegment(in.BetMode, in.BetMult, in.Cycle, in.Choice, in.ChooseNext, in.Checkpoint, in.StartSnap)
+	sr, err := m.execSegment(segmentOpts{external: len(in.StartSnap) != 0, capture: in.CaptureSnapshots})
+	if err != nil {
 		return nil
 	}
-	result.Cycle = m.spinRequest.Cycle // 段號由引擎填入，遊戲寫入的值不保留
-	if !capture {
-		if result.State != nil {
-			result.State.StartCoreSnap = nil
-			result.State.AfterCoreSnap = nil
-		}
-		return result
-	}
-	afterSnap := m.snapshotInto(&m.afterBuf, "after state")
-	if result.State == nil {
-		m.fallbackState = buf.SpinState{}
-		result.State = &m.fallbackState
-	}
-	result.State.StartCoreSnap = startSnap
-	result.State.AfterCoreSnap = afterSnap
-	return result
+	return sr
 }
 
 func (m *Machine) valid(req *dto.SpinRequest) error {
@@ -315,7 +290,7 @@ func (m *Machine) valid(req *dto.SpinRequest) error {
 	if req.BetMode < 0 || req.BetMode >= len(m.BetUnits) {
 		return errs.NewWarn("bet mode out of range")
 	}
-	// 要第一次下注才判斷，第二次以後的選擇請求Bet要帶0
+	// 續段沿用第 0 段的投注；只有第 0 段扣注，由呼叫端負責
 	if req.BetMult*m.BetUnits[req.BetMode] != req.Bet {
 		return errs.NewWarn("error bet value")
 	}

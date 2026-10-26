@@ -18,15 +18,17 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/buf"
 )
 
-// 執行核心：Machine 的執行入口（Spin、SpinUnsafe）共用這裡的
-// 私有請求、RNG 起點準備與隔離機制，以及 spin()。
+// 執行核心：Machine 的執行入口（Spin、SpinUnsafe、BetRunner）共用這裡的
+// 私有請求、單段執行、RNG 起點準備與隔離機制，以及 spin()。
 //
 // 職責：
-//   - 包裝層（各入口）：鎖、重設與填入請求、選擇起點來源、production reseed、
-//     抽庫、在恢復守衛的保護範圍內呼叫 spin()、擷取快照、轉換結果。
+//   - 包裝層（各入口）：鎖、外部請求驗證、錯誤表達、結果轉換。
+//   - 單段執行（fillSegment、execSegment）：填入請求、結構不變量、選擇起點與路由、
+//     production reseed、抽庫、在恢復守衛的保護範圍內呼叫 spin()、檢查結果、擷取快照。
 //   - 起點機制（enterStart 與 rngGuard）：記錄恢復點、Restore 起點、首次 Restore
 //     失敗的清理、收尾還原、雙重故障的原因保留。
 //   - spin()：以 Machine 持有的請求呼叫 GetResult，不做其他事。
@@ -50,12 +52,128 @@ type rngGuard struct {
 }
 
 // resetSpinRequest 把 Machine 持有的請求恢復為基底：保留 GameId、GameName，重設
-// 本次請求值，清除 StartState 參照，保留可重用緩衝區的容量。只碰請求，不碰 RNG、
-// 結果與遊戲狀態。
+// 本次請求值，保留可重用緩衝區的容量。只碰請求，不碰 RNG、結果與遊戲狀態。
 func (m *Machine) resetSpinRequest() {
 	m.spinRequest = buf.SpinRequest{GameId: m.gameId, GameName: m.gameName}
-	m.reqStart = buf.StartState{}
 	m.reqSnap = m.reqSnap[:0]
+	m.reqChooseNext = m.reqChooseNext[:0]
+}
+
+// fillSegment 一次寫入整份私有請求。ChooseNext 複製進 reqChooseNext，snap（本段的指定
+// 起始快照，可為空）複製進 reqSnap，之後修改輸入不影響遊戲讀到的值。Bet 由 BetUnits
+// 推導；betMode 必須在範圍內，由呼叫端保證。
+func (m *Machine) fillSegment(betMode, betMult, cycle, choice int, chooseNext []int, cp any, snap []byte) {
+	m.reqChooseNext = append(m.reqChooseNext[:0], chooseNext...)
+	m.reqSnap = append(m.reqSnap[:0], snap...)
+	m.spinRequest = buf.SpinRequest{
+		GameId: m.gameId, GameName: m.gameName,
+		Bet: m.BetUnits[betMode] * betMult, BetMode: betMode, BetMult: betMult,
+		Cycle: cycle, Choice: choice, ChooseNext: m.reqChooseNext, Checkpoint: cp,
+	}
+}
+
+// validSegment 檢查結構不變量：Cycle >= 0；Cycle 為 0 時沒有選項、Choice 為 0；
+// Cycle > 0 時有選項且 Choice 在範圍內。
+func validSegment(r *buf.SpinRequest) bool {
+	if r.Cycle < 0 {
+		return false
+	}
+	if r.Cycle == 0 {
+		return len(r.ChooseNext) == 0 && r.Choice == 0
+	}
+	return len(r.ChooseNext) > 0 && r.Choice >= 0 && r.Choice < len(r.ChooseNext)
+}
+
+// segmentOpts 是各入口在單段執行上的差異。
+type segmentOpts struct {
+	external    bool // reqSnap 是本段的指定起始快照
+	reseed      bool // 未指定快照時先 reseed（只有 production 的 Spin）
+	capture     bool // 把起始／結束 RNG 快照寫進結果的 State
+	checkOutput bool // 檢查 IsGameEnd 與 ChooseNext 是否一致（Spin、BetRunner）
+}
+
+// startRejected 是指定的起始快照被 PRNG 拒絕、且已防禦性還原的錯誤；保留 PRNG 的原因，
+// 讓 Spin 維持原本的錯誤訊息。
+type startRejected struct{ err error }
+
+func (e *startRejected) Error() string {
+	return ErrStartSnapshotRejected.Error() + ": " + e.err.Error()
+}
+func (e *startRejected) Is(target error) bool { return target == ErrStartSnapshotRejected }
+func (e *startRejected) Unwrap() error        { return e.err }
+
+// execSegment 是 Spin、SpinUnsafe、BetRunner 共用的單段執行。呼叫前，入口已以
+// fillSegment 寫入本段輸入。
+//
+// 結構不變量與起點路由都在 production reseed、抽庫之前判斷，拒絕時不改變 RNG。
+// 遊戲回傳 nil 時回傳 ErrGameRejected，恢復守衛照常收尾。結果違反輸出契約、或由抽庫
+// 決定起點的結果未結束時 panic（內部故障）。
+func (m *Machine) execSegment(o segmentOpts) (*buf.SpinResult, error) {
+	q := &m.spinRequest
+	if !validSegment(q) {
+		return nil, ErrSegmentInput
+	}
+	kind, start := startNone, []byte(nil)
+	var startSnap []byte
+	switch {
+	case o.external:
+		kind, start = startExternal, m.reqSnap
+	case m.optimal != nil && q.Cycle > 0:
+		// 目前的 optimal 設定只有 start 庫，沒有續段可抽的庫。
+		return nil, ErrContinuationUnsupported
+	default:
+		if o.reseed {
+			if err := m.core.Reseed(); err != nil {
+				return nil, errs.NewFatal("reseed PRNG before new game cycle: " + err.Error())
+			}
+		}
+		if m.optimal != nil {
+			kind = startSeed
+			start = m.pickSeed(q.BetMode, &m.seedBuf)
+		} else if o.capture {
+			startSnap = m.snapshotInto(&m.startBuf, "start state")
+		}
+	}
+	if kind == startNone {
+		// 不指定起點：沒有恢復點，不需要恢復守衛。
+		return m.finishSegment(m.spin(), o, kind, startSnap)
+	}
+	g, formatErr := m.enterStart(kind, start)
+	if formatErr != nil {
+		return nil, &startRejected{err: formatErr}
+	}
+	defer g.finish()
+	return m.finishSegment(m.spin(), o, kind, start)
+}
+
+// finishSegment 檢查結果、以請求的 Cycle 覆寫段號，並依 capture 擷取或清除結果的 RNG
+// 快照；必須在恢復守衛還原之前執行。
+func (m *Machine) finishSegment(sr *buf.SpinResult, o segmentOpts, kind startKind, startSnap []byte) (*buf.SpinResult, error) {
+	if sr == nil {
+		return nil, ErrGameRejected
+	}
+	if o.checkOutput && sr.IsGameEnd != (len(sr.ChooseNext) == 0) {
+		panic(fmt.Errorf("game returned an inconsistent segment: IsGameEnd=%v, len(ChooseNext)=%d", sr.IsGameEnd, len(sr.ChooseNext)))
+	}
+	if kind == startSeed && !sr.IsGameEnd {
+		panic(errors.New("optimal seed produced an unfinished segment: the optimal setting has no continuation source"))
+	}
+	sr.Cycle = m.spinRequest.Cycle // 段號由引擎填入，遊戲寫入的值不保留
+	if !o.capture {
+		if sr.State != nil {
+			sr.State.StartCoreSnap = nil
+			sr.State.AfterCoreSnap = nil
+		}
+		return sr, nil
+	}
+	afterSnap := m.snapshotInto(&m.afterBuf, "after state")
+	if sr.State == nil {
+		m.fallbackState = buf.SpinState{}
+		sr.State = &m.fallbackState
+	}
+	sr.State.StartCoreSnap = startSnap
+	sr.State.AfterCoreSnap = afterSnap
+	return sr, nil
 }
 
 // checkUsable 在 RNG 恢復失敗過的 Machine 上 panic；只有 Spin 呼叫它。

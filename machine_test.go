@@ -17,6 +17,7 @@ package problab
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"reflect"
@@ -251,7 +252,6 @@ var registerProbeCheckpoint sync.Once
 
 // probeRequest 是遊戲收到的請求內容的深拷貝。
 type probeRequest struct {
-	UID        string
 	GameName   string
 	GameId     spec.GID
 	Bet        int
@@ -259,10 +259,8 @@ type probeRequest struct {
 	BetMult    int
 	Cycle      int
 	Choice     int
-	HasChoice  bool
-	HasStart   bool   // StartState 是否非 nil
-	StartSnap  []byte // StartState.StartCoreSnap 的複製
-	Checkpoint any    // *probeCheckpoint 時複製為值
+	ChooseNext []int // 複製；空時為 nil
+	Checkpoint any   // *probeCheckpoint 時複製為值
 }
 
 type probeLogic struct {
@@ -272,20 +270,13 @@ type probeLogic struct {
 
 func (p *probeLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinResult {
 	rec := probeRequest{
-		UID: r.UID, GameName: r.GameName, GameId: r.GameId,
+		GameName: r.GameName, GameId: r.GameId,
 		Bet: r.Bet, BetMode: r.BetMode, BetMult: r.BetMult,
-		Cycle: r.Cycle, Choice: r.Choice, HasChoice: r.HasChoice,
+		Cycle: r.Cycle, Choice: r.Choice, ChooseNext: append([]int(nil), r.ChooseNext...),
+		Checkpoint: r.Checkpoint,
 	}
-	if r.StartState != nil {
-		rec.HasStart = true
-		if r.StartState.StartCoreSnap != nil {
-			rec.StartSnap = append([]byte{}, r.StartState.StartCoreSnap...)
-		}
-		if cp, ok := r.StartState.Checkpoint.(*probeCheckpoint); ok {
-			rec.Checkpoint = *cp
-		} else {
-			rec.Checkpoint = r.StartState.Checkpoint
-		}
+	if cp, ok := r.Checkpoint.(*probeCheckpoint); ok {
+		rec.Checkpoint = *cp
 	}
 	*p.log = append(*p.log, rec)
 	return p.inner.GetResult(r, g)
@@ -366,33 +357,30 @@ func TestGameReceivesRequestPerEntry(t *testing.T) {
 	}
 	unit := m.BetUnits[0]
 
-	// 1. Spin 不帶快照：遊戲收到 DTO 的值，StartState 為 nil。
-	plain := &dto.SpinRequest{UID: "u1", GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1}
+	// 1. Spin 不帶快照：遊戲收到 DTO 的值，沒有選項與 checkpoint。
+	plain := &dto.SpinRequest{GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1}
 	first, err := m.Spin(plain)
 	if err != nil {
 		t.Fatal(err)
 	}
 	requireProbe(t, "spin", probeLast(t, log), probeRequest{
-		UID: "u1", GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1,
+		GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1,
 	})
 
-	// 2. Spin 帶外部快照與 checkpoint，並帶選擇欄位：全部原樣交給遊戲。
-	snap, err := corefmt.DecodeBase64URL(first.State.StartCoreSnapB64U)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// 2. Spin 帶外部快照、checkpoint 與續段欄位：續段欄位與 checkpoint 原樣交給遊戲，
+	//    RNG 快照不交給遊戲。
+	one := 1
 	replay := &dto.SpinRequest{
-		UID: "u2", GameName: m.gameName, GameId: m.gameId, Bet: unit * 2, BetMode: 0, BetMult: 2,
-		Cycle: 2, Choice: 1, HasChoice: true,
+		GameName: m.gameName, GameId: m.gameId, Bet: unit * 2, BetMode: 0, BetMult: 2,
+		Cycle: 2, Choice: &one, ChooseNext: []int{5, 6},
 		StartState: &dto.StartState{StartCoreSnapB64U: first.State.StartCoreSnapB64U, Checkpoint: json.RawMessage(`{"stage":3}`)},
 	}
 	if _, err := m.Spin(replay); err != nil {
 		t.Fatal(err)
 	}
 	requireProbe(t, "spin-replay", probeLast(t, log), probeRequest{
-		UID: "u2", GameName: m.gameName, GameId: m.gameId, Bet: unit * 2, BetMode: 0, BetMult: 2,
-		Cycle: 2, Choice: 1, HasChoice: true,
-		HasStart: true, StartSnap: snap, Checkpoint: probeCheckpoint{Stage: 3},
+		GameName: m.gameName, GameId: m.gameId, Bet: unit * 2, BetMode: 0, BetMult: 2,
+		Cycle: 2, Choice: 1, ChooseNext: []int{5, 6}, Checkpoint: probeCheckpoint{Stage: 3},
 	})
 
 	// 3. 緊接不擷取快照的 SpinUnsafe：不帶上一段的任何殘留。
@@ -416,7 +404,7 @@ func TestGameReceivesRequestPerEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireProbe(t, "spin-after-internal", probeLast(t, log), probeRequest{
-		UID: "u1", GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1,
+		GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1,
 	})
 	if len(log) != 7 {
 		t.Fatalf("game calls=%d, want 7", len(log))
@@ -432,8 +420,8 @@ func TestGameReceivesOptimalStartPerEntry(t *testing.T) {
 	}
 	unit := m.BetUnits[0]
 
-	// Spin 抽庫：抽出的 seed 填進 StartState 交給遊戲，checkpoint 為 nil。
-	res, err := m.Spin(&dto.SpinRequest{UID: "u1", GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1})
+	// Spin 抽庫：抽出的 seed 不交給遊戲，只記錄為結果的起始快照。
+	res, err := m.Spin(&dto.SpinRequest{GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,10 +429,11 @@ func TestGameReceivesOptimalStartPerEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := probeLast(t, log)
-	requireProbe(t, "spin-optimal", got, probeRequest{
-		UID: "u1", GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1,
-		HasStart: true, StartSnap: seed,
+	if len(seed) == 0 {
+		t.Fatal("optimal start snapshot missing")
+	}
+	requireProbe(t, "spin-optimal", probeLast(t, log), probeRequest{
+		GameName: m.gameName, GameId: m.gameId, Bet: unit, BetMode: 0, BetMult: 1,
 	})
 
 	// SpinUnsafe 兩種快照模式抽庫：不把 seed 交給遊戲。
@@ -502,8 +491,8 @@ func withCycleLogic(t testing.TB, m *Machine) *cycleLogic {
 	return logic
 }
 
-// 結果的 Cycle 由引擎在遊戲執行後覆寫：SpinUnsafe 一律為 0（輸入沒有 Cycle），Spin 為請求的
-// Cycle；遊戲寫入的值不保留，DTO 不輸出這個欄位，nil 結果原樣回傳。
+// 結果的 Cycle 由引擎在遊戲執行後覆寫為請求的 Cycle（SpinUnsafe 未指定時為 0）；遊戲寫入的值
+// 不保留，DTO 在 Cycle 非 0 時輸出 cycle，nil 結果原樣回傳。
 func TestResultCycleIsFilledByEngine(t *testing.T) {
 	for _, optimal := range []bool{false, true} {
 		t.Run(fmt.Sprintf("optimal=%v", optimal), func(t *testing.T) {
@@ -533,7 +522,16 @@ func TestResultCycleIsFilledByEngine(t *testing.T) {
 			unsafe("unsafe", false)
 			unsafe("unsafe-capture", true)
 
-			req := &dto.SpinRequest{UID: "c", GameName: m.gameName, GameId: m.gameId, Bet: m.BetUnits[0], BetMode: 0, BetMult: 1, Cycle: 3}
+			zero := 0
+			req := &dto.SpinRequest{GameName: m.gameName, GameId: m.gameId, Bet: m.BetUnits[0], BetMode: 0, BetMult: 1,
+				Cycle: 3, Choice: &zero, ChooseNext: []int{9}}
+			if optimal {
+				// optimal 開啟時，續段只能以指定快照回放；未指定快照時在執行前拒絕。
+				if _, err := m.Spin(req); !errors.Is(err, ErrContinuationUnsupported) {
+					t.Fatalf("optimal continuation without snapshot: err %v", err)
+				}
+				req.StartState = &dto.StartState{StartCoreSnapB64U: corefmt.EncodeBase64URL(coreState(t, m))}
+			}
 			res, err := m.Spin(req)
 			if err != nil {
 				t.Fatal(err)
@@ -552,10 +550,8 @@ func TestResultCycleIsFilledByEngine(t *testing.T) {
 			if err := json.Unmarshal(raw, &top); err != nil {
 				t.Fatal(err)
 			}
-			for key := range top {
-				if strings.Contains(strings.ToLower(key), "cycle") {
-					t.Fatalf("DTO must not output the cycle: key %q in %s", key, raw)
-				}
+			if string(top["cycle"]) != "3" || string(top["choice"]) != "0" {
+				t.Fatalf("DTO must output cycle 3 and choice 0: %s", raw)
 			}
 			// Spin 之後的 SpinUnsafe 不帶 Spin 的段號。
 			unsafe("unsafe-after-spin", false)

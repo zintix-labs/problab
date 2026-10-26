@@ -59,6 +59,7 @@ func TestSpinAssemblerWithMachineResults(t *testing.T) {
 			want.TotalWin = d1.TotalWin + d2.TotalWin
 			want.GameModes = append(append([]dto.GameModeResultDTO(nil), d1.GameModes...), d2.GameModes...)
 			want.IsGameEnd = true
+			want.Cycle = 1 // 完整局的 Cycle 取最後一段
 			if mustJSON(t, got) != mustJSON(t, want) {
 				t.Fatalf("game %d pair %d: assembled game differs\n got=%s\nwant=%s", gid, i, mustJSON(t, got), mustJSON(t, want))
 			}

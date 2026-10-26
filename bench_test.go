@@ -170,7 +170,7 @@ func BenchmarkOptimalProductionSpin(b *testing.B) {
 		b.Fatal(err)
 	}
 	request := &dto.SpinRequest{
-		UID: "benchmark", GameName: "demo_normal", GameId: 0,
+		GameName: "demo_normal", GameId: 0,
 		Bet: 40, BetMode: 0, BetMult: 1,
 	}
 	b.ReportAllocs()
