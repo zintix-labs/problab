@@ -57,12 +57,12 @@ func TestDemoChoiceIsStaged(t *testing.T) {
 	}
 }
 
-// startTriggered 以 BetRunner 反覆開局，直到第 0 段停在選擇點，回傳該段與觸發前的機台位置。
+// startTriggered 以 BetRunner（player）反覆開局，直到第 0 段停在選擇點，回傳該段與觸發前的機台位置。
 func startTriggered(t *testing.T, r *BetRunner) (*buf.SpinResult, []byte) {
 	t.Helper()
 	for range 5000 {
 		before := coreState(t, r.m)
-		sr, err := r.Start(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true})
+		sr, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true}, ChoosePlayer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func TestDemoChoiceEntries(t *testing.T) {
 	lab := demoChoiceLab(t)
 	for choice, base := range []int{8, 4} {
 		m := demoChoiceMachine(t, lab, 11)
-		r, err := NewBetRunner(m, 2)
+		r, err := NewBetRunner(m, WithMaxSegments(2))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,26 +105,24 @@ func TestDemoChoiceEntries(t *testing.T) {
 		if err := json.Unmarshal(raw, &cp); err != nil || cp.Scatters < 3 {
 			t.Fatalf("checkpoint %s: %v", raw, err)
 		}
-		win0 := seg0.TotalWin
-		seg1, err := r.Choose(choice)
+		win0, modes0 := seg0.TotalWin, seg0.GameModeCount
+		// 最後一段結束本局，回傳的是完整局：第 1 段的 GMR 接在第 0 段之後。
+		res, err := r.Next(choice)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !seg1.IsGameEnd || seg1.Cycle != 1 || len(seg1.ChooseNext) != 0 {
-			t.Fatalf("segment 1: end %v cycle %d next %v", seg1.IsGameEnd, seg1.Cycle, seg1.ChooseNext)
+		if !res.IsGameEnd || res.Cycle != 1 || len(res.ChooseNext) != 0 || res.GameModeCount != modes0+1 {
+			t.Fatalf("game: end %v cycle %d next %v modes %d", res.IsGameEnd, res.Cycle, res.ChooseNext, res.GameModeCount)
 		}
-		if got, want := screenActs(seg1.GameModeList[0]), base+cp.Scatters-3; got != want {
+		fg := res.GameModeList[modes0]
+		if got, want := screenActs(fg), base+cp.Scatters-3; got != want {
 			t.Fatalf("choice %d: %d free rounds, want %d", choice, got, want)
 		}
-		if seg1.GameModeList[0].GameModeId != choice+1 {
-			t.Fatalf("choice %d entered mode %d", choice, seg1.GameModeList[0].GameModeId)
+		if fg.GameModeId != choice+1 {
+			t.Fatalf("choice %d entered mode %d", choice, fg.GameModeId)
 		}
-		res, err := r.Result()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res.TotalWin != win0+seg1.TotalWin || res.GameModeCount != 2 || res.Cycle != 1 {
-			t.Fatalf("game win %d modes %d cycle %d", res.TotalWin, res.GameModeCount, res.Cycle)
+		if res.TotalWin != win0+fg.TotalWin {
+			t.Fatalf("game win %d, want %d + %d", res.TotalWin, win0, fg.TotalWin)
 		}
 	}
 }
@@ -133,7 +131,7 @@ func TestDemoChoiceEntries(t *testing.T) {
 func TestDemoChoiceRejects(t *testing.T) {
 	lab := demoChoiceLab(t)
 	m := demoChoiceMachine(t, lab, 11)
-	r, err := NewBetRunner(m, 2)
+	r, err := NewBetRunner(m, WithMaxSegments(2))
 	if err != nil {
 		t.Fatal(err)
 	}

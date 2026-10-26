@@ -3,6 +3,7 @@ package problab
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/zintix-labs/problab/demo/demo_logic"
@@ -25,10 +26,11 @@ type chainInput struct {
 // ChooseNext 為 [100+cycle, 200+cycle]，checkpoint 為 &chainCP{cycle + 1}。
 // nilAt >= 0 時，在該段回傳 nil。
 type chainLogic struct {
-	inner  slot.GameLogic
-	depth  int
-	nilAt  int
-	inputs []chainInput
+	inner   slot.GameLogic
+	depth   int
+	nilAt   int
+	inputs  []chainInput
+	lastWin int // 最後一次回傳的段贏分
 }
 
 func (l *chainLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinResult {
@@ -42,10 +44,11 @@ func (l *chainLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinResult
 		sr.ChooseNext = append(sr.ChooseNext[:0], 100+r.Cycle, 200+r.Cycle)
 		sr.State.Checkpoint = &chainCP{N: r.Cycle + 1}
 	}
+	l.lastWin = sr.TotalWin
 	return sr
 }
 
-func chainRunner(t *testing.T, depth, maxSegments int) (*BetRunner, *chainLogic, *Machine) {
+func chainRunner(t *testing.T, depth int, opts ...BetRunnerOption) (*BetRunner, *chainLogic, *Machine) {
 	t.Helper()
 	m := faultMachine(t, false)
 	key := m.gh.GameSetting.LogicKey
@@ -63,7 +66,7 @@ func chainRunner(t *testing.T, depth, maxSegments int) (*BetRunner, *chainLogic,
 		t.Fatal(err)
 	}
 	m.gh = gh
-	r, err := NewBetRunner(m, maxSegments)
+	r, err := NewBetRunner(m, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,19 +81,49 @@ func requireErrIs(t *testing.T, step string, err, target error) {
 }
 
 func TestNewBetRunnerValidates(t *testing.T) {
-	if _, err := NewBetRunner(nil, 3); err == nil {
+	if _, err := NewBetRunner(nil); err == nil {
 		t.Fatal("nil machine accepted")
 	}
-	if _, err := NewBetRunner(faultMachine(t, false), 0); err == nil {
-		t.Fatal("non-positive segment limit accepted")
+	for _, n := range []int{0, -1} {
+		if _, err := NewBetRunner(faultMachine(t, false), WithMaxSegments(n)); err == nil {
+			t.Fatalf("segment limit %d accepted", n)
+		}
+	}
+	r, err := NewBetRunner(faultMachine(t, false), nil)
+	if err != nil || r.maxSegments != DefaultMaxSegments || DefaultMaxSegments != 10 {
+		t.Fatalf("default limit: %v %v", r, err)
+	}
+	if r, _ := NewBetRunner(faultMachine(t, false), WithMaxSegments(3)); r.maxSegments != 3 {
+		t.Fatalf("WithMaxSegments(3) gave %d", r.maxSegments)
+	}
+}
+
+func TestChooseModeNames(t *testing.T) {
+	for _, c := range []struct {
+		s    string
+		mode ChooseMode
+	}{{"", ChoosePlayer}, {"first", ChooseFirst}, {"last", ChooseLast}} {
+		if got, err := ParseChooseMode(c.s); err != nil || got != c.mode {
+			t.Fatalf("ParseChooseMode(%q) = %v, %v", c.s, got, err)
+		}
+	}
+	for _, s := range []string{"player", "First", "LAST", " first", "auto"} {
+		if _, err := ParseChooseMode(s); !errors.Is(err, ErrInvalidChooseMode) {
+			t.Fatalf("ParseChooseMode(%q) error %v", s, err)
+		}
+	}
+	for mode, want := range map[ChooseMode]string{ChoosePlayer: "player", ChooseFirst: "first", ChooseLast: "last", 7: "ChooseMode(7)"} {
+		if mode.String() != want {
+			t.Fatalf("%d.String() = %q, want %q", uint8(mode), mode.String(), want)
+		}
 	}
 }
 
 // 四段的局：每段的 Cycle 遞增，送進遊戲的 ChooseNext 與 checkpoint 是上一段的輸出；
-// 段結果逐次累計等於完整局，完整局包含所有段的 GMR。
+// 未結束時回傳本段，最後一次回傳完整局，完整局等於各段相加。
 func TestBetRunnerMultiSegment(t *testing.T) {
-	r, logic, _ := chainRunner(t, 4, 10)
-	sr, err := r.Start(SpinInput{BetMode: 0, BetMult: 2})
+	r, logic, _ := chainRunner(t, 4)
+	sr, err := r.Bet(SpinInput{BetMode: 0, BetMult: 2}, ChoosePlayer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +131,7 @@ func TestBetRunnerMultiSegment(t *testing.T) {
 	prevNext := append([]int(nil), sr.ChooseNext...)
 	prevCP := sr.State.Checkpoint
 	for cycle, choice := range []int{1, 0, 1} {
-		sr, err = r.Choose(choice)
+		sr, err = r.Next(choice)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -109,61 +142,142 @@ func TestBetRunnerMultiSegment(t *testing.T) {
 		if sr.Cycle != cycle+1 {
 			t.Fatalf("segment cycle %d, want %d", sr.Cycle, cycle+1)
 		}
+		if sr.IsGameEnd {
+			break
+		}
 		total += sr.TotalWin
 		modes += sr.GameModeCount
 		prevNext = append(prevNext[:0], sr.ChooseNext...)
 		prevCP = sr.State.Checkpoint
 	}
 	if !sr.IsGameEnd {
-		t.Fatal("the last segment did not end the game")
+		t.Fatal("the last call did not end the game")
 	}
-	res, err := r.Result()
-	if err != nil {
-		t.Fatal(err)
+	// 最後一次回傳的是完整局：不能再加上先前的段。
+	last := logic.lastWin
+	if sr.TotalWin != total+last || sr.GameModeCount <= modes || sr.Cycle != 3 || sr.Bet != 2*r.m.BetUnits[0] {
+		t.Fatalf("game total %d modes %d cycle %d bet %d, want %d > %d 3", sr.TotalWin, sr.GameModeCount, sr.Cycle, sr.Bet, total+last, modes)
 	}
-	if res.TotalWin != total || res.GameModeCount != modes || res.Cycle != 3 || res.Bet != 2*r.m.BetUnits[0] {
-		t.Fatalf("game total %d modes %d cycle %d bet %d, want %d %d 3", res.TotalWin, res.GameModeCount, res.Cycle, res.Bet, total, modes)
-	}
-	if again, err := r.Result(); err != nil || again != res {
-		t.Fatal("Result is not repeatable")
-	}
-	if _, err := r.Choose(0); !errors.Is(err, ErrNoPendingChoice) {
-		t.Fatalf("Choose after the end: %v", err)
+	if _, err := r.Next(0); !errors.Is(err, ErrNoPendingChoice) {
+		t.Fatalf("Next after the end: %v", err)
 	}
 }
 
-// 段數上限以整局累計：上限 3 時第 4 段被拒絕，局維持進行中，Abandon 後可以重新開始。
+// player 依位置 0（或最後一個）逐段執行的完整局，與同一起點的 first（或 last）相同。
+func TestBetRunnerAutoMatchesPlayer(t *testing.T) {
+	for _, c := range []struct {
+		mode ChooseMode
+		pick func(n int) int
+	}{{ChooseFirst, func(int) int { return 0 }}, {ChooseLast, func(n int) int { return n - 1 }}} {
+		auto, autoLogic, am := chainRunner(t, 4)
+		player, _, pm := chainRunner(t, 4)
+		for range 20 {
+			want, err := auto.Bet(SpinInput{BetMode: 0, BetMult: 1}, c.mode)
+			if err != nil || !want.IsGameEnd {
+				t.Fatalf("%v: %v %v", c.mode, want, err)
+			}
+			got, err := player.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChoosePlayer)
+			for err == nil && !got.IsGameEnd {
+				got, err = player.Next(c.pick(len(got.ChooseNext)))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if segmentJSON(t, got) != segmentJSON(t, want) {
+				t.Fatalf("%v: the automatic game differs from the player game", c.mode)
+			}
+			if string(coreState(t, am)) != string(coreState(t, pm)) {
+				t.Fatalf("%v: machine positions differ", c.mode)
+			}
+		}
+		// 每個選擇點選到的位置：chainLogic 的 ChooseNext 在每一段都不同。
+		for _, in := range autoLogic.inputs {
+			if in.Cycle > 0 && in.Choice != c.pick(len(in.ChooseNext)) {
+				t.Fatalf("%v chose %d of %v", c.mode, in.Choice, in.ChooseNext)
+			}
+		}
+	}
+}
+
+// 三種模式在單段遊戲上都回傳完整局，結果與機台位置相同。
+func TestBetRunnerSingleSegment(t *testing.T) {
+	var games []string
+	var cores [][]byte
+	for _, mode := range []ChooseMode{ChoosePlayer, ChooseFirst, ChooseLast} {
+		m := faultMachine(t, false)
+		r, err := NewBetRunner(m, WithMaxSegments(1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []byte
+		for range 50 {
+			sr, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, mode)
+			if err != nil || !sr.IsGameEnd {
+				t.Fatalf("%v: %v %v", mode, sr, err)
+			}
+			out = append(out, segmentJSON(t, sr)...)
+		}
+		games, cores = append(games, string(out)), append(cores, coreState(t, m))
+	}
+	for i := 1; i < len(games); i++ {
+		if games[i] != games[0] || string(cores[i]) != string(cores[0]) {
+			t.Fatal("single-segment results depend on the choose mode")
+		}
+	}
+}
+
+// 段數上限以整局累計。player：上限 3 時第 4 段被拒絕，局維持進行中，Reset 後可以重新開始。
 func TestBetRunnerSegmentLimit(t *testing.T) {
-	r, logic, m := chainRunner(t, 4, 3)
-	if _, err := r.Start(SpinInput{BetMode: 0, BetMult: 1}); err != nil {
+	r, logic, m := chainRunner(t, 4, WithMaxSegments(3))
+	if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChoosePlayer); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if _, err := r.Choose(0); err != nil {
+		if _, err := r.Next(0); err != nil {
 			t.Fatal(err)
 		}
 	}
 	calls, before := len(logic.inputs), coreState(t, m)
-	_, err := r.Choose(0)
+	_, err := r.Next(0)
 	requireErrIs(t, "4th segment", err, ErrSegmentLimit)
 	if len(logic.inputs) != calls {
 		t.Fatal("the game ran past the limit")
 	}
 	requireCore(t, m, before)
-	_, err = r.Start(SpinInput{BetMode: 0, BetMult: 1})
-	requireErrIs(t, "start while pending", err, ErrBetInProgress)
-	r.Abandon()
-	if _, err := r.Start(SpinInput{BetMode: 0, BetMult: 1}); err != nil {
-		t.Fatalf("start after abandon: %v", err)
+	if _, err := r.Next(0); !errors.Is(err, ErrSegmentLimit) {
+		t.Fatalf("the pending bet changed after the limit: %v", err)
+	}
+	_, err = r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChoosePlayer)
+	requireErrIs(t, "bet while pending", err, ErrBetInProgress)
+	r.Reset()
+	if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChoosePlayer); err != nil {
+		t.Fatalf("bet after reset: %v", err)
+	}
+
+	// first／last：超過上限時本局不可繼續，訊息帶上限。
+	for _, mode := range []ChooseMode{ChooseFirst, ChooseLast} {
+		r, logic, _ := chainRunner(t, 4, WithMaxSegments(3))
+		_, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, mode)
+		requireErrIs(t, mode.String()+" limit", err, ErrSegmentLimit)
+		if !strings.Contains(err.Error(), ": 3") || len(logic.inputs) != 3 {
+			t.Fatalf("%v: %v after %d segments", mode, err, len(logic.inputs))
+		}
+		_, err = r.Next(0)
+		requireErrIs(t, mode.String()+" next", err, ErrBetBroken)
+		_, err = r.Bet(SpinInput{BetMode: 0, BetMult: 1}, mode)
+		requireErrIs(t, mode.String()+" bet", err, ErrBetBroken)
+		r.Reset()
+		logic.depth = 2
+		if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, mode); err != nil {
+			t.Fatalf("%v after reset: %v", mode, err)
+		}
 	}
 }
 
 func TestBetRunnerStateRules(t *testing.T) {
-	r, logic, m := chainRunner(t, 2, 5)
-	_, err := r.Choose(0)
-	requireErrIs(t, "choose before start", err, ErrNoPendingChoice)
-	_, err = r.Result()
-	requireErrIs(t, "result before start", err, ErrBetNotFinished)
+	r, logic, m := chainRunner(t, 2, WithMaxSegments(5))
+	_, err := r.Next(0)
+	requireErrIs(t, "next before bet", err, ErrNoPendingChoice)
 	for _, in := range []SpinInput{
 		{BetMode: 0, BetMult: 1, Cycle: 1},
 		{BetMode: 0, BetMult: 1, ChooseNext: []int{1}},
@@ -172,87 +286,89 @@ func TestBetRunnerStateRules(t *testing.T) {
 		{BetMode: 0, BetMult: 0},
 		{BetMode: 0, BetMult: int(^uint(0) >> 1)},
 	} {
-		if _, err := r.Start(in); err == nil {
-			t.Fatalf("Start accepted %+v", in)
+		if _, err := r.Bet(in, ChoosePlayer); err == nil {
+			t.Fatalf("Bet accepted %+v", in)
 		}
 	}
 	if len(logic.inputs) != 0 {
-		t.Fatal("rejected starts ran the game")
+		t.Fatal("rejected bets ran the game")
 	}
 
-	if _, err := r.Start(SpinInput{BetMode: 0, BetMult: 1}); err != nil {
+	if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChoosePlayer); err != nil {
 		t.Fatal(err)
 	}
-	_, err = r.Result()
-	requireErrIs(t, "result while pending", err, ErrBetNotFinished)
 	before := coreState(t, m)
+	_, err = r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChoosePlayer)
+	requireErrIs(t, "bet while pending", err, ErrBetInProgress)
 	for _, choice := range []int{-1, 2} {
-		_, err := r.Choose(choice)
+		_, err := r.Next(choice)
 		requireErrIs(t, "choice out of range", err, ErrChoiceOutOfRange)
 	}
 	requireCore(t, m, before)
-	if _, err := r.Choose(1); err != nil {
+	done, err := r.Next(1)
+	if err != nil || !done.IsGameEnd {
 		t.Fatalf("a valid choice after an invalid one: %v", err)
 	}
-	done, err := r.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	doneJSON := segmentJSON(t, done)
 
-	// 上一局完成後，Start 的投注檢查失敗保留原狀態；快照被拒絕時上一局已失效。
-	if _, err := r.Start(SpinInput{BetMode: 0, BetMult: 0}); err == nil {
-		t.Fatal("bad wager accepted")
-	}
-	if got, err := r.Result(); err != nil || got != done {
-		t.Fatal("a rejected Start discarded the finished bet")
-	}
-	_, err = r.Start(SpinInput{BetMode: 0, BetMult: 1, StartSnap: []byte{1, 2, 3}})
-	requireErrIs(t, "rejected snapshot", err, ErrStartSnapshotRejected)
-	_, err = r.Result()
-	requireErrIs(t, "result after a rejected snapshot", err, ErrBetNotFinished)
-	if _, err := r.Start(SpinInput{BetMode: 0, BetMult: 1}); err != nil {
-		t.Fatalf("start after a rejected snapshot: %v", err)
-	}
-}
-
-// 遊戲回傳 nil 後本局不可繼續：Choose、Result、Start 都回報 ErrBetBroken，直到 Abandon。
-func TestBetRunnerBrokenAfterGameRejection(t *testing.T) {
-	r, logic, _ := chainRunner(t, 3, 5)
-	logic.nilAt = 1
-	if _, err := r.Start(SpinInput{BetMode: 0, BetMult: 1}); err != nil {
-		t.Fatal(err)
-	}
-	_, err := r.Choose(0)
-	requireErrIs(t, "game rejection", err, ErrGameRejected)
-	for name, call := range map[string]func() error{
-		"choose": func() error { _, err := r.Choose(0); return err },
-		"result": func() error { _, err := r.Result(); return err },
-		"start":  func() error { _, err := r.Start(SpinInput{BetMode: 0, BetMult: 1}); return err },
+	// 上一局完成後：未定義的模式與投注檢查失敗都保留原狀態，不執行、不消耗 RNG。
+	before = coreState(t, m)
+	calls := len(logic.inputs)
+	for _, bad := range []func() error{
+		func() error { _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChooseMode(3)); return err },
+		func() error { _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 0}, ChooseFirst); return err },
 	} {
-		requireErrIs(t, name, call(), ErrBetBroken)
+		if bad() == nil {
+			t.Fatal("a bad bet was accepted")
+		}
 	}
-	logic.nilAt = -1
-	r.Abandon()
-	if _, err := r.Start(SpinInput{BetMode: 0, BetMult: 1}); err != nil {
-		t.Fatalf("start after abandon: %v", err)
+	if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChooseMode(9)); !errors.Is(err, ErrInvalidChooseMode) {
+		t.Fatalf("invalid mode: %v", err)
 	}
+	requireCore(t, m, before)
+	if len(logic.inputs) != calls || r.state != runnerDone || r.result != done || segmentJSON(t, done) != doneJSON {
+		t.Fatal("a rejected Bet discarded the finished bet")
+	}
+
+	// 第 0 段的快照被拒絕：回到沒有進行中的局，可以直接開始下一局（各模式皆同）。
+	for _, mode := range []ChooseMode{ChoosePlayer, ChooseFirst, ChooseLast} {
+		_, err = r.Bet(SpinInput{BetMode: 0, BetMult: 1, StartSnap: []byte{1, 2, 3}}, mode)
+		requireErrIs(t, "rejected snapshot", err, ErrStartSnapshotRejected)
+		if r.state != runnerIdle {
+			t.Fatalf("%v: state %d after a rejected snapshot", mode, r.state)
+		}
+		if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChooseFirst); err != nil {
+			t.Fatalf("%v: bet after a rejected snapshot: %v", mode, err)
+		}
+	}
+	// 自動選擇的局沒有等待中的選擇。
+	_, err = r.Next(0)
+	requireErrIs(t, "next after an automatic bet", err, ErrNoPendingChoice)
 }
 
-// 單段遊戲：Start 即完成，Result 是放行的段結果本身。
-func TestBetRunnerSingleSegment(t *testing.T) {
-	m := faultMachine(t, false)
-	r, err := NewBetRunner(m, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range 50 {
-		sr, err := r.Start(SpinInput{BetMode: 0, BetMult: 1})
-		if err != nil {
-			t.Fatal(err)
+// 遊戲回傳 nil 後本局不可繼續：Next、Bet 都回報 ErrBetBroken，直到 Reset。
+func TestBetRunnerBrokenAfterGameRejection(t *testing.T) {
+	for _, mode := range []ChooseMode{ChoosePlayer, ChooseFirst} {
+		r, logic, _ := chainRunner(t, 3, WithMaxSegments(5))
+		logic.nilAt = 1
+		_, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, mode)
+		if mode == ChoosePlayer {
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = r.Next(0)
 		}
-		res, err := r.Result()
-		if err != nil || res != sr || !sr.IsGameEnd {
-			t.Fatalf("single segment: %v %v", res, err)
+		requireErrIs(t, mode.String()+" game rejection", err, ErrGameRejected)
+		for name, call := range map[string]func() error{
+			"next": func() error { _, err := r.Next(0); return err },
+			"bet":  func() error { _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, mode); return err },
+		} {
+			requireErrIs(t, mode.String()+" "+name, call(), ErrBetBroken)
+		}
+		logic.nilAt = -1
+		r.Reset()
+		if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, mode); err != nil {
+			t.Fatalf("%v: bet after reset: %v", mode, err)
 		}
 	}
 }

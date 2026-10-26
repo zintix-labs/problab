@@ -19,7 +19,7 @@ import (
 
 // 本機與正式路徑的等價：同一組 choice 分別送進 BetRunner（checkpoint 傳指標）與
 // Spin(dto)（checkpoint 經 JSON 往返），逐段比對遊戲結果、段快照與呼叫後的機台位置，
-// 最後比對完整局。
+// 最後比對完整局。BetRunner 最後一次回傳完整局，所以本機端也以探針取得最後一段。
 
 // lastResultLogic 包住遊戲邏輯，保留遊戲最後回傳的段結果，讓測試取得 Spin 實際產生的 buf 結果。
 type lastResultLogic struct {
@@ -79,15 +79,16 @@ func compareLocalAndDTO(t testing.TB, local, remote *Machine, reg *slot.LogicReg
 	t.Helper()
 	var diffs []string
 	diff := func(format string, args ...any) { diffs = append(diffs, fmt.Sprintf(format, args...)) }
-	runner, err := NewBetRunner(local, 8)
+	runner, err := NewBetRunner(local, WithMaxSegments(8))
 	if err != nil {
 		t.Fatal(err)
 	}
+	localProbe := wrapLastResult(t, local, reg)
 	probe := wrapLastResult(t, remote, reg)
 	asm := buf.NewSpinAssembler()
 	triggered := 0
 	for bet := range bets {
-		seg, err := runner.Start(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true})
+		out, err := runner.Bet(SpinInput{BetMode: 0, BetMult: 1, CaptureSnapshots: true}, ChoosePlayer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,6 +103,11 @@ func compareLocalAndDTO(t testing.TB, local, remote *Machine, reg *slot.LogicReg
 			if res.BetID != req.BetID || (req.Choice == nil) != (res.Choice == nil) || (req.Choice != nil && *req.Choice != *res.Choice) {
 				diff("bet %d segment %d: entry fields bet_id=%q choice=%v", bet, cycle, res.BetID, res.Choice)
 			}
+			// 本局未結束時回傳的是本段；結束時是完整局，本段改由探針取得。
+			seg := out
+			if out.IsGameEnd {
+				seg = localProbe.last
+			}
 			if got, want := segmentJSON(t, seg), gameJSON(t, res); got != want {
 				diff("bet %d segment %d: results differ\n local=%s\nremote=%s", bet, cycle, got, want)
 			}
@@ -113,10 +119,9 @@ func compareLocalAndDTO(t testing.TB, local, remote *Machine, reg *slot.LogicReg
 				t.Fatal(err)
 			}
 			if full != nil {
-				localFull, err := runner.Result()
-				if err != nil {
-					diff("bet %d: local game not finished: %v", bet, err)
-				} else if segmentJSON(t, localFull) != segmentJSON(t, full) {
+				if !out.IsGameEnd {
+					diff("bet %d: local game not finished", bet)
+				} else if segmentJSON(t, out) != segmentJSON(t, full) {
 					diff("bet %d: whole games differ", bet)
 				}
 				break
@@ -125,7 +130,7 @@ func compareLocalAndDTO(t testing.TB, local, remote *Machine, reg *slot.LogicReg
 				triggered++
 			}
 			choice := choose(bet, cycle)
-			if seg, err = runner.Choose(choice); err != nil {
+			if out, err = runner.Next(choice); err != nil {
 				diff("bet %d segment %d: local choose: %v", bet, cycle+1, err)
 				return diffs
 			}
