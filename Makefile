@@ -42,7 +42,9 @@ SEED_E    := $(if $(s),$(s),$(seed))
 
 
 # combine args
-RUN_ARGS = -game $(GAME_E) -worker $(WORKER_E) -player $(PLAYERS_E) -bets $(BETS_E) -mode $(BETMODE_E) -spins $(ROUNDS_E) -seed $(SEED_E)
+# make targets are not interactive: choice games always pick first.
+# For another choose mode, run the CLI directly: go run ./cmd/run -choose last
+RUN_ARGS = -game $(GAME_E) -worker $(WORKER_E) -player $(PLAYERS_E) -bets $(BETS_E) -mode $(BETMODE_E) -spins $(ROUNDS_E) -seed $(SEED_E) -choose first
 
 # pprof args: Go flag: var ProfileType = flag.String("p", ...))
 PPROF_CPU_ARGS    = -p=cpu    $(RUN_ARGS)

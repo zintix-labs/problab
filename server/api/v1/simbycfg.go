@@ -34,6 +34,7 @@ func (sh *SimHandler) SimByJson(w http.ResponseWriter, r *http.Request) {
 		Rounds      int             `json:"round"`
 		GameSetting json.RawMessage `json:"cfg"`
 		Seed        *int64          `json:"seed,omitempty"`
+		Choose      string          `json:"choose,omitempty"` // 選擇類遊戲的選擇方式：first、last；省略時不指定
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -55,6 +56,11 @@ func (sh *SimHandler) SimByJson(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.BetMode < 0 {
 		httperr.Errs(w, errs.NewWarn("bet_mode must be non-negative integer"))
+		return
+	}
+	choose, err := parseChoose(req.Choose)
+	if err != nil {
+		httperr.Errs(w, err)
 		return
 	}
 	if req.Seed == nil {
@@ -80,6 +86,10 @@ func (sh *SimHandler) SimByJson(w http.ResponseWriter, r *http.Request) {
 		Setting: problab.SettingFromJSON(req.GameSetting),
 	})
 	if err != nil {
+		httperr.Errs(w, err)
+		return
+	}
+	if err := sim.SetCfg(problab.BetConfig{Choose: choose}); err != nil {
 		httperr.Errs(w, err)
 		return
 	}
