@@ -19,7 +19,6 @@ import (
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/recorder"
-	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/stats"
 )
 
@@ -29,6 +28,18 @@ import (
 type DevSimulator struct {
 	sim *Simulator // 只開放Sim功能
 	m   *Machine   // 保留 Extend，供 Spins 使用
+	cfg betCfg     // Spins 的執行設定；Sim 使用 sim.cfg，兩者由 SetCfg 一起設定
+}
+
+// SetCfg 以 c 整份取代 Spins、RestoreSpins 與 Sim、RestoreSim 的執行設定；規則同
+// Simulator.SetCfg。
+func (d *DevSimulator) SetCfg(c BetConfig) error {
+	r, err := c.resolve()
+	if err != nil {
+		return err
+	}
+	d.cfg, d.sim.cfg = r, r
+	return nil
 }
 
 type DevSpinReport struct {
@@ -41,11 +52,12 @@ type DevSpinReport struct {
 	BaseWin  int              `json:"base_win"`
 	FreeWin  int              `json:"free_win"`
 	Results  []dto.SpinResult `json:"results"`
+	Choose   string           `json:"choose,omitempty"` // 選擇類遊戲自動選擇的方式；未指定時不輸出
 }
 
-// Spins 從機台目前的位置連續執行 round 局，回傳每局結果與統計。每局經 runBet 執行並擷取
-// 快照，統計由 Recorder 計算；Before／After 是機台在整批前後的位置，可交給 RestoreSpins
-// 重跑同一批。
+// Spins 從機台目前的位置連續執行 round 局，回傳每局結果與統計。每局經 BetRunner 依執行
+// 設定跑完整局並擷取快照，統計由 Recorder 計算；Before／After 是機台在整批前後的位置，
+// 可交給 RestoreSpins 重跑同一批。
 func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 	// 限制檢查
 	if round < 1 || round > 5000 {
@@ -67,12 +79,19 @@ func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 	before := corefmt.EncodeBase64URL(be)
 
 	// spin
+	cfg := d.cfg
+	br, err := cfg.runner(m)
+	if err != nil {
+		return DevSpinReport{}, err
+	}
 	in := SpinInput{BetMode: betmode, BetMult: 1, CaptureSnapshots: true}
-	asm := buf.NewSpinAssembler()
 	ds := make([]dto.SpinResult, 0, round)
-	for range round {
-		res, err := runBet(m, asm, in)
+	for i := range round {
+		res, err := playBet(br, in, cfg.choose)
 		if err != nil {
+			if isSettingError(err) {
+				return DevSpinReport{}, &errs.E{ErrLv: errs.Warn, Message: "spin error", Cause: simFault(m.gameId, betmode, i, err)}
+			}
 			return DevSpinReport{}, errs.Wrap(err, "spin error")
 		}
 		rec.Record(res)
@@ -99,6 +118,7 @@ func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 		BaseWin:  b.BaseWin,
 		FreeWin:  b.FreeWin,
 		Results:  ds,
+		Choose:   cfg.label(),
 	}
 	return de, nil
 }

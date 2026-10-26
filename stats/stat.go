@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -64,6 +65,7 @@ type SummaryReport struct {
 	NoWinRounds int      `json:"NoWinRounds"`
 	HitRate     float64  `json:"HitRate"`
 	Rounds      int      `json:"Rounds"`
+	Choose      string   `json:"Choose,omitempty"` // 選擇類遊戲自動選擇的方式（first、last）；未指定時不輸出
 }
 
 // MultReport 贏倍統計
@@ -239,6 +241,10 @@ func (s *StatReport) fmtBasic() ([]string, map[string]string) {
 		"CV":           p.Sprintf("%.3f", s.Summary.Cv),
 	}
 	keys := []string{"Game Name", "Game ID", "Total Rounds", "Total RTP", "RTP 95% CI", "Total Bet", "Total Win", "Base Win", "Free Win", "NoWin Rounds", "Trigger", "STD", "CV"}
+	if s.Summary.Choose != "" {
+		basic["Choose"] = s.Summary.Choose
+		keys = slices.Insert(keys, 2, "Choose")
+	}
 	return keys, basic
 }
 

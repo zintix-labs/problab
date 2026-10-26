@@ -22,22 +22,29 @@ import (
 	"github.com/zintix-labs/problab/sdk/slot"
 )
 
-// runBet 把 nil 與未結束的結果回報為錯誤，不 panic；完成的單段局直接交出。
-func TestRunBetErrors(t *testing.T) {
+// playBet：完成的局直接交出；player 停在選擇點時回報 ErrChooseModeRequired 並 Reset，
+// 下一局可以直接開始；其他錯誤原樣交出。
+func TestPlayBet(t *testing.T) {
 	in := SpinInput{BetMode: 0, BetMult: 1}
-	for _, c := range []struct {
-		kind string
-		want error
-	}{{"nil", errNilSpinResult}, {"incomplete", errIncompleteGame}} {
-		m := brokenResultSimulator(t, c.kind).mBuf[0]
-		if res, err := runBet(m, buf.NewSpinAssembler(), in); res != nil || !errors.Is(err, c.want) {
-			t.Fatalf("%s: runBet = %v, %v; want nil, %v", c.kind, res, err, c.want)
-		}
+	br, _, _ := chainRunner(t, 2)
+	res, err := playBet(br, in, ChoosePlayer)
+	if res != nil || !errors.Is(err, ErrChooseModeRequired) || !isSettingError(err) {
+		t.Fatalf("player at a choice point: %v, %v", res, err)
 	}
-	m := faultMachine(t, false)
-	res, err := runBet(m, buf.NewSpinAssembler(), in)
-	if err != nil || res == nil || !res.IsGameEnd {
-		t.Fatalf("finished game: runBet = %v, %v", res, err)
+	if br.state != runnerIdle {
+		t.Fatalf("state %d after ErrChooseModeRequired", br.state)
+	}
+	if res, err := playBet(br, in, ChooseFirst); err != nil || !res.IsGameEnd {
+		t.Fatalf("first: %v, %v", res, err)
+	}
+	limited, _, _ := chainRunner(t, 3, WithMaxSegments(2))
+	if _, err := playBet(limited, in, ChooseLast); !errors.Is(err, ErrSegmentLimit) || !isSettingError(err) || limited.state != runnerIdle {
+		t.Fatalf("limit: %v, state %d", err, limited.state)
+	}
+	rejected, logic, _ := chainRunner(t, 2)
+	logic.nilAt = 0
+	if _, err := playBet(rejected, in, ChooseFirst); !errors.Is(err, ErrGameRejected) || isSettingError(err) {
+		t.Fatalf("game rejection: %v", err)
 	}
 }
 
@@ -102,8 +109,8 @@ func brokenResultLab(t testing.TB, kind string) *Problab {
 // Sim runs on the calling goroutine, so its panic can be recovered here.
 func TestSimPanicsOnBrokenResults(t *testing.T) {
 	for _, c := range []struct{ kind, want string }{
-		{"incomplete", "simulator: game 0 bet mode 0 round 0: incomplete game result"},
-		{"nil", "simulator: game 0 bet mode 0 round 0: nil spin result"},
+		{"incomplete", "game returned an inconsistent segment: IsGameEnd=false, len(ChooseNext)=0"},
+		{"nil", "simulator: game 0 bet mode 0 round 0: game rejected the request"},
 	} {
 		s := brokenResultSimulator(t, c.kind)
 		p := catchPanic(func() { _, _, _ = s.Sim(0, 10, false) })
@@ -132,8 +139,8 @@ func TestSimWorkersPanicOnBrokenResults(t *testing.T) {
 	}
 	for _, entry := range []string{"simmp", "simplayers"} {
 		for _, c := range []struct{ kind, want string }{
-			{"incomplete", "simulator: game 0 bet mode 0 round 0: incomplete game result"},
-			{"nil", "simulator: game 0 bet mode 0 round 0: nil spin result"},
+			{"incomplete", "game returned an inconsistent segment: IsGameEnd=false, len(ChooseNext)=0"},
+			{"nil", "simulator: game 0 bet mode 0 round 0: game rejected the request"},
 		} {
 			t.Run(fmt.Sprintf("%s/%s", entry, c.kind), func(t *testing.T) {
 				cmd := exec.Command(os.Args[0], "-test.run=^TestSimWorkersPanicOnBrokenResults$", "-test.count=1")

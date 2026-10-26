@@ -17,6 +17,7 @@ package problab
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/zintix-labs/problab/corefmt"
@@ -110,15 +111,16 @@ func TestDevRestoreSimReplays(t *testing.T) {
 	}
 }
 
-// 遊戲回傳 nil 或未結束的結果時，Spins 回報錯誤，不 panic、也不計入統計。
+// 遊戲回傳 nil 時，Spins 回報錯誤，不 panic、也不計入統計；未結束卻沒有選項屬於輸出違約，
+// 與 Spin、BetRunner 一樣 panic。
 func TestDevSpinsBrokenResults(t *testing.T) {
-	for _, c := range []struct {
-		kind string
-		want error
-	}{{"nil", errNilSpinResult}, {"incomplete", errIncompleteGame}} {
-		d := devSimulator(t, brokenResultLab(t, c.kind), 77)
-		if _, err := d.Spins(0, 10); !errors.Is(err, c.want) {
-			t.Fatalf("%s: Spins error %v, want %v", c.kind, err, c.want)
-		}
+	d := devSimulator(t, brokenResultLab(t, "nil"), 77)
+	if _, err := d.Spins(0, 10); !errors.Is(err, ErrGameRejected) {
+		t.Fatalf("nil: Spins error %v, want %v", err, ErrGameRejected)
+	}
+	d = devSimulator(t, brokenResultLab(t, "incomplete"), 77)
+	p := catchPanic(func() { _, _ = d.Spins(0, 10) })
+	if err, ok := p.(error); !ok || !strings.Contains(err.Error(), "inconsistent segment") {
+		t.Fatalf("incomplete: panic %v", p)
 	}
 }

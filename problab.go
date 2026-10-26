@@ -604,6 +604,7 @@ func (p *Problab) NewDevSimulator(gid spec.GID, seed int64) (*DevSimulator, erro
 	dev := &DevSimulator{
 		sim: sim,
 		m:   m,
+		cfg: defaultBetCfg(),
 	}
 	return dev, nil
 }
