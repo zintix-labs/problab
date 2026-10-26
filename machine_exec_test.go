@@ -551,13 +551,14 @@ func TestExecutionAndFinishFaults(t *testing.T) {
 				m := faultMachine(t, true)
 				withCountingLogic(t, m).nilRes = true
 				var got *buf.SpinResult
+				var err error
 				in, isUnsafe := unsafeInput(e.name)
 				p := catchPanic(func() {
 					if isUnsafe {
 						got = m.SpinUnsafe(in)
 						return
 					}
-					_ = e.call(m)
+					err = e.call(m)
 				})
 				if isUnsafe {
 					// SpinUnsafe 原樣回傳 nil，兩種快照模式都不觸碰 State。
@@ -567,8 +568,17 @@ func TestExecutionAndFinishFaults(t *testing.T) {
 					if fs := m.fallbackState; fs.StartCoreSnap != nil || fs.AfterCoreSnap != nil || fs.Checkpoint != nil {
 						t.Fatalf("%s: nil result wrote the fallback State", e.name)
 					}
-				} else if p == nil {
-					t.Fatal("nil game result did not panic")
+				} else {
+					// Spin 把遊戲的 nil 視為拒絕請求：回傳 Warn，不 panic，Machine 照常可用。
+					if p != nil {
+						t.Fatalf("%s: nil game result panicked: %v", e.name, p)
+					}
+					if !errors.Is(err, ErrGameRejected) {
+						t.Fatalf("%s: err %v, want ErrGameRejected", e.name, err)
+					}
+					if ee, ok := err.(*errs.E); !ok || ee.ErrLv != errs.Warn {
+						t.Fatalf("%s: err %T %v, want *errs.E at Warn", e.name, err, err)
+					}
 				}
 				requireCore(t, m, recovery)
 			})

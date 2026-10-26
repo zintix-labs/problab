@@ -45,7 +45,7 @@ type observedFactory struct {
 type extensionProbe struct{ t *testing.T }
 
 func (g extensionProbe) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
-	if gh.OmitExtend() || r.StartState != nil || r.Cycle != 0 || r.HasChoice {
+	if gh.OmitExtend() || r.Checkpoint != nil || len(r.ChooseNext) != 0 || r.Cycle != 0 {
 		g.t.Fatal("not a clean non-simulator new spin")
 	}
 	// This type/logic deliberately has no DTO renderer registration.

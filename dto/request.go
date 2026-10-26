@@ -23,43 +23,39 @@ import (
 
 	"github.com/zintix-labs/problab/corefmt"
 	"github.com/zintix-labs/problab/errs"
-	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/spec"
 )
 
 type SpinRequest struct {
-	UID       string   `json:"uid"`                  // 唯一識別碼
-	GameName  string   `json:"game"`                 // 要玩的遊戲
-	GameId    spec.GID `json:"gid"`                  // 遊戲機台編號
-	Bet       int      `json:"bet"`                  // 投注額
-	BetMode   int      `json:"bet_mode"`             // 投注模式(走BetUnit[i])
-	BetMult   int      `json:"bet_mult"`             // 投注倍數(BetUnit[0]的幾倍)
-	Cycle     int      `json:"cycle"`                // 第幾段會話
-	Choice    int      `json:"choice,omitempty"`     // 可選：玩家在本段（cycle）所做的選擇值（允許為 0）。
-	HasChoice bool     `json:"has_choice,omitempty"` // 可選：是否有「提供選擇」。
-	// Contract（強硬約束，避免 choice=0 的雙重語意）：
-	//   - 若 has_choice 為 false（或未提供），則 choice 必須省略；否則視為 request 格式錯誤。
-	//   - 若 has_choice 為 true，則視為有選擇；choice 若省略則視為 0。
-	StartState *StartState `json:"start_state,omitempty"` // 可選：由業務端帶入的引擎狀態（nil=新局；帶 start_b64u=回放/續玩）。
+	BetID      string   `json:"bet_id,omitempty"`      // 可選：一筆下注從第 0 段到結束的呼叫鏈識別碼，由後端產生；原樣寫回結果
+	GameName   string   `json:"game"`                  // 要玩的遊戲
+	GameId     spec.GID `json:"gid"`                   // 遊戲機台編號
+	Bet        int      `json:"bet"`                   // 投注額；續段沿用第 0 段
+	BetMode    int      `json:"bet_mode"`              // 投注模式(走BetUnit[i])
+	BetMult    int      `json:"bet_mult"`              // 投注倍數(BetUnit[0]的幾倍)
+	Cycle      int      `json:"cycle"`                 // 第幾段，0 為新局
+	Choice     *int     `json:"choice,omitempty"`      // 續段：ChooseNext 的位置索引；新局必須省略
+	ChooseNext []int    `json:"choose_next,omitempty"` // 續段：上一段結果的 choose_next，原樣送回；新局必須省略
+	// Contract：有送 choice ⇔ choose_next 非空；不一致視為 request 格式錯誤。
+	// 引擎另外要求 Cycle 為 0 ⇔ choose_next 為空，且 choice 在 [0, len(choose_next)) 內。
+	StartState *StartState `json:"start_state,omitempty"` // 可選：start_b64u 只代表回放；cp 為上一段結果的 checkpoint
 }
 
 // DecodeSpinRequest 會把 HTTP 請求解碼成 SpinRequest。
 //
 // 支援：
-//   - GET：從 query string 讀取參數（uid/game/gid/bet/bet_mode/bet_mult/cycle/choice/has_choice）。
-//     注意：GET 建議僅用於「新局」或簡單測試；巢狀狀態（start_state/cp/jp）建議使用 POST。
+//   - GET：從 query string 讀取新局參數（bet_id/game/gid/bet/bet_mode/bet_mult/cycle）。
+//     GET 只用於新局或簡單測試：收到 choice、choose_next、非 0 的 cycle，或已刪除的
+//     uid、has_choice 時拒絕；續段與巢狀狀態（start_state/cp/jp）使用 POST。
 //   - POST：從 JSON body 反序列化（支援 start_state）。
 //
 // StartState（start_state）語意：
-//   - start_state 缺省 / 為 null / 為空物件：視為「新局」。
-//   - start_state.start_b64u 有值：視為「回放（replay）/ 續玩（resume/continue）」：
-//   - 回放：帶入當初記錄的 start_b64u，可在相同輸入條件下重現該局結果。
-//   - 續玩：帶入上一段回傳的 after_b64u 作為新的 start_b64u，以延續 RNG 流水。
+//   - start_state 缺省 / 為 null / 為空物件：不指定 RNG 起點。
+//   - start_state.start_b64u 有值：回放（replay）。帶入當初記錄的 start_b64u，可在相同輸入條件下重現該段結果。
+//   - 續段不帶 start_b64u：每一段都依機台的 RNG 政策取得起點。不得把上一段的 after_b64u
+//     當作下一段的 start_b64u 送回，那會讓續段結果在玩家選擇前就已決定。
+//   - start_state.cp：續段時帶入上一段結果的 cp；可以只帶 cp、不帶 start_b64u。
 //   - 引擎的輸入只接受 start_b64u（Start）；after_b64u 只會出現在回應（SpinState），請求端不得自行填寫 after。
-//
-// Choice / HasChoice Contract（強硬約束，避免 choice=0 的雙重語意）：
-//   - 若 has_choice 為 false（或未提供），則 choice 必須省略；否則視為 request 格式錯誤。
-//   - 若 has_choice 為 true，則視為有選擇；choice 若省略則視為 0。
 //
 // 注意：
 //   - 這裡只負責「解碼（decode）」與基本型別轉換，不做任何遊戲合法性校驗；
@@ -76,7 +72,17 @@ func DecodeSpinRequest(r *http.Request) (*SpinRequest, error) {
 	switch r.Method {
 	case http.MethodGet:
 		q := r.URL.Query()
-		req.UID = q.Get("uid")
+		for _, key := range []string{"uid", "has_choice"} {
+			if q.Has(key) {
+				return nil, errs.NewWarn("query parameter " + key + " is no longer supported")
+			}
+		}
+		for _, key := range []string{"choice", "choose_next"} {
+			if q.Has(key) {
+				return nil, errs.NewWarn("continuation requests must use POST: " + key)
+			}
+		}
+		req.BetID = q.Get("bet_id")
 		req.GameName = q.Get("game")
 
 		if s := q.Get("gid"); s != "" {
@@ -116,23 +122,10 @@ func DecodeSpinRequest(r *http.Request) (*SpinRequest, error) {
 			if err != nil {
 				return nil, errs.NewWarn(fmt.Sprintf("invalid cycle: %v", err))
 			}
+			if v != 0 {
+				return nil, errs.NewWarn("continuation requests must use POST: cycle")
+			}
 			req.Cycle = v
-		}
-
-		if s := q.Get("choice"); s != "" {
-			v, err := strconv.Atoi(s)
-			if err != nil {
-				return nil, errs.NewWarn(fmt.Sprintf("invalid choice: %v", err))
-			}
-			req.Choice = v
-		}
-
-		if s := q.Get("has_choice"); s != "" {
-			v, err := strconv.ParseBool(s)
-			if err != nil {
-				return nil, errs.NewWarn("invalid has_choice value " + err.Error())
-			}
-			req.HasChoice = v
 		}
 
 		return req, nil
@@ -156,19 +149,20 @@ func DecodeSpinRequest(r *http.Request) (*SpinRequest, error) {
 // StartState 是由業務端帶入的「引擎可恢復狀態」（可選）。
 //
 // 設計目標：
-//   - 讓引擎維持純計算器（stateless / deterministic），而「可回放/可續玩」所需的狀態由業務端保存與回送。
-//   - 新局：start_state 缺省即可；引擎會自行產生本局的 RNG 內部狀態並在回應中回傳 Start/After。
-//   - 回放（Replay）：業務端帶入當初記錄的 start_b64u與狀態快照，即可重現該局結果。
-//   - 續玩（Resume/Continue，多段流程）：業務端把上一段回應的 after_b64u 當作下一段的 start_b64u 以及必要的 cp/jp 快照送入，。
+//   - 讓引擎維持純計算器（stateless / deterministic），而「可回放/可續段」所需的狀態由業務端保存與回送。
+//   - 新局：start_state 缺省即可；引擎依 RNG 政策取得起點，並在回應中回傳本段的 Start/After。
+//   - 回放（Replay）：業務端帶入當初記錄的 start_b64u（以及該段的輸入 cp），即可重現該段結果。
+//   - 續段（多段流程）：業務端帶入上一段回應的 cp，不帶 start_b64u；起點依 RNG 政策取得。
+//     不得把上一段的 after_b64u 當作下一段的 start_b64u。
 //
 // 重要約束：
 //   - Request 只允許提供 Start（start_b64u）；After（after_b64u）只會由引擎在 Response 回傳。
 //   - cp / jp 為 opaque payload：業務端必須能 round-trip 保存與回送；請勿做二次 JSON 編碼（不要把 JSON 再包成字串）。
 type StartState struct {
 	// StartCoreSnapB64U：RNG Core 的「起始快照」Base64URL（URL-safe base64）字串。
-	//   - 缺省：視為新局（引擎自行起始 RNG）。
-	//   - 有值：視為回放/續玩（引擎從該快照 restore RNG）。
-	// 注意：請求端不得提供 After；After 由引擎在回應中回傳，用於下一段續玩或審計存證。
+	//   - 缺省：依機台的 RNG 政策取得起點。
+	//   - 有值：回放，引擎從該快照執行本段（跳過抽庫），執行後機台恢復到執行前的位置。
+	// 注意：請求端不得提供 After；After 由引擎在回應中回傳，用於審計存證。
 	StartCoreSnapB64U string `json:"start_b64u,omitempty"`
 
 	// Checkpoint：遊戲自定義的最小恢復狀態（opaque JSON）。
@@ -221,44 +215,43 @@ func (ss *StartState) HasPayload() bool {
 	return ss.StartCoreSnapB64U != "" || len(ss.Checkpoint) != 0 // || JP...
 }
 
-func (sr *SpinRequest) Parse(key spec.LogicKey) (*buf.SpinRequest, error) {
-	var state *buf.StartState
-	start := sr.StartState
-	if start.HasPayload() {
-		state = new(buf.StartState)
-		b64u := start.StartCoreSnapB64U
-		if b64u == "" {
-			return nil, errs.NewWarn("core snap is required")
+// ParsedSpinRequest 是 Parse 解碼後的請求。RNG 快照（StartSnap）與遊戲收到的欄位分開，
+// 由 Machine 用來選擇起點，不交給遊戲。
+type ParsedSpinRequest struct {
+	BetID      string
+	Cycle      int
+	Choice     int   // 沒送時為 0
+	HasChoice  bool  // 請求是否送了 choice（只在 dto 層使用）
+	ChooseNext []int // 指向請求的 slice；Machine 會複製
+	Checkpoint any   // 依 logic key 註冊的 codec 解碼；沒送時為 nil
+	StartSnap  []byte
+}
+
+// Parse 只處理格式：start_b64u 與 checkpoint 的解碼，以及「有送 choice ⇔ choose_next 非空」。
+// 投注、遊戲識別與結構不變量由 Machine 檢查。
+func (sr *SpinRequest) Parse(key spec.LogicKey) (ParsedSpinRequest, error) {
+	p := ParsedSpinRequest{BetID: sr.BetID, Cycle: sr.Cycle, ChooseNext: sr.ChooseNext}
+	if sr.Choice != nil {
+		p.Choice, p.HasChoice = *sr.Choice, true
+	}
+	if p.HasChoice != (len(sr.ChooseNext) > 0) {
+		return ParsedSpinRequest{}, errs.NewWarn("choice must be sent if and only if choose_next is not empty")
+	}
+	if start := sr.StartState; start.HasPayload() {
+		if b64u := start.StartCoreSnapB64U; b64u != "" {
+			snap, err := corefmt.DecodeBase64URL(b64u)
+			if err != nil {
+				return ParsedSpinRequest{}, errs.NewWarn("core snap decode failed " + err.Error())
+			}
+			p.StartSnap = snap
 		}
-		snap, err := corefmt.DecodeBase64URL(b64u)
-		if err != nil {
-			return nil, errs.NewWarn("core snap decode failed " + err.Error())
-		}
-		state.StartCoreSnap = snap
-		check := start.Checkpoint
-		if len(check) != 0 {
+		if check := start.Checkpoint; len(check) != 0 {
 			cp, err := DecodeCheckpoint(key, check)
 			if err != nil {
-				return nil, errs.NewWarn("check point decode failed " + err.Error())
+				return ParsedSpinRequest{}, errs.NewWarn("check point decode failed " + err.Error())
 			}
-			state.Checkpoint = cp
+			p.Checkpoint = cp
 		}
 	}
-	if !sr.HasChoice && sr.Choice != 0 {
-		return nil, errs.NewWarn("has_choice is false but choice is not zero")
-	}
-
-	req := &buf.SpinRequest{
-		UID:        sr.UID,
-		GameName:   sr.GameName,
-		GameId:     sr.GameId,
-		Bet:        sr.Bet,
-		BetMode:    sr.BetMode,
-		BetMult:    sr.BetMult,
-		Cycle:      sr.Cycle,
-		Choice:     sr.Choice,
-		HasChoice:  sr.HasChoice,
-		StartState: state,
-	}
-	return req, nil
+	return p, nil
 }

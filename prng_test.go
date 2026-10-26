@@ -110,7 +110,7 @@ func TestOptimalProductionReseedsBeforeSelectorAndReturnsArtifactLineage(t *test
 	}
 	factory.clearEvents()
 	result, err := machine.Spin(&dto.SpinRequest{
-		UID: "optimal", GameName: "demo_normal", GameId: 0,
+		GameName: "demo_normal", GameId: 0,
 		Bet: 40, BetMode: 0, BetMult: 1,
 	})
 	if err != nil {
@@ -394,7 +394,7 @@ func newOneGameLabE(factory core.PRNGFactory, opts ...ProblabOption) (*Problab, 
 
 func testSpinRequest() *dto.SpinRequest {
 	return &dto.SpinRequest{
-		UID: "test", GameName: "demo_cascade", GameId: spec.GID(1),
+		GameName: "demo_cascade", GameId: spec.GID(1),
 		Bet: 30, BetMode: 0, BetMult: 1,
 	}
 }
