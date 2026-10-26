@@ -16,9 +16,24 @@ package demo_configs
 
 import (
 	"embed"
+	"io/fs"
 )
 
 // FS provides embedded default config YAMLs for external usage.
 //
 //go:embed *.yaml
 var FS embed.FS
+
+//go:embed staged/*.yaml
+var staged embed.FS
+
+// StagedFS provides demo configs that are not part of FS yet: games that stop at a
+// player choice, which the simulators cannot drive yet. Load it explicitly, for example
+// problab.Configs(demo_configs.FS, demo_configs.StagedFS).
+var StagedFS fs.FS = func() fs.FS {
+	sub, err := fs.Sub(staged, "staged")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}()
