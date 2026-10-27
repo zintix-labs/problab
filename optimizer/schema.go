@@ -480,70 +480,51 @@ func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 		return errs.Wrap(err, "save: mkdir output dir")
 	}
 
+	// 每個檔案都先寫到同目錄的暫存檔再改名，不截斷或改寫既有檔案（既有檔案可能正被映射）。
+
 	// 1) Save gacha as JSON then zstd-compress into gacha.json.zst
 	jsonBytes, err := json.Marshal(gc)
 	if err != nil {
 		return errs.Wrap(err, "save: marshal gacha json")
 	}
-	gachaPath := filepath.Join(outDir, fmt.Sprintf("gacha_%d.json.zst", gid))
-	f, err := os.Create(gachaPath)
-	if err != nil {
-		return errs.Wrap(err, "save: create gacha.json.zst")
-	}
-	defer func() { _ = f.Close() }()
-
-	zw, err := zstd.NewWriter(f)
+	var compressed bytes.Buffer
+	zw, err := zstd.NewWriter(&compressed)
 	if err != nil {
 		return errs.Wrap(err, "save: create zstd writer")
 	}
 	if _, err := zw.Write(jsonBytes); err != nil {
 		_ = zw.Close()
-		return errs.Wrap(err, "save: write gacha.json.zst")
+		return errs.Wrap(err, "save: compress gacha.json.zst")
 	}
 	if err := zw.Close(); err != nil {
 		return errs.Wrap(err, "save: close zstd writer")
 	}
-	if err := f.Close(); err != nil {
-		return errs.Wrap(err, "save: close gacha.json.zst")
+	gachaPath := filepath.Join(outDir, fmt.Sprintf("gacha_%d.json.zst", gid))
+	if err := writeAtomic(gachaPath, compressed.Bytes()); err != nil {
+		return errs.Wrap(err, "save: write gacha.json.zst")
 	}
 
 	// 2) Save seed_bank as raw bin
 	snapPath := filepath.Join(outDir, fmt.Sprintf("seed_bank_%d.bin", gid))
-	if err := os.WriteFile(snapPath, snap, 0o644); err != nil {
+	if err := writeAtomic(snapPath, snap); err != nil {
 		return errs.Wrap(err, "save: write seed_bank.bin")
 	}
 
 	// 3 prob little endian
-	probPath := filepath.Join(outDir, fmt.Sprintf("prob_%d.bin", gid))
-	fp, err := os.Create(probPath)
-	if err != nil {
-		return errs.Wrap(err, fmt.Sprintf("save: create prob_%d.bin", gid))
-	}
-	defer func() { _ = fp.Close() }()
-
 	bufProb := make([]byte, len(gc.Picker.Prob)*8)
 	for i, v := range gc.Picker.Prob {
 		bits := math.Float64bits(v) // 只取位元表示
 		binary.LittleEndian.PutUint64(bufProb[i*8:], bits)
 	}
-
-	if _, err = fp.Write(bufProb); err != nil {
+	if err := writeAtomic(filepath.Join(outDir, fmt.Sprintf("prob_%d.bin", gid)), bufProb); err != nil {
 		return errs.Wrap(err, fmt.Sprintf("save: write prob_%d.bin", gid))
 	}
 	// 4 aliases little endian
-	aliasPath := filepath.Join(outDir, fmt.Sprintf("aliases_%d.bin", gid))
-	fa, err := os.Create(aliasPath)
-	if err != nil {
-		return errs.Wrap(err, fmt.Sprintf("save: create aliases_%d.bin", gid))
-	}
-	defer func() { _ = fa.Close() }()
-
 	bufAlias := make([]byte, len(gc.Picker.Aliases)*4)
 	for i, v := range gc.Picker.Aliases {
 		binary.LittleEndian.PutUint32(bufAlias[i*4:], uint32(v))
 	}
-
-	if _, err = fa.Write(bufAlias); err != nil {
+	if err := writeAtomic(filepath.Join(outDir, fmt.Sprintf("aliases_%d.bin", gid)), bufAlias); err != nil {
 		return errs.Wrap(err, fmt.Sprintf("save: write aliases_%d.bin", gid))
 	}
 	// 5 info (lightweight json: only the values needed for external tooling)
@@ -566,7 +547,7 @@ func (t *Tuner) Save(gid spec.GID, gc *Gacha, snap []byte) error {
 	if err != nil {
 		return errs.Wrap(err, "save: marshal info json")
 	}
-	if err := os.WriteFile(infoPath, infoBytes, 0o644); err != nil {
+	if err := writeAtomic(infoPath, infoBytes); err != nil {
 		return errs.Wrap(err, "save: write info json")
 	}
 
