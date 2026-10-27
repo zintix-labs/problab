@@ -46,38 +46,40 @@ type StatReport struct {
 }
 
 type SummaryReport struct {
-	GameName    string   `json:"GameName"`
-	GameId      spec.GID `json:"GameId"`
-	BetUnits    []int    `json:"BetUnits"`
-	BetUnit     int      `json:"BetUnit"`
-	BetMode     int      `json:"BetMode"`
-	BetMult     int      `json:"BetMult"`
-	TotalBet    int      `json:"TotalBet"`
-	TotalWin    int      `json:"TotalWin"`
-	BaseWin     int      `json:"BaseWin"`
-	FreeWin     int      `json:"FreeWin"`
-	RTP         float64  `json:"RTP"`
-	RtpCI       CI       `json:"RtpCI"`
-	Std         float64  `json:"Std"`
-	Cv          float64  `json:"Cv"`
-	Trigger     int      `json:"Trigger"`
-	TriggerRate float64  `json:"TriggerRate"`
-	NoWinRounds int      `json:"NoWinRounds"`
-	HitRate     float64  `json:"HitRate"`
-	Rounds      int      `json:"Rounds"`
-	Choose      string   `json:"Choose,omitempty"` // 選擇類遊戲自動選擇的方式（first、last）；未指定時不輸出
+	GameName string   `json:"GameName"`
+	GameId   spec.GID `json:"GameId"`
+	BetUnits []int    `json:"BetUnits"`
+	BetUnit  int      `json:"BetUnit"`
+	BetMode  int      `json:"BetMode"`
+	BetMult  int      `json:"BetMult"`
+	TotalBet int      `json:"TotalBet"`
+	TotalWin int      `json:"TotalWin"`
+	BaseWin  int      `json:"BaseWin"`
+	FreeWin  int      `json:"FreeWin"`
+	RTP      float64  `json:"RTP"`
+	RtpCI    CI       `json:"RtpCI"`
+	Std      float64  `json:"Std"`
+	Cv       float64  `json:"Cv"`
+	// BaseCv 是所有局的 BG 贏倍的變異係數（std ÷ 平均值）；FreeCv 是觸發局的 FG 贏倍的
+	// 變異係數。FG 是 BG 以外的全部（不分入口與 mode），所以選擇類遊戲的 FreeCv 隨選擇方式
+	// 改變。樣本少於兩筆或平均值不大於 0 時為 0，表示沒有定義，不是沒有波動。
+	BaseCv      float64 `json:"BaseCv"`
+	FreeCv      float64 `json:"FreeCv"`
+	Trigger     int     `json:"Trigger"`
+	TriggerRate float64 `json:"TriggerRate"`
+	NoWinRounds int     `json:"NoWinRounds"`
+	HitRate     float64 `json:"HitRate"`
+	Rounds      int     `json:"Rounds"`
+	Choose      string  `json:"Choose,omitempty"` // 選擇類遊戲自動選擇的方式（first、last）；未指定時不輸出
 }
 
 // MultReport 贏倍統計
 //
 // 紀錄時不紀錄，避免轉型成本。紀錄完成後Done()會將結果整理填入
 type MultReport struct {
-	TotalWinMult      float64 `json:"TotalWinMult"`
-	BaseWinMult       float64 `json:"BaseWinMult"`
-	FreeWinMult       float64 `json:"FreeWinMult"`
-	TotalWinMultSqSum float64 `json:"TotalWinMultSqSum"` // 平方和
-	BaseWinMultSqSum  float64 `json:"BaseWinMultSqSum"`  // 平方和
-	FreeWinMultSqSum  float64 `json:"FreeWinMultSqSum"`  // 平方和
+	TotalWinMult float64 `json:"TotalWinMult"`
+	BaseWinMult  float64 `json:"BaseWinMult"`
+	FreeWinMult  float64 `json:"FreeWinMult"`
 }
 
 // DistReport 分數區間落點統計
@@ -120,7 +122,6 @@ func (s *StatReport) Done() {
 	// Summary
 	s.Summary.RTP = s.Rtp()
 	s.Summary.RtpCI = s.Ci()
-	s.Summary.Std = s.Std()
 	s.Summary.Cv = s.Cv()
 
 	// Player
@@ -137,22 +138,10 @@ func (s *StatReport) Rtp() float64 {
 	return (float64(s.Summary.TotalWin) / float64(s.Summary.TotalBet))
 }
 
-// Std 回傳單局贏分的標準差（以投注單位為基礎）
+// Std 回傳單局贏倍（贏分 ÷ BetUnit）的樣本標準差。它由 Recorder 以 Welford 演算法累加後填入
+// Summary.Std，這裡不重新計算。
 func (s *StatReport) Std() float64 {
-	if s.Summary.Rounds < 2 || s.Summary.BetUnit == 0 {
-		return 0
-	}
-	rounds := float64(s.Summary.Rounds)
-
-	winMultPow := s.Mult.TotalWinMult * s.Mult.TotalWinMult
-	variance := (s.Mult.TotalWinMultSqSum - winMultPow/rounds) / (rounds - 1)
-
-	if variance < 0 {
-		variance = 0
-	}
-
-	std := math.Sqrt(variance)
-	return std
+	return s.Summary.Std
 }
 
 // Cv 回傳單局贏分的變異係數
@@ -239,8 +228,10 @@ func (s *StatReport) fmtBasic() ([]string, map[string]string) {
 		"Trigger":      p.Sprintf("%d", s.Summary.Trigger),
 		"STD":          p.Sprintf("%.3f", s.Summary.Std),
 		"CV":           p.Sprintf("%.3f", s.Summary.Cv),
+		"Base CV":      p.Sprintf("%.3f", s.Summary.BaseCv),
+		"Free CV":      p.Sprintf("%.3f", s.Summary.FreeCv),
 	}
-	keys := []string{"Game Name", "Game ID", "Total Rounds", "Total RTP", "RTP 95% CI", "Total Bet", "Total Win", "Base Win", "Free Win", "NoWin Rounds", "Trigger", "STD", "CV"}
+	keys := []string{"Game Name", "Game ID", "Total Rounds", "Total RTP", "RTP 95% CI", "Total Bet", "Total Win", "Base Win", "Free Win", "NoWin Rounds", "Trigger", "STD", "CV", "Base CV", "Free CV"}
 	if s.Summary.Choose != "" {
 		basic["Choose"] = s.Summary.Choose
 		keys = slices.Insert(keys, 2, "Choose")
