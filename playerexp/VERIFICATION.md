@@ -119,4 +119,3 @@ GOCACHE=/tmp/problab-playerexp-cache make exp
 | 真實遊戲 | `TestChoiceGamesWithBuiltinChoices`：demo_2（checkpoint）與 demo_3（A→B→A）以 first、last、iter 完整執行；每局結算一次；完整局中 game mode 重複時，tag 與事件只判定一次 |
 | 內建選法 | `TestSelectorIter`、`TestSelectorFirstLastUnset`、`TestMonotoneChoices` |
 | 範例 | `cmd/exp` 的 `TestConfigFlagAndChoiceExamples`：`-config` 與 game 2、3 的範例設定 |
-
