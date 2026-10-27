@@ -182,7 +182,7 @@ func callCountChoiceLab(t testing.TB) (*Problab, *atomic.Int64) {
 	t.Helper()
 	calls := new(atomic.Int64)
 	reg := slot.NewLogicRegistry()
-	for _, key := range []string{"demo_normal", "demo_cascade", "demo_choice"} {
+	for _, key := range []string{"demo_normal", "demo_cascade", "demo_choice", "demo_entry"} {
 		if err := reg.Register(spec.LogicKey(key), func(g *slot.Game) (slot.GameLogic, error) {
 			inner, err := demo_logic.Logics.Build(spec.LogicKey(key), g)
 			return &callCountLogic{inner: inner, calls: calls}, err
