@@ -194,8 +194,8 @@ func (c *countingFS) ReadFile(name string) ([]byte, error) {
 
 // U7：Unoptimized 不讀取任何 optimal 分布檔與 bank，也不修改 catalog。
 func TestUnoptimizedDoesNotTouchOptimalFiles(t *testing.T) {
-	optimalFS := &countingFS{FS: testManifestFS(t, false)}
-	lab, err := New(core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
+	optimalFS := &countingFS{FS: testOptimalFS(t, false)}
+	lab, err := New(core.Default(), Configs(testOptimalConfigFS(t)), Logics(demo_logic.Logics),
 		WithOptimalFS(optimalFS), WithSeedEntropy(newDetReader("u7")))
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func TestUnoptimizedDoesNotTouchOptimalFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	lab.Freeze()
-	raw, err := fs.ReadFile(testManifestConfigFS(t), "game.yaml")
+	raw, err := fs.ReadFile(testOptimalConfigFS(t), "game.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

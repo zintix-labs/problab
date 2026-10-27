@@ -284,7 +284,7 @@ func TestPublicNativeAndOptimizedParity(t *testing.T) {
 	mean /= float64(len(collected.Classes[0].Samples))
 	intent.Classes[0].Design.Exp = mean
 	cfg.Intents["fixture"] = intent
-	cfg.Plans[0].Output.Format = []v2.OutputFormat{v2.OutputOptimalGacha, v2.OutputOptimalArtifactV1, v2.OutputRGSOptimized}
+	cfg.Plans[0].Output.Format = []v2.OutputFormat{v2.OutputOptimalGacha, v2.OutputRGSOptimized}
 	coreDir := t.TempDir()
 	cfg.Plans[0].Output.Directory = coreDir
 	tuner, err := v2.NewTuner(cfg, lab)

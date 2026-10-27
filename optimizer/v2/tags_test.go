@@ -28,7 +28,7 @@ func TestIndependentTunersFreezeTagsAcrossFreshReplayAndBothVerifiers(t *testing
 	for i := range tuners {
 		value := i == 0
 		defs := map[spec.GID]map[string]tag.IsTag{1: {"shared": func(*buf.SpinResult) bool { return value }}}
-		tuners[i] = rgsTestTuner(t, base, []OutputFormat{OutputRGSCollected, OutputRGSOptimized, OutputOptimalArtifactV1},
+		tuners[i] = rgsTestTuner(t, base, []OutputFormat{OutputRGSCollected, OutputRGSOptimized, OutputOptimalGacha},
 			WithCollectionTags(defs), WithReporter(auditReporterFunc(func(e StageEvent) {
 				if e.State == "started" && strings.HasPrefix(e.Stage, "prepare[") {
 					arrived <- struct{}{}

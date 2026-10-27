@@ -30,9 +30,9 @@ import (
 func benchmarkLab(b *testing.B, optimal bool) *Problab {
 	b.Helper()
 	opts := []ProblabOption{}
-	cfg := Configs(testManifestConfigFS(b))
+	cfg := Configs(testOptimalConfigFS(b))
 	if optimal {
-		opts = append(opts, WithOptimalFS(testManifestFS(b, false)))
+		opts = append(opts, WithOptimalFS(testOptimalFS(b, false)))
 	} else {
 		cfg = Configs(demo_configs.FS)
 	}
@@ -57,7 +57,7 @@ func BenchmarkSpinUnsafe(b *testing.B) {
 	for _, c := range []struct {
 		name    string
 		optimal bool
-	}{{"off", false}, {"manifest", true}} {
+	}{{"off", false}, {"optimal", true}} {
 		b.Run(c.name, func(b *testing.B) {
 			m := benchmarkMachine(b, c.optimal)
 			b.ReportAllocs()
@@ -73,7 +73,7 @@ func BenchmarkSpinUnsafeCapture(b *testing.B) {
 	for _, c := range []struct {
 		name    string
 		optimal bool
-	}{{"off", false}, {"manifest", true}} {
+	}{{"off", false}, {"optimal", true}} {
 		b.Run(c.name, func(b *testing.B) {
 			m := benchmarkMachine(b, c.optimal)
 			b.ReportAllocs()
@@ -90,7 +90,7 @@ func BenchmarkSim(b *testing.B) {
 	for _, c := range []struct {
 		name    string
 		optimal bool
-	}{{"off", false}, {"manifest", true}} {
+	}{{"off", false}, {"optimal", true}} {
 		b.Run(c.name, func(b *testing.B) {
 			s, err := benchmarkLab(b, c.optimal).NewSimulator(0, MachineConfig{Seed: SeedInt64(42)})
 			if err != nil {
@@ -110,7 +110,7 @@ func BenchmarkSimMP(b *testing.B) {
 	for _, c := range []struct {
 		name    string
 		optimal bool
-	}{{"off", false}, {"manifest", true}} {
+	}{{"off", false}, {"optimal", true}} {
 		b.Run(c.name, func(b *testing.B) {
 			s, err := benchmarkLab(b, c.optimal).NewSimulator(0, MachineConfig{Seed: SeedInt64(42)})
 			if err != nil {
@@ -129,9 +129,9 @@ func BenchmarkSimMP(b *testing.B) {
 func BenchmarkMachineBuildWithSharedOptimal(b *testing.B) {
 	lab, err := NewAuto(
 		core.Default(),
-		Configs(testManifestConfigFS(b)),
+		Configs(testOptimalConfigFS(b)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testManifestFS(b, false)),
+		WithOptimalFS(testOptimalFS(b, false)),
 	)
 	if err != nil {
 		b.Fatalf("NewAuto: %v", err)
@@ -156,9 +156,9 @@ func BenchmarkOptimalProductionSpin(b *testing.B) {
 	}
 	lab, err := NewAuto(
 		factory,
-		Configs(testManifestConfigFS(b)),
+		Configs(testOptimalConfigFS(b)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testManifestFS(b, false)),
+		WithOptimalFS(testOptimalFS(b, false)),
 		WithSeedEntropy(zeroBenchmarkReader{}),
 	)
 	if err != nil {

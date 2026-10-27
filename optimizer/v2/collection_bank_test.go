@@ -296,7 +296,7 @@ func TestTunerSavesPartialCollectionBankBeforeCollectionInsufficient(t *testing.
 			Intent: "partial-bank", Seed: Int64Seed(77),
 			Collection:         CollectionOptions{Workers: 1, BatchSize: 1, MaxSpins: 1},
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
-			Output:             OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: outputDirectory},
+			Output:             OutputOptions{Format: []OutputFormat{OutputOptimalGacha}, Directory: outputDirectory},
 		}},
 		Intents: map[string]MathIntent{"partial-bank": {
 			Overall: OverallIntent{CV: NumericRange{Min: 0, Max: 100}},

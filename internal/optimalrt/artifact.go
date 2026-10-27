@@ -80,7 +80,7 @@ func (a *Artifact) ID() string {
 	return a.id
 }
 
-// Backend reports how the artifact is backed (legacy-memory, memory, mmap).
+// Backend reports how the seed banks are backed: memory, mmap, or mixed.
 func (a *Artifact) Backend() string {
 	if a == nil {
 		return ""

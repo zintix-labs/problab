@@ -124,8 +124,8 @@ type Problab struct {
 // ProblabOption 是 Problab 的選項函數類型。
 type ProblabOption func(*Problab)
 
-// WithOptimalFS 設置可攜式優化文件系統。Manifest v1 會只讀入記憶體一次；
-// legacy Gacha/SeedBank 亦可由此載入。正式環境若要 mmap 請使用 WithOptimalDir。
+// WithOptimalFS 設置可攜式優化文件系統。gacha 的 seed bank 只讀入記憶體一次。
+// 正式環境若要 mmap 請使用 WithOptimalDir；已映射的檔案不得原地改寫。
 func WithOptimalFS(optimalFS fs.FS) ProblabOption {
 	return func(p *Problab) {
 		p.optimalFS = optimalFS
@@ -133,9 +133,10 @@ func WithOptimalFS(optimalFS fs.FS) ProblabOption {
 	}
 }
 
-// WithOptimalDir configures a regular-file Artifact directory. Manifest v1
-// binary files are opened through the read-only mmap backend on supported
-// Unix platforms. It is mutually exclusive with WithOptimalFS.
+// WithOptimalDir configures a regular-file optimal directory. Gacha seed banks
+// are opened through the read-only mmap backend on supported Unix platforms; a
+// mapped file must not be rewritten in place. It is mutually exclusive with
+// WithOptimalFS.
 func WithOptimalDir(root string) ProblabOption {
 	return func(p *Problab) {
 		p.optimalDir = root
@@ -226,13 +227,26 @@ func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts .
 	}
 	snapshotFormat := core.SnapshotFormatOfPRNG(probe)
 	lab.snapshotFormat = snapshotFormat
+	// 載入 seed bank 時以 runtime 的 PRNG Restore 第一筆，提前發現快照格式不符。每次檢查都建立
+	// 新的 PRNG，不使用任何 Machine 的 RNG；seed bank 可能是唯讀映射，所以傳入複本。
+	checkSeed := append([]byte(nil), probeSeed...)
+	checkSnapshot := func(snapshot []byte) error {
+		rng, err := lab.cf.New(checkSeed)
+		if err != nil {
+			return err
+		}
+		if rng == nil {
+			return errs.NewFatal("core factory returned nil PRNG")
+		}
+		return rng.Restore(append([]byte(nil), snapshot...))
+	}
 	if lab.optimalUseDir {
-		lab.optimal, err = optimalrt.NewDirStore(lab.optimalDir, snapshotFormat, len(probeSnapshot))
+		lab.optimal, err = optimalrt.NewDirStore(lab.optimalDir, len(probeSnapshot), checkSnapshot)
 		if err != nil {
 			return nil, errs.Wrap(err, "create optimal directory store")
 		}
 	} else {
-		lab.optimal = optimalrt.NewStore(lab.optimalFS, snapshotFormat, len(probeSnapshot))
+		lab.optimal = optimalrt.NewStore(lab.optimalFS, len(probeSnapshot), checkSnapshot)
 	}
 
 	return lab, nil

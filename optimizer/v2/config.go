@@ -327,12 +327,13 @@ func validateRunPlan(path string, plan RunPlan, intents map[string]MathIntent) e
 	seenOutputFormats := make(map[OutputFormat]struct{}, len(plan.Output.Format))
 	for i, format := range plan.Output.Format {
 		switch format {
-		case OutputOptimalArtifactV1, OutputOptimalGacha, OutputRGSOptimized, OutputRGSCollected:
+		case OutputOptimalGacha, OutputRGSOptimized, OutputRGSCollected:
+		case removedOutputArtifactV1:
+			return invalid(fmt.Sprintf("%s.output.format[%d]", path, i), "%s was removed; use %s", format, OutputOptimalGacha)
 		default:
 			return invalid(
 				fmt.Sprintf("%s.output.format[%d]", path, i),
-				"must be %q, %q, %q or %q, got %q",
-				OutputOptimalArtifactV1,
+				"must be %q, %q or %q, got %q",
 				OutputOptimalGacha,
 				OutputRGSOptimized,
 				OutputRGSCollected,
@@ -698,6 +699,10 @@ func finite(value float64) bool {
 
 // invalid constructs a typed path-aware ConfigError. Centralizing formatting
 // keeps all semantic validation errors suitable for deterministic diagnostics.
+// removedOutputArtifactV1 is the removed Artifact v1 output format, kept only
+// to point old configs at optimal_gacha.
+const removedOutputArtifactV1 OutputFormat = "optimal_artifact_v1"
+
 func invalid(path, format string, args ...any) error {
 	return &ConfigError{Path: path, Problem: fmt.Sprintf(format, args...)}
 }

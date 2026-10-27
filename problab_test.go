@@ -17,12 +17,8 @@ package problab
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"io/fs"
-	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,19 +27,15 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/klauspost/compress/zstd"
-	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
 	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/core"
-	"github.com/zintix-labs/problab/sdk/sampler"
-	"github.com/zintix-labs/problab/spec"
 )
 
 func TestOptimalMachineRequiresSource(t *testing.T) {
 	_, err := NewAuto(
 		core.Default(),
-		Configs(testLegacyConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
 	)
 	if err == nil {
@@ -54,9 +46,9 @@ func TestOptimalMachineRequiresSource(t *testing.T) {
 func TestDefaultChaCha20OptimalArtifact(t *testing.T) {
 	lab, err := NewAuto(
 		core.Default(),
-		Configs(testManifestConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testManifestFS(t, false)),
+		WithOptimalFS(testOptimalFS(t, false)),
 	)
 	if err != nil {
 		t.Fatalf("NewAuto with compatible artifact: %v", err)
@@ -67,7 +59,7 @@ func TestDefaultChaCha20OptimalArtifact(t *testing.T) {
 		t.Fatalf("NewMachine: %v", err)
 	}
 	if machine.optimal == nil || machine.optimal.Backend() != "memory" {
-		t.Fatal("fixture did not load its manifest memory artifact")
+		t.Fatal("fixture did not load its memory artifact")
 	}
 	if result := machine.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}); result == nil {
 		t.Fatal("fixture optimal spin returned nil")
@@ -77,9 +69,9 @@ func TestDefaultChaCha20OptimalArtifact(t *testing.T) {
 func TestExplicitPCG64LoadsLegacyCompatibleArtifact(t *testing.T) {
 	lab, err := NewAuto(
 		core.PCG64(),
-		Configs(testManifestConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testPCGManifestFS(t)),
+		WithOptimalFS(testGachaFS(t, core.PCG64())),
 	)
 	if err != nil {
 		t.Fatalf("NewAuto with explicit PCG64 artifact: %v", err)
@@ -96,14 +88,14 @@ func TestExplicitPCG64LoadsLegacyCompatibleArtifact(t *testing.T) {
 
 func TestOptimalArtifactRejectsBothAlgorithmMismatchDirections(t *testing.T) {
 	if _, err := NewAuto(
-		core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
-		WithOptimalFS(testPCGManifestFS(t)),
+		core.Default(), Configs(testOptimalConfigFS(t)), Logics(demo_logic.Logics),
+		WithOptimalFS(testGachaFS(t, core.PCG64())),
 	); err == nil {
 		t.Fatal("ChaCha20 runtime accepted a PCG64 artifact")
 	}
 	if _, err := NewAuto(
-		core.PCG64(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
-		WithOptimalFS(testManifestFS(t, false)),
+		core.PCG64(), Configs(testOptimalConfigFS(t)), Logics(demo_logic.Logics),
+		WithOptimalFS(testOptimalFS(t, false)),
 	); err == nil {
 		t.Fatal("PCG64 runtime accepted a ChaCha20 artifact")
 	}
@@ -112,9 +104,9 @@ func TestOptimalArtifactRejectsBothAlgorithmMismatchDirections(t *testing.T) {
 func TestLegacyOptimalDeterministic(t *testing.T) {
 	lab, err := NewAuto(
 		core.Default(),
-		Configs(testLegacyConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testOptimalFS(t)),
+		WithOptimalFS(testOptimalFS(t, false)),
 	)
 	if err != nil {
 		t.Fatalf("NewAuto: %v", err)
@@ -157,9 +149,9 @@ func TestLegacyOptimalDeterministic(t *testing.T) {
 func TestOptimalArtifactSharedAcrossAllMachineBuilders(t *testing.T) {
 	lab, err := NewAuto(
 		core.Default(),
-		Configs(testLegacyConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testOptimalFS(t)),
+		WithOptimalFS(testOptimalFS(t, false)),
 	)
 	if err != nil {
 		t.Fatalf("NewAuto: %v", err)
@@ -201,9 +193,9 @@ func TestOptimalArtifactSharedAcrossAllMachineBuilders(t *testing.T) {
 func TestOptimalArtifactConcurrentFirstResolveLoadsOnce(t *testing.T) {
 	lab, err := New(
 		core.Default(),
-		Configs(testLegacyConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testOptimalFS(t)),
+		WithOptimalFS(testOptimalFS(t, false)),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -251,169 +243,15 @@ func TestOptimalArtifactConcurrentFirstResolveLoadsOnce(t *testing.T) {
 	}
 }
 
-func TestManifestOptimalMatchesLegacyRuntime(t *testing.T) {
-	legacyLab, err := NewAuto(
-		core.Default(),
-		Configs(testLegacyConfigFS(t)),
-		Logics(demo_logic.Logics),
-		WithOptimalFS(testOptimalFS(t)),
-	)
-	if err != nil {
-		t.Fatalf("legacy NewAuto: %v", err)
-	}
-	manifestLab, err := NewAuto(
-		core.Default(),
-		Configs(testManifestConfigFS(t)),
-		Logics(demo_logic.Logics),
-		WithOptimalFS(testManifestFS(t, false)),
-	)
-	if err != nil {
-		t.Fatalf("manifest NewAuto: %v", err)
-	}
-
-	legacy, err := legacyLab.NewMachine(0, MachineConfig{Seed: SeedInt64(832)})
-	if err != nil {
-		t.Fatalf("legacy machine: %v", err)
-	}
-	binaryMachine, err := manifestLab.NewMachine(0, MachineConfig{Seed: SeedInt64(832)})
-	if err != nil {
-		t.Fatalf("manifest machine: %v", err)
-	}
-	if got := binaryMachine.optimal.Backend(); got != "memory" {
-		t.Fatalf("manifest backend=%q, want memory", got)
-	}
-	if _, err := manifestLab.resolveOptimal(&spec.GameSetting{
-		BetUnits: []int{41},
-		OptimalSetting: spec.OptimalSetting{
-			UseOptimal: true,
-			Artifact:   "game0/manifest.json",
-		},
-	}); err == nil {
-		t.Fatal("cached manifest accepted incompatible bet units")
-	}
-
-	for i := 0; i < 100; i++ {
-		want, err := json.Marshal(legacy.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
-		if err != nil {
-			t.Fatalf("marshal legacy result: %v", err)
-		}
-		got, err := json.Marshal(binaryMachine.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}))
-		if err != nil {
-			t.Fatalf("marshal manifest result: %v", err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Fatalf("spin %d differs between legacy and manifest backends", i)
-		}
-	}
-}
-
-func TestManifestOptimalRejectsCorruptFile(t *testing.T) {
+func TestOptimalRejectsCorruptSeedBank(t *testing.T) {
 	_, err := NewAuto(
 		core.Default(),
-		Configs(testManifestConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testManifestFS(t, true)),
+		WithOptimalFS(testOptimalFS(t, true)),
 	)
 	if err == nil {
-		t.Fatal("expected corrupt manifest artifact to fail fast")
-	}
-}
-
-func testOptimalFS(t testing.TB) fs.FS {
-	t.Helper()
-	snap1 := testDefaultSnapshot(t, 100)
-	snap2 := testDefaultSnapshot(t, 200)
-	gacha := Gacha{
-		Picker:  sampler.BuildAliasTableF64([]float64{1, 1}),
-		SeedLen: len(snap1),
-	}
-	raw, err := json.Marshal(gacha)
-	if err != nil {
-		t.Fatalf("marshal test gacha: %v", err)
-	}
-	var compressed bytes.Buffer
-	zw, err := zstd.NewWriter(&compressed)
-	if err != nil {
-		t.Fatalf("create test zstd writer: %v", err)
-	}
-	if _, err := zw.Write(raw); err != nil {
-		t.Fatalf("compress test gacha: %v", err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatalf("close test zstd writer: %v", err)
-	}
-	bank := append(append([]byte(nil), snap1...), snap2...)
-	return fstest.MapFS{
-		"gacha_0.json.zst": &fstest.MapFile{Data: compressed.Bytes()},
-		"seed_bank_0.bin":  &fstest.MapFile{Data: bank},
-	}
-}
-
-func testLegacyConfigFS(t testing.TB) fs.FS {
-	t.Helper()
-	raw, err := fs.ReadFile(demo_configs.FS, "game_0_demonormal.yaml")
-	if err != nil {
-		t.Fatalf("read demo config: %v", err)
-	}
-	replacement := "gachas: [gacha_0.json.zst]\n  seed_bank: [seed_bank_0.bin]"
-	enabled := enableTestOptimal(t, string(raw))
-	updated := strings.Replace(enabled, "artifact: manifest.json", replacement, 1)
-	if updated == enabled {
-		t.Fatal("test config legacy block was not replaced")
-	}
-	return fstest.MapFS{"game.yaml": &fstest.MapFile{Data: []byte(updated)}}
-}
-
-func enableTestOptimal(t testing.TB, config string) string {
-	t.Helper()
-	updated := strings.Replace(config, "use_optimal: false", "use_optimal: true", 1)
-	if updated == config {
-		t.Fatal("test config optimal flag was not enabled")
-	}
-	return updated
-}
-
-func testPCGManifestFS(t testing.TB) fs.FS {
-	t.Helper()
-	factory := core.PCG64()
-	snapshots := make([][]byte, 2)
-	for i, seed := range []int64{100, 200} {
-		rng, err := factory.New(core.EncodeInt64Seed(seed))
-		if err != nil {
-			t.Fatal(err)
-		}
-		snapshots[i], err = rng.Snapshot()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	table := sampler.BuildAliasTableF64([]float64{1, 1})
-	prob := make([]byte, table.Size*8)
-	aliases := make([]byte, table.Size*4)
-	for i := 0; i < table.Size; i++ {
-		binary.LittleEndian.PutUint64(prob[i*8:], math.Float64bits(table.Prob[i]))
-		binary.LittleEndian.PutUint32(aliases[i*4:], uint32(table.Aliases[i]))
-	}
-	bank := append(append([]byte(nil), snapshots[0]...), snapshots[1]...)
-	manifest := optimalrt.Manifest{
-		SchemaVersion:  optimalrt.ManifestSchemaV1,
-		ArtifactID:     "explicit-pcg64-compatibility-fixture",
-		SnapshotFormat: "go.math/rand/v2.PCG.MarshalBinary/v1",
-		Modes: []optimalrt.ManifestMode{{
-			BetUnit: 40, Size: table.Size, SeedLen: len(snapshots[0]), SeedCount: table.Size,
-			Prob: testFileRef("prob.bin", prob), Aliases: testFileRef("aliases.bin", aliases),
-			SeedBank: testFileRef("seed_bank.bin", bank),
-		}},
-	}
-	manifestRaw, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return fstest.MapFS{
-		"game0/manifest.json": &fstest.MapFile{Data: manifestRaw},
-		"game0/prob.bin":      &fstest.MapFile{Data: prob},
-		"game0/aliases.bin":   &fstest.MapFile{Data: aliases},
-		"game0/seed_bank.bin": &fstest.MapFile{Data: bank},
+		t.Fatal("expected a truncated seed bank to fail fast")
 	}
 }
 
@@ -430,17 +268,12 @@ func testDefaultSnapshot(t testing.TB, seed int64) []byte {
 	return snapshot
 }
 
-func testFileRef(name string, data []byte) optimalrt.FileRef {
-	sum := sha256.Sum256(data)
-	return optimalrt.FileRef{Path: name, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}
-}
-
 func TestOptimalLifecycleClosesPoolsBeforeArtifact(t *testing.T) {
 	lab, err := NewAuto(
 		core.Default(),
-		Configs(testLegacyConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testOptimalFS(t)),
+		WithOptimalFS(testOptimalFS(t, false)),
 	)
 	if err != nil {
 		t.Fatalf("NewAuto: %v", err)
@@ -482,10 +315,11 @@ func TestOptimalLifecycleClosesPoolsBeforeArtifact(t *testing.T) {
 	}
 }
 
+// WithOptimalDir 在支援的平台上以 mmap 載入 gacha 的 seed bank，結果與 WithOptimalFS 相同，同一個 Lab
+// 內只載入一次，Problab.Close 後關閉。
 func TestMMapOptimalMatchesMemoryAndIsShared(t *testing.T) {
-	source := testManifestFS(t, false)
+	source, config := testOptimalFS(t, false), testOptimalConfigFS(t)
 	dir := materializeTestFS(t, source)
-	config := testManifestConfigFS(t)
 
 	memoryLab, err := NewAuto(
 		core.Default(), Configs(config), Logics(demo_logic.Logics), WithOptimalFS(source),
@@ -545,12 +379,36 @@ func TestMMapOptimalMatchesMemoryAndIsShared(t *testing.T) {
 	}
 }
 
+// seed bank 的快照長度相符、格式卻不屬於 runtime 的 PRNG 時，建構 Lab 就以首筆檢查失敗。
+func TestOptimalRejectsForeignSnapshotFormat(t *testing.T) {
+	rng, err := core.PCG64().New(core.EncodeInt64Seed(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := rng.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := testOptimalFS(t, false).(fstest.MapFS)
+	bank := source["game0/seed_bank.bin"].Data
+	seedLen := len(bank) / 2
+	if len(foreign) > seedLen {
+		t.Fatalf("PCG snapshot (%d bytes) is longer than the default one (%d)", len(foreign), seedLen)
+	}
+	padded := append(append([]byte(nil), foreign...), make([]byte, seedLen-len(foreign))...)
+	source["game0/seed_bank.bin"] = &fstest.MapFile{Data: append(padded, bank[seedLen:]...)}
+	_, err = NewAuto(core.Default(), Configs(testOptimalConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(source))
+	if err == nil || !strings.Contains(err.Error(), "first snapshot") {
+		t.Fatalf("NewAuto error %v, want the first-snapshot check", err)
+	}
+}
+
 func TestOptimalSourcesAreMutuallyExclusive(t *testing.T) {
 	_, err := New(
 		core.Default(),
-		Configs(testManifestConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
-		WithOptimalFS(testManifestFS(t, false)),
+		WithOptimalFS(testOptimalFS(t, false)),
 		WithOptimalDir(t.TempDir()),
 	)
 	if err == nil {
@@ -593,8 +451,8 @@ func materializeTestFS(t *testing.T, source fs.FS) string {
 // must bypass it and reproduce a spin directly from its pre-spin Core snapshot.
 func TestUnoptimizedMachinePreservesReplayIdentity(t *testing.T) {
 	lab, err := NewAuto(
-		core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics),
-		WithOptimalFS(testManifestFS(t, false)),
+		core.Default(), Configs(testOptimalConfigFS(t)), Logics(demo_logic.Logics),
+		WithOptimalFS(testOptimalFS(t, false)),
 	)
 	if err != nil {
 		t.Fatalf("NewAuto: %v", err)

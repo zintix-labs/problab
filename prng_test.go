@@ -92,10 +92,10 @@ func TestProductionMachineReseedsOnlyForNewCycles(t *testing.T) {
 func TestOptimalProductionReseedsBeforeSelectorAndReturnsArtifactLineage(t *testing.T) {
 	base, _ := core.NewChaCha20Factory(bytes.NewReader(bytes.Repeat([]byte{0x6d}, 64)))
 	factory := &lifecycleFactory{base: base}
-	artifactFS := testManifestFS(t, false)
+	artifactFS := testOptimalFS(t, false)
 	lab, err := NewAuto(
 		factory,
-		Configs(testManifestConfigFS(t)),
+		Configs(testOptimalConfigFS(t)),
 		Logics(demo_logic.Logics),
 		WithOptimalFS(artifactFS),
 		WithSeedEntropy(bytes.NewReader(make([]byte, 64))),

@@ -25,9 +25,9 @@ type cacheEntry struct {
 
 // Store owns all optimal artifacts for exactly one Problab instance.
 type Store struct {
-	source         artifactSource
-	snapshotFormat string
-	snapshotSize   int
+	source        artifactSource
+	snapshotSize  int
+	checkSnapshot func([]byte) error
 
 	mu        sync.Mutex
 	entries   map[string]*cacheEntry
@@ -38,16 +38,18 @@ type Store struct {
 	loads     atomic.Uint64
 }
 
-func NewStore(source fs.FS, snapshotFormat string, snapshotSize int) *Store {
-	return &Store{source: fsSource{fsys: source}, snapshotFormat: snapshotFormat, snapshotSize: snapshotSize, entries: make(map[string]*cacheEntry)}
+// checkSnapshot 不為 nil 時，載入 gacha 的 seed bank 後以它檢查第一筆快照（例如以 runtime 的 PRNG
+// Restore），提前發現快照格式不符。
+func NewStore(source fs.FS, snapshotSize int, checkSnapshot func([]byte) error) *Store {
+	return &Store{source: fsSource{fsys: source}, snapshotSize: snapshotSize, checkSnapshot: checkSnapshot, entries: make(map[string]*cacheEntry)}
 }
 
-func NewDirStore(root, snapshotFormat string, snapshotSize int) (*Store, error) {
+func NewDirStore(root string, snapshotSize int, checkSnapshot func([]byte) error) (*Store, error) {
 	source, err := newDirSource(root)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{source: source, snapshotFormat: snapshotFormat, snapshotSize: snapshotSize, entries: make(map[string]*cacheEntry)}, nil
+	return &Store{source: source, snapshotSize: snapshotSize, checkSnapshot: checkSnapshot, entries: make(map[string]*cacheEntry)}, nil
 }
 
 // Resolve returns the single immutable Artifact associated with the setting.
@@ -59,7 +61,7 @@ func (s *Store) Resolve(gs *spec.GameSetting) (*Artifact, error) {
 	if !gs.OptimalSetting.UseOptimal {
 		return nil, nil
 	}
-	key := artifactKey(gs)
+	key := legacyKey(gs.OptimalSetting, gs.BetUnits)
 
 	s.mu.Lock()
 	if s.closed {
@@ -89,13 +91,7 @@ func (s *Store) Resolve(gs *spec.GameSetting) (*Artifact, error) {
 	s.mu.Unlock()
 	defer s.loading.Done()
 
-	var artifact *Artifact
-	var err error
-	if gs.OptimalSetting.Artifact != "" {
-		artifact, err = loadBinaryArtifact(s.source, gs.OptimalSetting.Artifact, s.snapshotFormat, s.snapshotSize, gs)
-	} else {
-		artifact, err = loadLegacyArtifact(s.source, key, s.snapshotSize, gs)
-	}
+	artifact, err := loadLegacyArtifact(s.source, key, s.snapshotSize, s.checkSnapshot, gs)
 	s.loads.Add(1)
 
 	s.mu.Lock()
@@ -133,14 +129,6 @@ func (s *Store) Close() error {
 		}
 	})
 	return s.closeErr
-}
-
-func artifactKey(gs *spec.GameSetting) string {
-	opt := gs.OptimalSetting
-	if opt.Artifact != "" {
-		return "manifest:" + opt.Artifact
-	}
-	return legacyKey(opt, gs.BetUnits)
 }
 
 func legacyKey(opt spec.OptimalSetting, betUnits []int) string {

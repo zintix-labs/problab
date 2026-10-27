@@ -22,7 +22,7 @@ type legacyGacha struct {
 	SeedLen int                    `json:"seed_len"`
 }
 
-func loadLegacyArtifact(source artifactSource, key string, expectedSnapshotSize int, gs *spec.GameSetting) (*Artifact, error) {
+func loadLegacyArtifact(source artifactSource, key string, expectedSnapshotSize int, checkSnapshot func([]byte) error, gs *spec.GameSetting) (*Artifact, error) {
 	opt := gs.OptimalSetting
 	if len(opt.Gachas) != len(gs.BetUnits) {
 		return nil, fmt.Errorf("gachas count (%d) must match bet_units count (%d)", len(opt.Gachas), len(gs.BetUnits))
@@ -32,24 +32,60 @@ func loadLegacyArtifact(source artifactSource, key string, expectedSnapshotSize 
 	}
 
 	modes := make([]mode, len(gs.BetUnits))
+	closeFns := make([]func() error, 0, len(gs.BetUnits))
+	loaded := false
+	defer func() {
+		if !loaded {
+			for i := len(closeFns) - 1; i >= 0; i-- {
+				_ = closeFns[i]()
+			}
+		}
+	}()
+	backend := ""
 	for i := range gs.BetUnits {
-		gacha, err := loadLegacyGacha(source, opt.Gachas[i])
+		m, closeFn, modeBackend, err := loadGachaPair(source, opt.Gachas[i], opt.SeedBank[i], expectedSnapshotSize, checkSnapshot)
 		if err != nil {
-			return nil, fmt.Errorf("load gacha[%d] (%s): %w", i, opt.Gachas[i], err)
+			return nil, fmt.Errorf("load bet mode %d: %w", i, err)
 		}
-		if gacha.SeedLen != expectedSnapshotSize {
-			return nil, fmt.Errorf("gacha[%d] snapshot size mismatch: artifact=%d runtime=%d", i, gacha.SeedLen, expectedSnapshotSize)
-		}
-		bank, err := source.ReadFile(opt.SeedBank[i])
-		if err != nil {
-			return nil, fmt.Errorf("load seed_bank[%d] (%s): %w", i, opt.SeedBank[i], err)
-		}
-		if len(bank) != gacha.Picker.Size*gacha.SeedLen {
-			return nil, fmt.Errorf("seed_bank[%d] size mismatch: got=%d want=%d", i, len(bank), gacha.Picker.Size*gacha.SeedLen)
-		}
-		modes[i] = mode{picker: legacyPicker{table: gacha.Picker}, seedLen: gacha.SeedLen, bank: bank}
+		closeFns = append(closeFns, closeFn)
+		backend = mergeBackend(backend, modeBackend)
+		modes[i] = m
 	}
-	return newArtifact(key, "legacy-memory", modes, gs.BetUnits), nil
+	loaded = true
+	return newArtifact(key, backend, modes, gs.BetUnits, closeFns...), nil
+}
+
+// loadGachaPair 載入一對 gacha 與 seed bank。seed bank 經由 OpenBinary 取得：目錄來源在支援的平台上
+// 是唯讀 mmap，其餘讀入記憶體；closeFn 釋放它。checkSnapshot 不為 nil 時，以它檢查第一筆快照。
+func loadGachaPair(source artifactSource, gachaPath, bankPath string, snapshotSize int, checkSnapshot func([]byte) error) (mode, func() error, string, error) {
+	gacha, err := loadLegacyGacha(source, gachaPath)
+	if err != nil {
+		return mode{}, nil, "", fmt.Errorf("load gacha (%s): %w", gachaPath, err)
+	}
+	if gacha.SeedLen != snapshotSize {
+		return mode{}, nil, "", fmt.Errorf("gacha (%s) snapshot size mismatch: artifact=%d runtime=%d", gachaPath, gacha.SeedLen, snapshotSize)
+	}
+	if gacha.Picker.Size > math.MaxInt/gacha.SeedLen {
+		return mode{}, nil, "", fmt.Errorf("gacha (%s) seed bank size overflows: size=%d seed_len=%d", gachaPath, gacha.Picker.Size, gacha.SeedLen)
+	}
+	bank, closeFn, backend, err := source.OpenBinary(bankPath, int64(gacha.Picker.Size*gacha.SeedLen))
+	if err != nil {
+		return mode{}, nil, "", fmt.Errorf("load seed_bank (%s): %w", bankPath, err)
+	}
+	if checkSnapshot != nil {
+		if err := checkSnapshot(bank[:gacha.SeedLen]); err != nil {
+			_ = closeFn()
+			return mode{}, nil, "", fmt.Errorf("seed_bank (%s): the runtime PRNG rejects the first snapshot: %w", bankPath, err)
+		}
+	}
+	return mode{picker: legacyPicker{table: gacha.Picker}, seedLen: gacha.SeedLen, bank: bank}, closeFn, backend, nil
+}
+
+func mergeBackend(current, next string) string {
+	if current == "" || current == next {
+		return next
+	}
+	return "mixed"
 }
 
 func loadLegacyGacha(source artifactSource, path string) (*legacyGacha, error) {

@@ -20,7 +20,6 @@ import (
 
 type OptimalSetting struct {
 	UseOptimal bool     `yaml:"use_optimal" json:"use_optimal"`
-	Artifact   string   `yaml:"artifact,omitempty" json:"artifact,omitempty"`
 	Gachas     []string `yaml:"gachas"      json:"gachas"`
 	SeedBank   []string `yaml:"seed_bank"   json:"seed_bank"`
 }
@@ -33,15 +32,8 @@ func (s OptimalSetting) valid() error {
 	if !s.UseOptimal {
 		return nil
 	}
-	if s.Artifact != "" {
-		if len(s.Gachas) != 0 || len(s.SeedBank) != 0 {
-			return errs.NewFatal("optimal_setting: artifact cannot be combined with legacy gachas/seed_bank")
-		}
-		return nil
-	}
-
 	if len(s.Gachas) == 0 {
-		return errs.NewFatal("optimal_setting: gachas must not be empty when use_optimal=true")
+		return errs.NewFatal("optimal_setting: gachas must not be empty when use_optimal=true (optimal_setting.artifact is no longer supported; list gachas and seed_bank)")
 	}
 	if len(s.SeedBank) == 0 {
 		return errs.NewFatal("optimal_setting: seed_bank must not be empty when use_optimal=true")
