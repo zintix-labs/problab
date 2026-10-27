@@ -31,13 +31,12 @@ import (
 	"github.com/zintix-labs/problab/sdk/core"
 )
 
-// 暫時基準：V1 是 v1 Save 寫出的檔案位元組（只用於安全寫檔那一步）；V3 是 v1 與 v2 寫出的 gacha
-// 解壓後內容與 seed bank（保留到共用寫出器完成）。兩者用同一組固定輸入。驗收後刪除。
+// 暫時基準 V3：v1 與 v2 對同一組固定輸入寫出的 gacha 解壓後內容與 seed bank，必須與修改前的舊版輸出
+// 相同。（V1 記錄的是舊版 v1 的壓縮檔與附帶輸出，已在改用共用寫出器時移除。）驗收後刪除。
 
 const optoutBaselinePath = "testdata/optout_baseline.json"
 
 type optoutBaseline struct {
-	V1 map[string]string `json:"v1"`
 	V3 map[string]string `json:"v3"`
 }
 
@@ -100,19 +99,16 @@ func optoutRecord(t *testing.T) optoutBaseline {
 	t.Helper()
 	mode := optoutMode(t)
 	seedLen := len(mode.Samples[0].Snapshot)
-	b := optoutBaseline{V1: map[string]string{}, V3: map[string]string{}}
+	b := optoutBaseline{V3: map[string]string{}}
 
-	// v1：Save 寫到 build/optimizer。
+	// v1：Save 發布到 build/optimizer 底下。
 	t.Chdir(t.TempDir())
-	if err := new(Tuner).Save(7, &Gacha{Picker: mode.Picker, SeedLen: seedLen}, mode.SeedBank); err != nil {
+	saved, err := new(Tuner).Save(7, 0, &Gacha{Picker: mode.Picker, SeedLen: seedLen}, mode.SeedBank)
+	if err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join("build", "optimizer")
-	for _, name := range []string{"gacha_7.json.zst", "seed_bank_7.bin", "prob_7.bin", "aliases_7.bin", "info_7.json"} {
-		b.V1[name] = optoutDigest(optoutReadFile(t, filepath.Join(out, name)))
-	}
-	b.V3["v1_gacha_json"] = optoutDigest(optoutUnzstd(t, filepath.Join(out, "gacha_7.json.zst")))
-	b.V3["v1_seed_bank"] = optoutDigest(optoutReadFile(t, filepath.Join(out, "seed_bank_7.bin")))
+	b.V3["v1_gacha_json"] = optoutDigest(optoutUnzstd(t, saved.Gacha))
+	b.V3["v1_seed_bank"] = optoutDigest(optoutReadFile(t, saved.SeedBank))
 
 	// v2：單一 bet mode，現行的寫出器立即發布。
 	published, err := optimizerv2.GachaArtifactWriter{Directory: t.TempDir()}.PublishMode(
@@ -167,7 +163,7 @@ func TestOptoutBaseline(t *testing.T) {
 	for _, sec := range []struct {
 		name      string
 		got, want map[string]string
-	}{{"v1", got.V1, want.V1}, {"v3", got.V3, want.V3}} {
+	}{{"v3", got.V3, want.V3}} {
 		if len(sec.got) != len(sec.want) {
 			t.Errorf("%s: %d entries, want %d", sec.name, len(sec.got), len(sec.want))
 		}

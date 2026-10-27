@@ -16,22 +16,21 @@ package problab
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
-	"math"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
-	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/sampler"
@@ -65,59 +64,63 @@ func catchPanic(f func()) (p any) {
 	return nil
 }
 
-func testManifestConfigFS(t testing.TB) fs.FS {
+var testOptimalBlock = regexp.MustCompile(`(?s)optimal_setting:.*?\n\n`)
+
+// testOptimalConfigFS 是開啟 optimal 的 demo_0 設定，gachas／seed_bank 指向 testOptimalFS 的一對。
+func testOptimalConfigFS(t testing.TB) fs.FS {
 	t.Helper()
 	raw, err := fs.ReadFile(demo_configs.FS, "game_0_demonormal.yaml")
 	if err != nil {
 		t.Fatalf("read demo config: %v", err)
 	}
-	enabled := enableTestOptimal(t, string(raw))
-	updated := strings.Replace(enabled, "artifact: manifest.json", "artifact: game0/manifest.json", 1)
-	if updated == enabled {
-		t.Fatal("test config manifest path was not replaced")
+	if !testOptimalBlock.Match(raw) {
+		t.Fatal("demo config has no optimal_setting block")
 	}
-	return fstest.MapFS{"game.yaml": &fstest.MapFile{Data: []byte(updated)}}
+	block := "optimal_setting:\n  use_optimal: true\n  gachas: [game0/gacha.json.zst]\n  seed_bank: [game0/seed_bank.bin]\n\n"
+	return fstest.MapFS{"game.yaml": &fstest.MapFile{Data: testOptimalBlock.ReplaceAllLiteral(raw, []byte(block))}}
 }
 
-func testManifestFS(t testing.TB, corrupt bool) fs.FS {
+// testOptimalFS 是 testOptimalConfigFS 引用的一對：alias table {1, 1} 與兩筆 ChaCha20 快照（seed 100、200）。
+// corrupt 時 seed bank 少一個位元組。
+func testOptimalFS(t testing.TB, corrupt bool) fs.FS {
 	t.Helper()
-	snap1 := testDefaultSnapshot(t, 100)
-	snap2 := testDefaultSnapshot(t, 200)
-	table := sampler.BuildAliasTableF64([]float64{1, 1})
-	prob := make([]byte, table.Size*8)
-	aliases := make([]byte, table.Size*4)
-	for i := 0; i < table.Size; i++ {
-		binary.LittleEndian.PutUint64(prob[i*8:], math.Float64bits(table.Prob[i]))
-		binary.LittleEndian.PutUint32(aliases[i*4:], uint32(table.Aliases[i]))
-	}
-	bank := append(append([]byte(nil), snap1...), snap2...)
-	manifest := optimalrt.Manifest{
-		SchemaVersion:  optimalrt.ManifestSchemaV1,
-		ArtifactID:     "test-artifact",
-		SnapshotFormat: "problab.chacha20.rfc8439/state-v1",
-		Modes: []optimalrt.ManifestMode{{
-			BetUnit:   40,
-			Size:      table.Size,
-			SeedLen:   len(snap1),
-			SeedCount: table.Size,
-			Prob:      testFileRef("prob.bin", prob),
-			Aliases:   testFileRef("aliases.bin", aliases),
-			SeedBank:  testFileRef("seed_bank.bin", bank),
-		}},
-	}
-	manifestRaw, err := json.Marshal(manifest)
-	if err != nil {
-		t.Fatalf("marshal manifest: %v", err)
-	}
+	files := testGachaFS(t, core.Default())
 	if corrupt {
-		prob = append([]byte(nil), prob...)
-		prob[0] ^= 0xff
+		bank := files["game0/seed_bank.bin"].Data
+		files["game0/seed_bank.bin"] = &fstest.MapFile{Data: bank[:len(bank)-1]}
 	}
+	return files
+}
+
+// testGachaFS 以 factory 的兩筆快照（seed 100、200）建立 testOptimalConfigFS 引用的一對。
+func testGachaFS(t testing.TB, factory core.PRNGFactory) fstest.MapFS {
+	t.Helper()
+	var bank []byte
+	seedLen := 0
+	for _, seed := range []int64{100, 200} {
+		rng, err := factory.New(core.EncodeInt64Seed(seed))
+		if err != nil {
+			t.Fatalf("create PRNG: %v", err)
+		}
+		snap, err := rng.Snapshot()
+		if err != nil {
+			t.Fatalf("snapshot PRNG: %v", err)
+		}
+		seedLen = len(snap)
+		bank = append(bank, snap...)
+	}
+	raw, err := json.Marshal(Gacha{Picker: sampler.BuildAliasTableF64([]float64{1, 1}), SeedLen: seedLen})
+	if err != nil {
+		t.Fatalf("marshal test gacha: %v", err)
+	}
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("create zstd encoder: %v", err)
+	}
+	defer func() { _ = enc.Close() }()
 	return fstest.MapFS{
-		"game0/manifest.json": &fstest.MapFile{Data: manifestRaw},
-		"game0/prob.bin":      &fstest.MapFile{Data: prob},
-		"game0/aliases.bin":   &fstest.MapFile{Data: aliases},
-		"game0/seed_bank.bin": &fstest.MapFile{Data: bank},
+		"game0/gacha.json.zst": &fstest.MapFile{Data: enc.EncodeAll(raw, nil)},
+		"game0/seed_bank.bin":  &fstest.MapFile{Data: bank},
 	}
 }
 

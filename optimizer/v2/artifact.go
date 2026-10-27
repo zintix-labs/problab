@@ -15,19 +15,11 @@
 package v2
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/sampler"
-	"github.com/zintix-labs/problab/spec"
 )
 
 const artifactProbabilityTolerance = 1e-12
@@ -264,32 +256,16 @@ func EffectiveAliasProbabilities(table *sampler.AliasTableF64) ([]float64, error
 	return effective, nil
 }
 
-// PublishedArtifact describes the combined durable result of staging one
-// verified mode in every requested format. Complete is false while any format
-// still lacks a sibling mode; ManifestPath and ArtifactID are then empty. Once
-// every format is complete, Paths name all published payloads, ArtifactID is the
-// canonical content identity, and ManifestPath is present when Artifact v1 was
-// among the requested formats.
+// PublishedArtifact describes the gacha pair published for one verified mode.
+// Directory is the immutable publication directory and Paths name its gacha and
+// seed bank. ArtifactID is the pair's content identity; Reused reports that the
+// same content had already been published and the existing directory was kept.
 type PublishedArtifact struct {
-	Complete         bool
-	Formats          []OutputFormat
-	ManifestPath     string
-	Paths            []string
-	ArtifactID       string
-	StagingDirectory string
-	StagedModes      []int
-	MissingModes     []int
-}
-
-// FileArtifactWriter persists independently optimized modes beneath Directory.
-// PublishMode is the production path: it atomically replaces one mode in the
-// persistent game_<gid>.pending area and publishes game_<gid> only after every
-// runtime mode is present and the complete bundle passes on-disk verification.
-// renamePath is an unexported failure-injection seam used by transaction tests;
-// real callers leave it nil and therefore use os.Rename.
-type FileArtifactWriter struct {
+	Formats    []OutputFormat
 	Directory  string
-	renamePath func(oldPath, newPath string) error
+	Paths      []string
+	ArtifactID string
+	Reused     bool
 }
 
 // validateMaterializedMode defends the publication boundary even when a caller
@@ -353,255 +329,6 @@ func validateMaterializedMode(mode MaterializedMode) error {
 		if math.Abs(effective[i]-mode.Samples[i].Probability) > scaledTolerance(artifactProbabilityTolerance, effective[i], mode.Samples[i].Probability) {
 			return fmt.Errorf("sample probability does not match alias outcome at sample[%d]", i)
 		}
-	}
-	return nil
-}
-
-// encodeAliasTable produces the exact little-endian layout required by the
-// mmap-backed runtime reader while rejecting values that uint32 cannot encode.
-func encodeAliasTable(table *sampler.AliasTableF64) ([]byte, []byte, error) {
-	if _, err := EffectiveAliasProbabilities(table); err != nil {
-		return nil, nil, err
-	}
-	prob := make([]byte, table.Size*8)
-	aliases := make([]byte, table.Size*4)
-	for i := 0; i < table.Size; i++ {
-		alias := table.Aliases[i]
-		if uint64(alias) > uint64(math.MaxUint32) {
-			return nil, nil, fmt.Errorf("alias index at %d exceeds uint32: %d", i, alias)
-		}
-		binary.LittleEndian.PutUint64(prob[i*8:], math.Float64bits(table.Prob[i]))
-		binary.LittleEndian.PutUint32(aliases[i*4:], uint32(alias))
-	}
-	return prob, aliases, nil
-}
-
-// writeArtifactFile writes one staging payload with deterministic permissions.
-// Atomicity is supplied at the directory-publication boundary, so no file is
-// ever visible to runtime consumers until every sibling and the manifest exist.
-func writeArtifactFile(name string, data []byte) error {
-	if len(data) == 0 {
-		return fmt.Errorf("artifact payload must not be empty")
-	}
-	return os.WriteFile(name, data, 0o644)
-}
-
-// artifactFileReference binds manifest metadata to the exact staged bytes.
-func artifactFileReference(name string, data []byte) optimalrt.FileRef {
-	digest := sha256.Sum256(data)
-	return optimalrt.FileRef{
-		Path:   name,
-		Size:   int64(len(data)),
-		SHA256: hex.EncodeToString(digest[:]),
-	}
-}
-
-// contentArtifactID gives identical verified content the same identifier while
-// excluding filesystem location and temporary run names from reproducibility.
-func contentArtifactID(snapshotFormat string, modes []optimalrt.ManifestMode) string {
-	payload, _ := json.Marshal(struct {
-		SnapshotFormat string                   `json:"snapshot_format"`
-		Modes          []optimalrt.ManifestMode `json:"modes"`
-	}{
-		SnapshotFormat: snapshotFormat,
-		Modes:          modes,
-	})
-	digest := sha256.Sum256(payload)
-	return hex.EncodeToString(digest[:])
-}
-
-// acquireArtifactPublicationLock serializes writers for one game while leaving
-// different game bundles independent. O_EXCL makes lock acquisition atomic;
-// refusing an existing lock is safer than allowing two backup/replace sequences
-// to interleave and lose the last known-good artifact.
-func acquireArtifactPublicationLock(directory string, gid spec.GID) (func(), error) {
-	lockPath := filepath.Join(directory, fmt.Sprintf(".game_%d.publish.lock", gid))
-	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			return nil, fmt.Errorf("another publication is active for game_%d", gid)
-		}
-		return nil, fmt.Errorf("create publication lock: %w", err)
-	}
-	if err := lock.Close(); err != nil {
-		_ = os.Remove(lockPath)
-		return nil, fmt.Errorf("close publication lock: %w", err)
-	}
-	return func() { _ = os.Remove(lockPath) }, nil
-}
-
-// replaceArtifactDirectory commits a verified staging bundle without ever
-// merging files with the prior bundle. Both moves occur within one parent
-// directory so each rename is atomic. If installing staging fails after the
-// old target was backed up, rollback restores the old target before returning.
-func replaceArtifactDirectory(staging, target string, renamePath func(string, string) error) error {
-	if renamePath == nil {
-		return fmt.Errorf("rename function is nil")
-	}
-	_, statErr := os.Lstat(target)
-	if os.IsNotExist(statErr) {
-		if err := renamePath(staging, target); err != nil {
-			return fmt.Errorf("install new bundle: %w", err)
-		}
-		return nil
-	}
-	if statErr != nil {
-		return fmt.Errorf("inspect current bundle: %w", statErr)
-	}
-
-	backup := staging + ".previous"
-	if err := renamePath(target, backup); err != nil {
-		return fmt.Errorf("back up current bundle: %w", err)
-	}
-	if err := renamePath(staging, target); err != nil {
-		if rollbackErr := renamePath(backup, target); rollbackErr != nil {
-			return fmt.Errorf("install new bundle: %v; rollback failed: %w", err, rollbackErr)
-		}
-		return fmt.Errorf("install new bundle: %w (current bundle restored)", err)
-	}
-	if err := os.RemoveAll(backup); err != nil {
-		return fmt.Errorf("new bundle committed but remove previous bundle: %w", err)
-	}
-	return nil
-}
-
-// verifyStagedArtifact reopens manifest.json, every mode descriptor, and every
-// referenced payload before publication. It checks the descriptor schema used
-// by legacy SaveMode, content hashes, the content-derived artifact ID, and the
-// exact file set, so incomplete or stale staging content cannot become visible.
-func verifyStagedArtifact(staging string) (optimalrt.Manifest, error) {
-	manifestBytes, err := os.ReadFile(filepath.Join(staging, "manifest.json"))
-	if err != nil {
-		return optimalrt.Manifest{}, fmt.Errorf("read manifest: %w", err)
-	}
-	var manifest optimalrt.Manifest
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		return optimalrt.Manifest{}, fmt.Errorf("parse manifest: %w", err)
-	}
-	if err := manifest.Validate(); err != nil {
-		return optimalrt.Manifest{}, err
-	}
-	if want := contentArtifactID(manifest.SnapshotFormat, manifest.Modes); manifest.ArtifactID != want {
-		return optimalrt.Manifest{}, fmt.Errorf("artifact id mismatch: got=%s want=%s", manifest.ArtifactID, want)
-	}
-
-	expectedFiles := map[string]struct{}{"manifest.json": {}}
-	for modeIndex, mode := range manifest.Modes {
-		descriptorName := fmt.Sprintf("mode_%d.json", modeIndex)
-		descriptorBytes, err := os.ReadFile(filepath.Join(staging, descriptorName))
-		if err != nil {
-			return optimalrt.Manifest{}, fmt.Errorf("mode %d descriptor: read: %w", modeIndex, err)
-		}
-		var descriptor optimalrt.ManifestMode
-		if err := json.Unmarshal(descriptorBytes, &descriptor); err != nil {
-			return optimalrt.Manifest{}, fmt.Errorf("mode %d descriptor: parse: %w", modeIndex, err)
-		}
-		if descriptor != mode {
-			return optimalrt.Manifest{}, fmt.Errorf("mode %d descriptor does not match manifest", modeIndex)
-		}
-		expectedFiles[descriptorName] = struct{}{}
-
-		for kind, ref := range map[string]optimalrt.FileRef{
-			"prob": mode.Prob, "aliases": mode.Aliases, "seed_bank": mode.SeedBank,
-		} {
-			if _, duplicate := expectedFiles[ref.Path]; duplicate {
-				return optimalrt.Manifest{}, fmt.Errorf("mode %d %s: duplicate artifact path %q", modeIndex, kind, ref.Path)
-			}
-			expectedFiles[ref.Path] = struct{}{}
-			data, err := os.ReadFile(filepath.Join(staging, ref.Path))
-			if err != nil {
-				return optimalrt.Manifest{}, fmt.Errorf("mode %d %s: read: %w", modeIndex, kind, err)
-			}
-			actual := artifactFileReference(ref.Path, data)
-			if actual.Size != ref.Size || actual.SHA256 != ref.SHA256 {
-				return optimalrt.Manifest{}, fmt.Errorf("mode %d %s: size or sha256 mismatch", modeIndex, kind)
-			}
-		}
-	}
-	if err := verifyArtifactFileSet(staging, expectedFiles); err != nil {
-		return optimalrt.Manifest{}, err
-	}
-	if err := verifyArtifactWithProductionLoader(staging, manifest); err != nil {
-		return optimalrt.Manifest{}, err
-	}
-	return manifest, nil
-}
-
-// verifyArtifactWithProductionLoader proves the staged files are consumable by
-// the same manifest, mmap/in-memory binary, alias, and seed-bank path used by a
-// real Machine. The synthetic setting supplies only loader-owned fields. Store
-// closure is mandatory here so mmap handles do not outlive staging or prevent
-// its subsequent directory rename on platforms with stricter file semantics.
-func verifyArtifactWithProductionLoader(staging string, manifest optimalrt.Manifest) (resultErr error) {
-	betUnits := make([]int, len(manifest.Modes))
-	for i := range manifest.Modes {
-		betUnits[i] = manifest.Modes[i].BetUnit
-	}
-	store, err := optimalrt.NewDirStore(staging, manifest.SnapshotFormat, manifest.Modes[0].SeedLen, nil)
-	if err != nil {
-		return fmt.Errorf("open production artifact store: %w", err)
-	}
-	defer func() {
-		if closeErr := store.Close(); closeErr != nil && resultErr == nil {
-			resultErr = fmt.Errorf("close production artifact store: %w", closeErr)
-		}
-	}()
-
-	setting := &spec.GameSetting{
-		BetUnits: betUnits,
-		OptimalSetting: spec.OptimalSetting{
-			UseOptimal: true,
-			Artifact:   "manifest.json",
-		},
-	}
-	artifact, err := store.Resolve(setting)
-	if err != nil {
-		return fmt.Errorf("production loader resolve: %w", err)
-	}
-	if artifact == nil || artifact.ModeCount() != len(manifest.Modes) {
-		return fmt.Errorf("production loader mode count mismatch: got=%d want=%d", artifact.ModeCount(), len(manifest.Modes))
-	}
-	return nil
-}
-
-// verifyArtifactFileSet rejects unreferenced files, symlinks, and other special
-// entries in staging. A fresh staging directory should contain exactly the
-// files described by Artifact v1; enforcing that invariant prevents future
-// writer changes from accidentally publishing stale sidecars.
-func verifyArtifactFileSet(staging string, expected map[string]struct{}) error {
-	remaining := make(map[string]struct{}, len(expected))
-	for name := range expected {
-		remaining[name] = struct{}{}
-	}
-	err := filepath.WalkDir(staging, func(name string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if name == staging {
-			return nil
-		}
-		if entry.IsDir() {
-			return fmt.Errorf("unexpected artifact directory %q", name)
-		}
-		if !entry.Type().IsRegular() {
-			return fmt.Errorf("artifact entry %q is not a regular file", name)
-		}
-		relative, err := filepath.Rel(staging, name)
-		if err != nil {
-			return err
-		}
-		relative = filepath.ToSlash(relative)
-		if _, ok := remaining[relative]; !ok {
-			return fmt.Errorf("unexpected artifact file %q", relative)
-		}
-		delete(remaining, relative)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	for name := range remaining {
-		return fmt.Errorf("missing artifact file %q", name)
 	}
 	return nil
 }

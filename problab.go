@@ -124,7 +124,7 @@ type Problab struct {
 // ProblabOption 是 Problab 的選項函數類型。
 type ProblabOption func(*Problab)
 
-// WithOptimalFS 設置可攜式優化文件系統。Manifest v1 與 gacha 的 seed bank 都只讀入記憶體一次。
+// WithOptimalFS 設置可攜式優化文件系統。gacha 的 seed bank 只讀入記憶體一次。
 // 正式環境若要 mmap 請使用 WithOptimalDir；已映射的檔案不得原地改寫。
 func WithOptimalFS(optimalFS fs.FS) ProblabOption {
 	return func(p *Problab) {
@@ -133,10 +133,10 @@ func WithOptimalFS(optimalFS fs.FS) ProblabOption {
 	}
 }
 
-// WithOptimalDir configures a regular-file Artifact directory. Manifest v1
-// binary files and gacha seed banks are opened through the read-only mmap
-// backend on supported Unix platforms; a mapped file must not be rewritten in
-// place. It is mutually exclusive with WithOptimalFS.
+// WithOptimalDir configures a regular-file optimal directory. Gacha seed banks
+// are opened through the read-only mmap backend on supported Unix platforms; a
+// mapped file must not be rewritten in place. It is mutually exclusive with
+// WithOptimalFS.
 func WithOptimalDir(root string) ProblabOption {
 	return func(p *Problab) {
 		p.optimalDir = root
@@ -241,12 +241,12 @@ func New(cf core.PRNGFactory, cfgs []fs.FS, logics []*slot.LogicRegistry, opts .
 		return rng.Restore(append([]byte(nil), snapshot...))
 	}
 	if lab.optimalUseDir {
-		lab.optimal, err = optimalrt.NewDirStore(lab.optimalDir, snapshotFormat, len(probeSnapshot), checkSnapshot)
+		lab.optimal, err = optimalrt.NewDirStore(lab.optimalDir, len(probeSnapshot), checkSnapshot)
 		if err != nil {
 			return nil, errs.Wrap(err, "create optimal directory store")
 		}
 	} else {
-		lab.optimal = optimalrt.NewStore(lab.optimalFS, snapshotFormat, len(probeSnapshot), checkSnapshot)
+		lab.optimal = optimalrt.NewStore(lab.optimalFS, len(probeSnapshot), checkSnapshot)
 	}
 
 	return lab, nil

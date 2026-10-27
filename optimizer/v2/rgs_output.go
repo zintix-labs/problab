@@ -86,7 +86,7 @@ func hasOutput(plan ResolvedPlan, format OutputFormat) bool {
 func nativeOutputs(output OutputOptions) OutputOptions {
 	result := OutputOptions{Directory: output.Directory}
 	for _, f := range output.Format {
-		if f == OutputOptimalArtifactV1 || f == OutputOptimalGacha {
+		if f == OutputOptimalGacha {
 			result.Format = append(result.Format, f)
 		}
 	}

@@ -718,7 +718,7 @@ func cliStageLabel(stage string) string {
 	case strings.HasPrefix(stage, "materialize-verify["):
 		return "Materializing and verifying mode"
 	case stage == "publish":
-		return "Publishing mode and checking manifest"
+		return "Publishing gacha pair"
 	default:
 		return stage
 	}

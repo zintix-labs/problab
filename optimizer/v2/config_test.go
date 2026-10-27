@@ -44,7 +44,7 @@ plans:
       evaluator: none
       max_candidates: 1
     output:
-      format: [optimal_artifact_v1]
+      format: [optimal_gacha]
       directory: build/optimizer
 
 intents:
@@ -117,7 +117,7 @@ func TestLoadConfigStrictAndResolve(t *testing.T) {
 	if config.Plans[0].Engine != EngineIntentLPV2 {
 		t.Fatalf("Engine = %q, want %q", config.Plans[0].Engine, EngineIntentLPV2)
 	}
-	if !slices.Equal(config.Plans[0].Output.Format, []OutputFormat{OutputOptimalArtifactV1}) {
+	if !slices.Equal(config.Plans[0].Output.Format, []OutputFormat{OutputOptimalGacha}) {
 		t.Fatalf("output formats=%v", config.Plans[0].Output.Format)
 	}
 	if got := config.EngineOptions.MainGroupInternalVisibilityBisectionIterations; got != 60 {
@@ -151,7 +151,7 @@ func TestLoadConfigStrictAndResolve(t *testing.T) {
 	if resolved.Plan.Target.BetModes[0] != 0 {
 		t.Fatalf("resolved bet mode aliased Config: got %d", resolved.Plan.Target.BetModes[0])
 	}
-	if !slices.Equal(resolved.Plan.Output.Format, []OutputFormat{OutputOptimalArtifactV1}) {
+	if !slices.Equal(resolved.Plan.Output.Format, []OutputFormat{OutputOptimalGacha}) {
 		t.Fatalf("resolved output formats aliased Config: %v", resolved.Plan.Output.Format)
 	}
 	if resolved.EngineOptions.MainGroupInternalVisibilityBisectionIterations != 60 {
@@ -255,25 +255,28 @@ func TestResolvePlanDeepCopiesCollectedSeedAndHashIncludesOrder(t *testing.T) {
 	}
 }
 
-func TestLoadConfigAcceptsBothOutputFormatsInDeclarationOrder(t *testing.T) {
-	raw := strings.Replace(
-		validConfigYAML,
-		"format: [optimal_artifact_v1]",
-		"format: [optimal_gacha, optimal_artifact_v1]",
-		1,
-	)
+func TestLoadConfigKeepsOutputFormatDeclarationOrder(t *testing.T) {
+	raw := strings.Replace(validConfigYAML, "format: [optimal_gacha]", "format: [rgs-collected, optimal_gacha]", 1)
 	config, err := ParseConfig([]byte(raw))
 	if err != nil {
 		t.Fatalf("ParseConfig() error = %v", err)
 	}
-	want := []OutputFormat{OutputOptimalGacha, OutputOptimalArtifactV1}
+	want := []OutputFormat{OutputRGSCollected, OutputOptimalGacha}
 	if !slices.Equal(config.Plans[0].Output.Format, want) {
 		t.Fatalf("output formats=%v, want %v", config.Plans[0].Output.Format, want)
 	}
 }
 
+// 已移除的 optimal_artifact_v1 以明確的訊息指向 optimal_gacha。
+func TestLoadConfigRejectsRemovedArtifactV1Format(t *testing.T) {
+	raw := strings.Replace(validConfigYAML, "format: [optimal_gacha]", "format: [optimal_artifact_v1]", 1)
+	if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), "optimal_artifact_v1 was removed; use optimal_gacha") {
+		t.Fatalf("removed format error=%v", err)
+	}
+}
+
 func TestLoadConfigRejectsScalarOutputFormat(t *testing.T) {
-	raw := strings.Replace(validConfigYAML, "format: [optimal_artifact_v1]", "format: optimal_artifact_v1", 1)
+	raw := strings.Replace(validConfigYAML, "format: [optimal_gacha]", "format: optimal_gacha", 1)
 	if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
 		t.Fatalf("scalar output format error=%v", err)
 	}

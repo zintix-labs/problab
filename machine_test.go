@@ -30,7 +30,6 @@ import (
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
 	"github.com/zintix-labs/problab/dto"
-	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
@@ -102,7 +101,7 @@ func TestSpinUnsafeWithoutCaptureClearsOnlyRNGSnapshots(t *testing.T) {
 func TestSpinUnsafeCaptureReusesOwnedBuffers(t *testing.T) {
 	for _, optimal := range []bool{false, true} {
 		t.Run(fmt.Sprint(optimal), func(t *testing.T) {
-			lab, err := NewAuto(core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testManifestFS(t, false)))
+			lab, err := NewAuto(core.Default(), Configs(testOptimalConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testOptimalFS(t, false)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,23 +145,14 @@ func TestSpinUnsafeCaptureReusesOwnedBuffers(t *testing.T) {
 func TestSpinUnsafeCaptureParity(t *testing.T) {
 	for _, optimal := range []bool{false, true} {
 		t.Run(map[bool]string{false: "native", true: "optimal"}[optimal], func(t *testing.T) {
-			cfg, err := fs.ReadFile(testManifestConfigFS(t), "game.yaml")
+			cfg, err := fs.ReadFile(testOptimalConfigFS(t), "game.yaml")
 			if err != nil {
 				t.Fatal(err)
 			}
 			cfg = []byte(strings.Replace(string(cfg), "bet_units : [40]", "bet_units : [40, 80]", 1))
-			artifacts := testManifestFS(t, false).(fstest.MapFS)
-			var manifest optimalrt.Manifest
-			if err = json.Unmarshal(artifacts["game0/manifest.json"].Data, &manifest); err != nil {
-				t.Fatal(err)
-			}
-			second := manifest.Modes[0]
-			second.BetUnit = 80
-			manifest.Modes = append(manifest.Modes, second)
-			artifacts["game0/manifest.json"].Data, err = json.Marshal(manifest)
-			if err != nil {
-				t.Fatal(err)
-			}
+			cfg = []byte(strings.Replace(string(cfg), "gachas: [game0/gacha.json.zst]", "gachas: [game0/gacha.json.zst, game0/gacha.json.zst]", 1))
+			cfg = []byte(strings.Replace(string(cfg), "seed_bank: [game0/seed_bank.bin]", "seed_bank: [game0/seed_bank.bin, game0/seed_bank.bin]", 1))
+			artifacts := testOptimalFS(t, false)
 			lab, err := NewAuto(core.Default(), Configs(fstest.MapFS{"game.yaml": &fstest.MapFile{Data: cfg}}), Logics(demo_logic.Logics), WithOptimalFS(artifacts))
 			if err != nil {
 				t.Fatal(err)
@@ -220,7 +210,7 @@ func TestSpinUnsafeCaptureParity(t *testing.T) {
 
 // SpinUnsafe 不驗證輸入；抽 seed 失敗屬於內部執行故障：panic，不得靜默改用原始 RNG。
 func TestSpinUnsafeClosedArtifactPanics(t *testing.T) {
-	optLab, err := NewAuto(core.Default(), Configs(testManifestConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testManifestFS(t, false)))
+	optLab, err := NewAuto(core.Default(), Configs(testOptimalConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(testOptimalFS(t, false)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,9 +313,9 @@ func probeOffLab(t testing.TB, log *[]probeRequest) *Problab {
 	return lab
 }
 
-func probeManifestLab(t testing.TB, log *[]probeRequest) *Problab {
+func probeOptimalLab(t testing.TB, log *[]probeRequest) *Problab {
 	t.Helper()
-	lab, err := NewAuto(core.Default(), Configs(testManifestConfigFS(t)), Logics(probeRegistry(t, log)), WithOptimalFS(testManifestFS(t, false)))
+	lab, err := NewAuto(core.Default(), Configs(testOptimalConfigFS(t)), Logics(probeRegistry(t, log)), WithOptimalFS(testOptimalFS(t, false)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +403,7 @@ func TestGameReceivesRequestPerEntry(t *testing.T) {
 
 func TestGameReceivesOptimalStartPerEntry(t *testing.T) {
 	var log []probeRequest
-	lab := probeManifestLab(t, &log)
+	lab := probeOptimalLab(t, &log)
 	m, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(42)})
 	if err != nil {
 		t.Fatal(err)
@@ -499,7 +489,7 @@ func TestResultCycleIsFilledByEngine(t *testing.T) {
 			var log []probeRequest
 			lab := probeOffLab(t, &log)
 			if optimal {
-				lab = probeManifestLab(t, &log)
+				lab = probeOptimalLab(t, &log)
 			}
 			m, err := lab.NewMachine(0, MachineConfig{Seed: SeedInt64(42)})
 			if err != nil {

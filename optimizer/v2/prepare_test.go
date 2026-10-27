@@ -294,7 +294,7 @@ func prepareTestPlan(classes ...ClassIntent) ResolvedPlan {
 				Evaluator:     "none",
 				MaxCandidates: 1,
 			},
-			Output: OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: "prepare-test-output"},
+			Output: OutputOptions{Format: []OutputFormat{OutputOptimalGacha}, Directory: "prepare-test-output"},
 		},
 		Intent: MathIntent{
 			Overall: OverallIntent{CV: NumericRange{Min: 0, Max: 10}},

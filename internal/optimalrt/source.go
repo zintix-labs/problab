@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type artifactSource interface {
@@ -96,4 +97,9 @@ func (s *dirSource) OpenBinary(name string, size int64) ([]byte, func() error, s
 		return nil, nil, "", fmt.Errorf("size mismatch for %s: got=%d want=%d", name, len(data), size)
 	}
 	return data, func() error { return nil }, "memory", nil
+}
+
+func validArtifactPath(name string) bool {
+	return name != "" && name != "." && fs.ValidPath(name) &&
+		!strings.HasPrefix(name, "/") && !strings.ContainsAny(name, `\:`)
 }

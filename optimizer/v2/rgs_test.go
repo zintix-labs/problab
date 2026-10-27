@@ -77,7 +77,7 @@ func readRGSJSON(t *testing.T, path string) [][]byte {
 
 func TestRGSRoutingAndPairing(t *testing.T) {
 	base := runCompleteProductionPipeline(t, Int64Seed(4127483647), "rgs-routing")
-	for _, formats := range [][]OutputFormat{{OutputRGSCollected}, {OutputRGSOptimized}, {OutputOptimalGacha, OutputRGSOptimized, OutputRGSCollected, OutputOptimalArtifactV1}} {
+	for _, formats := range [][]OutputFormat{{OutputRGSCollected}, {OutputRGSOptimized}, {OutputOptimalGacha, OutputRGSOptimized, OutputRGSCollected}} {
 		t.Run(fmt.Sprint(formats), func(t *testing.T) {
 			calls := 0
 			recorder := &recordingReporter{}

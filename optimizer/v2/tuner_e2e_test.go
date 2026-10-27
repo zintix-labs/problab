@@ -185,7 +185,7 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 			Collection:         collection,
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
 			Output: OutputOptions{
-				Format: []OutputFormat{OutputOptimalGacha, OutputOptimalArtifactV1}, Directory: outputDirectory,
+				Format: []OutputFormat{OutputOptimalGacha}, Directory: outputDirectory,
 			},
 		}},
 		Intents:       map[string]MathIntent{planID: intent},
@@ -207,7 +207,7 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 	if len(result.Report.Modes) != 1 || !result.Report.Modes[0].Verification.Pass || !result.Report.Verification.Pass {
 		t.Fatalf("complete run verification=%+v modes=%+v", result.Report.Verification, result.Report.Modes)
 	}
-	if result.Report.Publication == nil || result.Report.Publication.State != PublicationManifestPublished {
+	if result.Report.Publication == nil || result.Report.Publication.State != PublicationOutputsPublished || result.Report.Publication.Directory == "" {
 		t.Fatalf("complete run publication=%+v", result.Report.Publication)
 	}
 	if len(result.ArtifactPaths) == 0 || result.Report.ModelHash == "" || result.Report.SolutionHash == "" || result.Report.ArtifactHash == "" {
@@ -226,7 +226,7 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 	}
 	seedBanks := 0
 	for _, path := range result.ArtifactPaths {
-		if filepath.Base(path) != "seed_bank_0.bin" {
+		if filepath.Base(path) != "seed_bank.bin" {
 			continue
 		}
 		seedBanks++
@@ -238,8 +238,8 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 			t.Fatalf("artifact seed bank %q differs from Collection Bank", path)
 		}
 	}
-	if seedBanks != 2 {
-		t.Fatalf("found %d artifact seed banks, want gacha and artifact_v1; paths=%v", seedBanks, result.ArtifactPaths)
+	if seedBanks != 1 {
+		t.Fatalf("found %d artifact seed banks, want the gacha pair's; paths=%v", seedBanks, result.ArtifactPaths)
 	}
 	wantStages := []OptimizationStageID{
 		StageProveHardFeasibility,

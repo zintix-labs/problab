@@ -114,10 +114,9 @@ type Reporter interface {
 	Report(StageEvent)
 }
 
-// ArtifactPublisher is the cross-run transaction boundary for one verified
-// mode. It stages that mode independently and exposes a runtime bundle only
-// when all game modes are present. The default implementation is
-// FileArtifactWriter.
+// ArtifactPublisher publishes the native output of one verified mode. Each call
+// publishes that mode on its own and does not wait for sibling modes. The
+// default implementation is GachaArtifactWriter.
 type ArtifactPublisher interface {
 	PublishMode(context.Context, spec.GID, string, []int, MaterializedMode) (PublishedArtifact, error)
 }
@@ -498,29 +497,15 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (out RunResult, run
 	if err != nil {
 		return RunResult{}, err
 	}
-	publicationState := PublicationModeStaged
-	if published.Complete {
-		publicationState = PublicationOutputsPublished
-		if published.ManifestPath != "" {
-			publicationState = PublicationManifestPublished
-		}
-		report.ArtifactHash = published.ArtifactID
-	}
+	report.ArtifactHash = published.ArtifactID
 	report.Publication = &PublicationReport{
-		State:            publicationState,
-		Formats:          append([]OutputFormat(nil), published.Formats...),
-		BetMode:          betMode,
-		ExpectedModes:    len(betUnits),
-		StagedModes:      append([]int(nil), published.StagedModes...),
-		MissingModes:     append([]int(nil), published.MissingModes...),
-		StagingDirectory: published.StagingDirectory,
-		ManifestPath:     published.ManifestPath,
+		State:     PublicationOutputsPublished,
+		Formats:   append([]OutputFormat(nil), published.Formats...),
+		BetMode:   betMode,
+		Directory: published.Directory,
+		Reused:    published.Reused,
 	}
-	paths := make([]string, 0, len(published.Paths)+1)
-	if published.ManifestPath != "" {
-		paths = append(paths, published.ManifestPath)
-	}
-	paths = append(paths, published.Paths...)
+	paths := append([]string(nil), published.Paths...)
 	return RunResult{Status: StatusOptimal, Report: report, ArtifactPaths: paths}, nil
 }
 
@@ -738,9 +723,7 @@ func (t *Tuner) materializeSamplesAndVerifyStage(ctx context.Context, compiled C
 	return mode, verification, nil
 }
 
-// publishStage persists one verified mode. The writer may return a successful
-// pending result when siblings are missing; only a complete set creates a
-// manifest and replaces the runtime-visible game directory.
+// publishStage publishes one verified mode as its own gacha pair.
 func (t *Tuner) publishStage(ctx context.Context, plan ResolvedPlan, betUnits []int, mode MaterializedMode, report *RunReport) (PublishedArtifact, error) {
 	stage := "publish"
 	started := t.startStage(stage, mode.BetMode)
@@ -854,9 +837,8 @@ func cloneRunOverrides(overrides RunOverrides) RunOverrides {
 }
 
 // validateRuntimeTarget proves that one Run selects exactly one existing mode
-// while retaining the complete runtime bet-unit list for cross-run publication.
-// Manifest v1 still requires all modes, but completeness is now enforced by the
-// persistent publisher after each mode has been optimized independently.
+// while retaining the complete runtime bet-unit list, which publication uses
+// to check the mode's bet unit.
 func validateRuntimeTarget(lab *problab.Problab, plan ResolvedPlan) ([]int, Diagnostic, error) {
 	summaries, err := lab.Summary()
 	if err != nil {

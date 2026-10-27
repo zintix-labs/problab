@@ -25,8 +25,8 @@ import (
 	"github.com/zintix-labs/problab/server/svrcfg"
 )
 
-// OptimalDir is the conventional local-only demo Optimal Artifact root.
-// Generated artifacts in this directory are intentionally not versioned.
+// OptimalDir is the conventional local-only demo optimal output root.
+// Generated gacha pairs in this directory are intentionally not versioned.
 const OptimalDir = "demo/optimal"
 
 func New() (*catalog.Catalog, error) {
@@ -50,12 +50,13 @@ func NewProbLab() (*problab.Problab, error) {
 	return newProbLab()
 }
 
-// NewProbLabWithOptimalDir builds the demo lab against an Optimal Artifact
-// bundle on disk instead of running unoptimized. Point root at a published
-// artifact directory — cmd/opt writes one per game at
-// <output.directory>/artifact_v1/game_<gid>/ — and the lab loads it through
-// mmap. This is how you exercise an optimizer run end to end without wiring
-// problab.NewAuto by hand.
+// NewProbLabWithOptimalDir builds the demo lab against optimal gacha pairs on
+// disk instead of running unoptimized. Point root at the optimizer output —
+// cmd/opt publishes each bet mode at
+// <output.directory>/gacha/game_<gid>/mode_<mode>/<id>/ — set use_optimal and
+// the gachas/seed_bank paths (relative to root) in the game config, and the lab
+// maps the seed banks through mmap. This is how you exercise an optimizer run
+// end to end without wiring problab.NewAuto by hand.
 func NewProbLabWithOptimalDir(root string) (*problab.Problab, error) {
 	return newProbLab(problab.WithOptimalDir(root))
 }

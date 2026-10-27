@@ -406,7 +406,7 @@ func modelTestPrepared(overall OverallIntent, classes ...PreparedClass) Prepared
 					Evaluator:     "none",
 					MaxCandidates: 1,
 				},
-				Output: OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: modelTestOutputDirectory},
+				Output: OutputOptions{Format: []OutputFormat{OutputOptimalGacha}, Directory: modelTestOutputDirectory},
 			},
 			Intent: MathIntent{
 				Overall: overall,

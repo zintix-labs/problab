@@ -15,11 +15,11 @@
 package v2
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -27,7 +27,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zintix-labs/problab/internal/optimalrt"
+	"github.com/klauspost/compress/zstd"
 	"github.com/zintix-labs/problab/sdk/sampler"
 	"github.com/zintix-labs/problab/spec"
 )
@@ -238,367 +238,177 @@ func TestEffectiveAliasProbabilitiesRejectsMalformedAlias(t *testing.T) {
 	}
 }
 
-// TestFileArtifactWriterPublishesVerifiedManifest verifies an atomic publication
-// contains every mode payload and a self-consistent, digest-checked manifest.
-func TestFileArtifactWriterPublishesVerifiedManifest(t *testing.T) {
+// readTestPair returns the decoded gacha and the seed bank of one published pair.
+func readTestPair(t *testing.T, published PublishedArtifact) (legacyTestGacha, []byte) {
+	t.Helper()
+	if len(published.Paths) != 2 {
+		t.Fatalf("published paths=%v", published.Paths)
+	}
+	compressed, err := os.ReadFile(published.Paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zstd.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gacha legacyTestGacha
+	if err := json.Unmarshal(raw, &gacha); err != nil {
+		t.Fatal(err)
+	}
+	bank, err := os.ReadFile(published.Paths[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gacha, bank
+}
+
+type legacyTestGacha struct {
+	Picker  *sampler.AliasTableF64 `json:"picker"`
+	SeedLen int                    `json:"seed_len"`
+}
+
+// Each mode is published on its own, beneath game_<gid>/mode_<mode>/, without
+// waiting for sibling modes and without touching their publications.
+func TestGachaArtifactWriterPublishesEachModeOnItsOwn(t *testing.T) {
 	root := t.TempDir()
+	writer := GachaArtifactWriter{Directory: root}
 	mode0 := mustMaterializeTestMode(t, 0, 10, byte(10))
 	mode1 := mustMaterializeTestMode(t, 1, 20, byte(20))
-	writer := FileArtifactWriter{Directory: root}
 
-	if _, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10, 20}, mode0); err != nil {
-		t.Fatalf("PublishMode(mode=0): %v", err)
-	}
-	published, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10, 20}, mode1)
+	first, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10, 20}, mode1)
 	if err != nil {
 		t.Fatalf("PublishMode(mode=1): %v", err)
 	}
-	target := filepath.Join(root, "game_7")
-	if published.ManifestPath != filepath.Join(target, "manifest.json") {
-		t.Fatalf("manifest path=%q", published.ManifestPath)
+	if !slices.Equal(first.Formats, []OutputFormat{OutputOptimalGacha}) || first.ArtifactID == "" || first.Reused ||
+		filepath.Dir(first.Directory) != filepath.Join(root, "game_7", "mode_1") {
+		t.Fatalf("mode 1 publication=%+v", first)
 	}
-	if len(published.Paths) != 8 {
-		t.Fatalf("published sidecar/payload path count=%d want=8", len(published.Paths))
-	}
-	for _, path := range published.Paths {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("published payload %q: %v", path, err)
-		}
-	}
+	before := snapshotArtifactDirectory(t, first.Directory)
 
-	raw, err := os.ReadFile(published.ManifestPath)
-	if err != nil {
-		t.Fatalf("read manifest: %v", err)
-	}
-	var manifest optimalrt.Manifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		t.Fatalf("parse manifest: %v", err)
-	}
-	if err := manifest.Validate(); err != nil {
-		t.Fatalf("validate manifest: %v", err)
-	}
-	if manifest.ArtifactID != published.ArtifactID || len(manifest.Modes) != 2 {
-		t.Fatalf("manifest identity/modes mismatch: %+v published=%+v", manifest, published)
-	}
-	for modeIndex, mode := range manifest.Modes {
-		if mode.BetUnit != (modeIndex+1)*10 || mode.Size != 2 || mode.SeedLen != 3 || mode.SeedCount != 2 {
-			t.Fatalf("unexpected mode[%d] descriptor: %+v", modeIndex, mode)
-		}
-		for _, ref := range []optimalrt.FileRef{mode.Prob, mode.Aliases, mode.SeedBank} {
-			data, err := os.ReadFile(filepath.Join(target, ref.Path))
-			if err != nil {
-				t.Fatalf("read %q: %v", ref.Path, err)
-			}
-			digest := sha256.Sum256(data)
-			if int64(len(data)) != ref.Size || hex.EncodeToString(digest[:]) != ref.SHA256 {
-				t.Fatalf("manifest reference does not match %q", ref.Path)
-			}
-		}
-		descriptorBytes, err := os.ReadFile(filepath.Join(target, "mode_"+string(rune('0'+modeIndex))+".json"))
-		if err != nil {
-			t.Fatalf("read mode[%d] descriptor: %v", modeIndex, err)
-		}
-		var descriptor optimalrt.ManifestMode
-		if err := json.Unmarshal(descriptorBytes, &descriptor); err != nil {
-			t.Fatalf("parse mode[%d] descriptor: %v", modeIndex, err)
-		}
-		if descriptor != mode {
-			t.Fatalf("mode[%d] descriptor differs from manifest: got=%+v want=%+v", modeIndex, descriptor, mode)
-		}
-	}
-
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	if !slices.Equal(entryNames(entries), []string{"game_7", "game_7.pending"}) {
-		t.Fatalf("unexpected publication root entries: %v", entryNames(entries))
-	}
-}
-
-// TestFileArtifactWriterStagesOneModeAndPublishesOnlyWhenComplete locks the
-// cross-Run contract requested by cmd/opt: modes may arrive in any order, the
-// first successful mode is durable without exposing a manifest, and the final
-// missing mode publishes one complete, runtime-loadable Artifact v1 bundle.
-func TestFileArtifactWriterStagesOneModeAndPublishesOnlyWhenComplete(t *testing.T) {
-	root := t.TempDir()
-	writer := FileArtifactWriter{Directory: root}
-	betUnits := []int{10, 20}
-
-	mode1 := mustMaterializeTestMode(t, 1, 20, byte(20))
-	pending, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", betUnits, mode1)
-	if err != nil {
-		t.Fatalf("PublishMode(mode=1): %v", err)
-	}
-	if pending.Complete || pending.ManifestPath != "" || pending.ArtifactID != "" {
-		t.Fatalf("first mode unexpectedly published a manifest: %+v", pending)
-	}
-	if !slices.Equal(pending.StagedModes, []int{1}) || !slices.Equal(pending.MissingModes, []int{0}) {
-		t.Fatalf("first mode readiness = staged %v missing %v", pending.StagedModes, pending.MissingModes)
-	}
-	if len(pending.Paths) != 4 {
-		t.Fatalf("pending mode path count=%d want=4", len(pending.Paths))
-	}
-	for _, path := range pending.Paths {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("pending path %q: %v", path, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "game_7")); !os.IsNotExist(err) {
-		t.Fatalf("runtime-visible game directory exists before all modes: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(pending.StagingDirectory, "manifest.json")); !os.IsNotExist(err) {
-		t.Fatalf("pending directory contains a manifest: %v", err)
-	}
-
-	mode0 := mustMaterializeTestMode(t, 0, 10, byte(10))
-	published, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", betUnits, mode0)
+	second, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10, 20}, mode0)
 	if err != nil {
 		t.Fatalf("PublishMode(mode=0): %v", err)
 	}
-	if !published.Complete || published.ManifestPath == "" || published.ArtifactID == "" {
-		t.Fatalf("complete mode set did not publish a manifest: %+v", published)
+	if filepath.Dir(second.Directory) != filepath.Join(root, "game_7", "mode_0") {
+		t.Fatalf("mode 0 publication=%+v", second)
 	}
-	if !slices.Equal(published.StagedModes, []int{0, 1}) || len(published.MissingModes) != 0 {
-		t.Fatalf("complete readiness = staged %v missing %v", published.StagedModes, published.MissingModes)
-	}
-	if len(published.Paths) != 8 {
-		t.Fatalf("published payload path count=%d want=8", len(published.Paths))
-	}
-	manifestBytes, err := os.ReadFile(published.ManifestPath)
-	if err != nil {
-		t.Fatalf("read published manifest: %v", err)
-	}
-	var manifest optimalrt.Manifest
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		t.Fatalf("parse published manifest: %v", err)
-	}
-	if err := manifest.Validate(); err != nil {
-		t.Fatalf("validate published manifest: %v", err)
-	}
-	if len(manifest.Modes) != 2 || manifest.Modes[0].BetUnit != 10 || manifest.Modes[1].BetUnit != 20 {
-		t.Fatalf("published modes are not in runtime order: %+v", manifest.Modes)
-	}
-	if _, err := os.Stat(filepath.Join(published.StagingDirectory, "manifest.json")); !os.IsNotExist(err) {
-		t.Fatalf("retained pending directory gained a manifest: %v", err)
-	}
-}
-
-// TestFileArtifactWriterRepublishesOneChangedModeWithVerifiedSiblings proves
-// each mode may be produced by a different RunPlan. Replacing mode 0 leaves the
-// previously verified mode 1 bytes intact and immediately publishes a new full
-// manifest because the pending set remains complete across Runs.
-func TestFileArtifactWriterRepublishesOneChangedModeWithVerifiedSiblings(t *testing.T) {
-	root := t.TempDir()
-	writer := FileArtifactWriter{Directory: root}
-	betUnits := []int{10, 20}
-	if _, err := writer.PublishMode(context.Background(), spec.GID(9), "pcg32/test-v1", betUnits, mustMaterializeTestMode(t, 0, 10, byte(1))); err != nil {
-		t.Fatalf("stage initial mode 0: %v", err)
-	}
-	first, err := writer.PublishMode(context.Background(), spec.GID(9), "pcg32/test-v1", betUnits, mustMaterializeTestMode(t, 1, 20, byte(2)))
-	if err != nil {
-		t.Fatalf("stage initial mode 1: %v", err)
-	}
-	mode1Before, err := os.ReadFile(filepath.Join(root, "game_9", "seed_bank_1.bin"))
-	if err != nil {
-		t.Fatalf("read initial mode 1: %v", err)
-	}
-
-	second, err := writer.PublishMode(context.Background(), spec.GID(9), "pcg32/test-v1", betUnits, mustMaterializeTestMode(t, 0, 10, byte(9)))
-	if err != nil {
-		t.Fatalf("replace mode 0: %v", err)
-	}
-	if !second.Complete || second.ArtifactID == first.ArtifactID {
-		t.Fatalf("single-mode replacement did not publish a new complete bundle: first=%+v second=%+v", first, second)
-	}
-	mode1After, err := os.ReadFile(filepath.Join(root, "game_9", "seed_bank_1.bin"))
-	if err != nil {
-		t.Fatalf("read replacement mode 1: %v", err)
-	}
-	if !sameBytes(mode1After, mode1Before) {
-		t.Fatal("replacing mode 0 changed the staged mode 1 payload")
-	}
-}
-
-// TestFileArtifactWriterRejectsIncompatiblePendingRuntimeMetadata protects the
-// final manifest from combining modes produced for different runtime snapshot
-// formats or bet-unit layouts. Per-mode optimizer settings may differ, but
-// these runtime representation facts may not.
-func TestFileArtifactWriterRejectsIncompatiblePendingRuntimeMetadata(t *testing.T) {
-	root := t.TempDir()
-	writer := FileArtifactWriter{Directory: root}
-	if _, err := writer.PublishMode(
-		context.Background(), spec.GID(11), "pcg32/test-v1", []int{10, 20}, mustMaterializeTestMode(t, 0, 10, byte(1)),
-	); err != nil {
-		t.Fatalf("stage initial mode: %v", err)
-	}
-
-	_, err := writer.PublishMode(
-		context.Background(), spec.GID(11), "pcg32/test-v2", []int{10, 20}, mustMaterializeTestMode(t, 1, 20, byte(2)),
-	)
-	if err == nil || !strings.Contains(err.Error(), "pending directory") || !strings.Contains(err.Error(), "incompatible") {
-		t.Fatalf("snapshot-format mismatch error=%v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "game_11")); !os.IsNotExist(err) {
-		t.Fatalf("incompatible mode unexpectedly published a bundle: %v", err)
-	}
-}
-
-// TestFileArtifactWriterRollsBackFailedReplacement injects failure precisely
-// after the old target has moved to backup. PublishMode must restore the complete
-// old directory while retaining the newly staged mode for an explicit retry.
-func TestFileArtifactWriterRollsBackFailedReplacement(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "game_11")
-	initialWriter := FileArtifactWriter{Directory: root}
-	initial, err := initialWriter.PublishMode(
-		context.Background(), spec.GID(11), "pcg32/original", []int{10}, mustMaterializeTestMode(t, 0, 10, byte(1)),
-	)
-	if err != nil {
-		t.Fatalf("initial Publish: %v", err)
-	}
-	before := snapshotArtifactDirectory(t, target)
-
-	injected := false
-	failingWriter := FileArtifactWriter{
-		Directory: root,
-		renamePath: func(oldPath, newPath string) error {
-			if !injected && oldPath != target && newPath == target {
-				injected = true
-				return errors.New("injected install failure")
-			}
-			return os.Rename(oldPath, newPath)
-		},
-	}
-	_, err = failingWriter.PublishMode(
-		context.Background(), spec.GID(11), "pcg32/original", []int{10}, mustMaterializeTestMode(t, 0, 10, byte(8)),
-	)
-	if err == nil || !strings.Contains(err.Error(), "current bundle restored") {
-		t.Fatalf("replacement error=%v, want successful rollback diagnostic", err)
-	}
-	if !injected {
-		t.Fatal("replacement did not reach injected install failure")
-	}
-	after := snapshotArtifactDirectory(t, target)
+	after := snapshotArtifactDirectory(t, first.Directory)
 	if len(after) != len(before) {
-		t.Fatalf("rolled-back file count=%d want=%d", len(after), len(before))
+		t.Fatal("publishing mode 0 changed mode 1's directory")
 	}
-	for name, want := range before {
-		if got, ok := after[name]; !ok || !sameBytes(got, want) {
-			t.Fatalf("rolled-back file %q changed or disappeared", name)
+	for name, data := range before {
+		if !sameBytes(after[name], data) {
+			t.Fatalf("publishing mode 0 changed mode 1's %s", name)
 		}
 	}
-	retained, err := os.ReadFile(initial.ManifestPath)
-	if err != nil || !sameBytes(retained, before["manifest.json"]) {
-		t.Fatalf("old manifest was not restored exactly: err=%v", err)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatalf("read publication root: %v", err)
-	}
-	if !slices.Equal(entryNames(entries), []string{"game_11", "game_11.pending"}) {
-		t.Fatalf("rollback leaked transaction temporaries or lock entries: %v", entryNames(entries))
+	for _, c := range []struct {
+		published PublishedArtifact
+		want      MaterializedMode
+	}{{first, mode1}, {second, mode0}} {
+		gacha, bank := readTestPair(t, c.published)
+		if gacha.SeedLen != len(c.want.Samples[0].Snapshot) || !slices.Equal(gacha.Picker.Prob, c.want.Picker.Prob) ||
+			!slices.Equal(gacha.Picker.Aliases, c.want.Picker.Aliases) || !sameBytes(bank, c.want.SeedBank) {
+			t.Fatalf("mode %d pair differs from its materialization", c.want.BetMode)
+		}
 	}
 }
 
-// TestFileArtifactWriterRejectsModeOutsideRuntimeLayout ensures a single mode
-// cannot be staged under an index that the game's complete manifest cannot use.
-func TestFileArtifactWriterRejectsModeOutsideRuntimeLayout(t *testing.T) {
-	mode := mustMaterializeTestMode(t, 1, 10, byte(1))
-	_, err := (FileArtifactWriter{Directory: t.TempDir()}).PublishMode(
-		context.Background(), spec.GID(1), "pcg32/test-v1", []int{10}, mode,
+// Publishing the same content again keeps the existing directory.
+func TestGachaArtifactWriterReusesSameContent(t *testing.T) {
+	writer := GachaArtifactWriter{Directory: t.TempDir()}
+	mode := mustMaterializeTestMode(t, 0, 10, byte(10))
+	first, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10}, mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10}, mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Reused || again.Directory != first.Directory || again.ArtifactID != first.ArtifactID {
+		t.Fatalf("first=%+v again=%+v", first, again)
+	}
+}
+
+func TestGachaArtifactWriterRejectsModeOutsideRuntimeLayout(t *testing.T) {
+	_, err := (GachaArtifactWriter{Directory: t.TempDir()}).PublishMode(
+		context.Background(), spec.GID(7), "pcg32/test-v1", []int{10}, mustMaterializeTestMode(t, 1, 10, byte(10)),
 	)
 	if err == nil || !strings.Contains(err.Error(), "outside runtime range") {
 		t.Fatalf("PublishMode error=%v, want runtime-range rejection", err)
 	}
 }
 
-func TestGachaArtifactWriterPublishesLegacyRuntimePackage(t *testing.T) {
+// cancelAfterFirstErr reports no error to the first Err call and cancellation
+// afterwards, standing in for a Run cancelled while its pair is being written.
+type cancelAfterFirstErr struct {
+	context.Context
+	calls int
+}
+
+func (c *cancelAfterFirstErr) Err() error {
+	c.calls++
+	if c.calls == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+// Cancellation before writing publishes nothing; cancellation after writing has
+// started is reported as success with a complete directory, which a rerun
+// reuses.
+func TestGachaArtifactWriterCancellation(t *testing.T) {
 	root := t.TempDir()
 	writer := GachaArtifactWriter{Directory: root}
-	mode0 := mustMaterializeTestMode(t, 0, 10, byte(10))
-	mode1 := mustMaterializeTestMode(t, 1, 20, byte(20))
-
-	pending, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10, 20}, mode1)
-	if err != nil {
-		t.Fatalf("PublishMode(mode=1): %v", err)
+	mode := mustMaterializeTestMode(t, 0, 10, byte(10))
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := writer.PublishMode(cancelled, spec.GID(7), "pcg32/test-v1", []int{10}, mode); !errors.Is(err, context.Canceled) {
+		t.Fatalf("PublishMode error=%v, want cancellation", err)
 	}
-	if pending.Complete || !slices.Equal(pending.Formats, []OutputFormat{OutputOptimalGacha}) ||
-		!slices.Equal(pending.StagedModes, []int{1}) || !slices.Equal(pending.MissingModes, []int{0}) {
-		t.Fatalf("pending legacy package=%+v", pending)
-	}
-	if len(pending.Paths) != 2 {
-		t.Fatalf("pending paths=%v", pending.Paths)
+	if _, err := os.Stat(filepath.Join(root, "game_7")); !os.IsNotExist(err) {
+		t.Fatalf("a cancelled publication wrote output: %v", err)
 	}
 
-	published, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10, 20}, mode0)
+	late := &cancelAfterFirstErr{Context: context.Background()}
+	published, err := writer.PublishMode(late, spec.GID(7), "pcg32/test-v1", []int{10}, mode)
 	if err != nil {
-		t.Fatalf("PublishMode(mode=0): %v", err)
+		t.Fatalf("PublishMode after a late cancellation: %v", err)
 	}
-	if !published.Complete || published.ManifestPath != "" || published.ArtifactID == "" ||
-		!slices.Equal(published.StagedModes, []int{0, 1}) || len(published.MissingModes) != 0 {
-		t.Fatalf("published legacy package=%+v", published)
+	if gacha, bank := readTestPair(t, published); gacha.Picker == nil || !sameBytes(bank, mode.SeedBank) {
+		t.Fatal("the late-cancelled publication is incomplete")
 	}
-	target := filepath.Join(root, "game_7")
-	if len(published.Paths) != 4 {
-		t.Fatalf("published paths=%v", published.Paths)
+	again, err := writer.PublishMode(context.Background(), spec.GID(7), "pcg32/test-v1", []int{10}, mode)
+	if err != nil || !again.Reused || again.Directory != published.Directory {
+		t.Fatalf("rerun=%+v err=%v, want reuse", again, err)
 	}
-	for _, path := range published.Paths {
-		if !strings.HasPrefix(path, target+string(os.PathSeparator)) {
-			t.Fatalf("published path %q is outside %q", path, target)
-		}
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("published path %q: %v", path, err)
-		}
-	}
-	for modeIndex, want := range []MaterializedMode{mode0, mode1} {
-		got, err := verifyLegacyModeDirectory(target, modeIndex, false)
-		if err != nil {
-			t.Fatalf("verify legacy mode %d: %v", modeIndex, err)
-		}
-		if got.SeedLen != len(want.Samples[0].Snapshot) || got.Picker.Size != want.Picker.Size ||
-			!slices.Equal(got.Picker.Prob, want.Picker.Prob) || !slices.Equal(got.Picker.Aliases, want.Picker.Aliases) {
-			t.Fatalf("legacy mode %d picker differs: got=%+v want=%+v", modeIndex, got, want.Picker)
-		}
-		bank, err := os.ReadFile(filepath.Join(target, legacyModeFileNames(modeIndex).seedBank))
-		if err != nil || !sameBytes(bank, want.SeedBank) {
-			t.Fatalf("legacy mode %d seed bank mismatch: err=%v", modeIndex, err)
-		}
+	entries, err := os.ReadDir(filepath.Dir(published.Directory))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("mode directory entries=%v err=%v", entryNames(entries), err)
 	}
 }
 
-func TestOutputPublisherWritesRequestedFormatsIntoSeparatePackages(t *testing.T) {
+func TestOutputPublisherWritesGachaBeneathOutputDirectory(t *testing.T) {
 	root := t.TempDir()
-	publisher := newOutputPublisher(OutputOptions{
-		Format:    []OutputFormat{OutputOptimalGacha, OutputOptimalArtifactV1},
-		Directory: root,
-	})
+	publisher := newOutputPublisher(OutputOptions{Format: []OutputFormat{OutputRGSCollected, OutputOptimalGacha}, Directory: root})
 	mode := mustMaterializeTestMode(t, 0, 10, byte(10))
 	published, err := publisher.PublishMode(context.Background(), spec.GID(9), "pcg32/test-v1", []int{10}, mode)
 	if err != nil {
 		t.Fatalf("PublishMode: %v", err)
 	}
-	if !published.Complete || !slices.Equal(published.Formats, []OutputFormat{OutputOptimalGacha, OutputOptimalArtifactV1}) {
+	if filepath.Dir(published.Directory) != filepath.Join(root, "gacha", "game_9", "mode_0") {
 		t.Fatalf("published=%+v", published)
 	}
-	wantManifest := filepath.Join(root, "artifact_v1", "game_9", "manifest.json")
-	if published.ManifestPath != wantManifest {
-		t.Fatalf("manifest path=%q want=%q", published.ManifestPath, wantManifest)
-	}
-	if len(published.Paths) != 6 {
-		t.Fatalf("payload paths=%v, want 2 legacy + 4 Artifact v1", published.Paths)
-	}
-	for _, path := range []string{
-		wantManifest,
-		filepath.Join(root, "gacha", "game_9", "gacha_0.json.zst"),
-		filepath.Join(root, "gacha", "game_9", "seed_bank_0.bin"),
-		filepath.Join(root, "artifact_v1", "game_9", "prob_0.bin"),
-		filepath.Join(root, "artifact_v1", "game_9", "aliases_0.bin"),
-		filepath.Join(root, "artifact_v1", "game_9", "seed_bank_0.bin"),
-	} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected output %q: %v", path, err)
-		}
+	_, err = newOutputPublisher(OutputOptions{Format: []OutputFormat{OutputRGSCollected}, Directory: root}).
+		PublishMode(context.Background(), spec.GID(9), "pcg32/test-v1", []int{10}, mode)
+	if err == nil || !strings.Contains(err.Error(), "no native output format") {
+		t.Fatalf("publisher without a native format: err=%v", err)
 	}
 }
 
@@ -616,7 +426,7 @@ func mustMaterializeTestMode(t *testing.T, betMode, betUnit int, prefix byte) Ma
 	return mode
 }
 
-// sameBytes performs the exact byte comparison needed for seed-bank and manifest
+// sameBytes performs the exact byte comparison needed for seed-bank
 // immutability assertions without introducing an unrelated assertion dependency.
 func sameBytes(left, right []byte) bool {
 	if len(left) != len(right) {
@@ -631,9 +441,7 @@ func sameBytes(left, right []byte) bool {
 }
 
 // snapshotArtifactDirectory captures the exact regular-file bytes beneath one
-// published bundle. Rollback tests compare these snapshots to prove that a
-// failed replacement restores content, not merely a directory with the same
-// name or a parseable manifest.
+// publication directory, so tests can prove it was not rewritten.
 func snapshotArtifactDirectory(t *testing.T, directory string) map[string][]byte {
 	t.Helper()
 	snapshot := make(map[string][]byte)
@@ -665,7 +473,7 @@ func snapshotArtifactDirectory(t *testing.T, directory string) map[string][]byte
 }
 
 // entryNames converts directory entries to stable diagnostic text so publication
-// failures reveal any staging directory that escaped atomic cleanup.
+// failures reveal any staging directory left behind.
 func entryNames(entries []os.DirEntry) []string {
 	names := make([]string, len(entries))
 	for i := range entries {

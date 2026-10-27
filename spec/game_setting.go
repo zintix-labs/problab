@@ -62,7 +62,7 @@ func (gs *GameSetting) valid() error {
 	if err := gs.OptimalSetting.valid(); err != nil {
 		return err
 	}
-	if gs.OptimalSetting.UseOptimal && gs.OptimalSetting.Artifact == "" {
+	if gs.OptimalSetting.UseOptimal {
 		if len(gs.OptimalSetting.Gachas) != len(gs.BetUnits) {
 			return errs.NewFatal("optimal_setting: gachas must have exactly one entry per bet_unit")
 		}

@@ -126,13 +126,13 @@ func withCountingLogic(t testing.TB, m *Machine) *countingLogic {
 	return logic
 }
 
-// faultLab 建立 demo_0 的 Lab：optimal 為 true 時使用 manifest artifact。
+// faultLab 建立 demo_0 的 Lab：optimal 為 true 時使用測試用的 gacha。
 func faultLab(t testing.TB, factory core.PRNGFactory, optimal bool, opts ...ProblabOption) *Problab {
 	t.Helper()
 	cfg := Configs(demo_configs.FS)
 	if optimal {
-		cfg = Configs(testManifestConfigFS(t))
-		opts = append(opts, WithOptimalFS(testManifestFS(t, false)))
+		cfg = Configs(testOptimalConfigFS(t))
+		opts = append(opts, WithOptimalFS(testOptimalFS(t, false)))
 	}
 	lab, err := NewAuto(factory, cfg, Logics(demo_logic.Logics), opts...)
 	if err != nil {
