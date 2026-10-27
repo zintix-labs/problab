@@ -131,7 +131,25 @@ type RunPlan struct {
 type Target struct {
 	Game     spec.GID `yaml:"game" json:"game"`
 	BetModes []int    `yaml:"bet_modes" json:"bet_modes"`
+	// Input selects the segment to collect. Nil collects the initial segment
+	// (Cycle 0); omitempty keeps the hash and report of such plans unchanged.
+	Input *TargetInput `yaml:"input,omitempty" json:"input,omitempty"`
 }
+
+// TargetInput selects a continuation segment entered through
+// ChooseNext[Choice]. The resulting gacha belongs to that entry value. The
+// optimizer runs it with an internal Cycle of 1 and no checkpoint; Cycle and
+// checkpoint are not configurable because the real cycle of an entry is not
+// fixed within a game.
+type TargetInput struct {
+	ChooseNext []int `yaml:"choose_next" json:"choose_next"`
+	// Choice is a pointer so that a missing or null choice is rejected instead
+	// of silently selecting position 0.
+	Choice *int `yaml:"choice" json:"choice"`
+}
+
+// Entry returns the entry value ChooseNext[Choice]. The input must be valid.
+func (in *TargetInput) Entry() int { return in.ChooseNext[*in.Choice] }
 
 // CollectionOptions contains execution and reusable-support policy, not
 // Designer mathematical intent. CollectedSeed lists ordered raw snapshot banks
@@ -729,6 +747,9 @@ type ModeRunReport struct {
 	Distribution BucketDistributionReport `json:"distribution"`
 	ModelHash    string                   `json:"model_hash"`
 	SolutionHash string                   `json:"solution_hash"`
+	// Entry is the entry value whose gacha this mode produced; omitted for the
+	// initial segment.
+	Entry *int `json:"entry,omitempty"`
 }
 
 // BucketDistributionReport exposes the verified runtime probability shape for

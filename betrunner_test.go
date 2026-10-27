@@ -578,3 +578,47 @@ func TestLocalAndDTOComparisonDetectsLossyCheckpoint(t *testing.T) {
 		t.Fatalf("the comparison did not detect a checkpoint that cannot round-trip: %v", diffs)
 	}
 }
+
+// 執行前拒絕沒有配置的入口時，Runner 沿用現行的錯誤處理：player 的局保持 pending，可以
+// 改選；first／last 的自動續段失敗後本局不可繼續，必須 Reset。正常流程中交付前的檢查已
+// 攔下這種入口，所以以指定起始快照的回放（不套用交付前的檢查）重現。
+func TestBetRunnerKeepsStateOnUnconfiguredEntry(t *testing.T) {
+	libs := newEntryLibs(t)
+	// 第 0 段一律停在 next；入口 3 有庫，入口 5 沒有配置。
+	runner := func(next ...int) (*BetRunner, []byte) {
+		wrap := func(inner slot.GameLogic) slot.GameLogic { return &unfinishedLogic{inner: inner, next: next} }
+		m, err := libs.lab(t, libs.setting("start", "a", ""), wrap).NewMachine(demoEntryID, MachineConfig{Seed: SeedInt64(5)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := NewBetRunner(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r, append([]byte(nil), coreState(t, m)...)
+	}
+
+	r, snap := runner(5, 3)
+	if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1, StartSnap: snap}, ChoosePlayer); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := r.Next(0); !errors.Is(err, ErrContinuationUnsupported) || errors.Is(err, ErrBetBroken) {
+			t.Fatalf("player: %v", err)
+		}
+	}
+	if _, err := r.Next(1); err != nil {
+		t.Fatalf("player could not choose another entry: %v", err)
+	}
+
+	for mode, next := range map[ChooseMode][]int{ChooseFirst: {5, 3}, ChooseLast: {3, 5}} {
+		r, snap := runner(next...)
+		if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1, StartSnap: snap}, mode); !errors.Is(err, ErrContinuationUnsupported) {
+			t.Fatalf("%v: %v", mode, err)
+		}
+		if _, err := r.Bet(SpinInput{BetMode: 0, BetMult: 1}, mode); !errors.Is(err, ErrBetBroken) {
+			t.Fatalf("%v: the broken bet was not kept: %v", mode, err)
+		}
+		r.Reset()
+	}
+}

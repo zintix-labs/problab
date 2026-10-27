@@ -151,7 +151,7 @@ func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFacto
 // Spin 為主要公開入口，會驗證投注請求，執行一段遊戲並回傳該段的結果。
 //
 // 可預期的輸入錯誤回傳 errs.Warn：請求驗證、DTO 解析、被 PRNG 拒絕的外部起始快照、
-// 違反結構不變量的續段請求（ErrSegmentInput）、目前的 optimal 設定不支援續段
+// 違反結構不變量的續段請求（ErrSegmentInput）、續段的入口沒有配置在 optimal 設定中
 // （ErrContinuationUnsupported），以及遊戲拒絕請求（ErrGameRejected）。後三者可以
 // errors.Is 判斷。production reseed 失敗回傳 errs.Fatal。其他內部執行故障以 panic 呈現，
 // 由 MachinePool 汰換機台；RNG 恢復失敗後 Machine 不可再用。
@@ -210,7 +210,9 @@ func spinError(err error) error {
 	}
 }
 
-// UsesOptimal reports the loaded runtime source, not merely a config flag.
+// UsesOptimal reports whether optimal routing is on for this Machine, from the
+// loaded runtime source rather than the config flag. Some segments may still
+// run on the machine RNG when their slot has no gacha.
 func (m *Machine) UsesOptimal() bool { return m.optimal != nil }
 
 // OmitExtend 回傳此 Machine 的 Extend 省略政策（true 表示結果不含 Extend）。
@@ -225,8 +227,8 @@ var (
 	ErrSegmentInput = errors.New("invalid segment input")
 	// ErrStartSnapshotRejected 表示指定的起始快照被 PRNG 拒絕，且已還原到執行前。
 	ErrStartSnapshotRejected = errors.New("start snapshot rejected")
-	// ErrContinuationUnsupported 表示機台開啟 optimal、未指定快照而請求續段，但目前的
-	// optimal 設定沒有續段可抽的庫。
+	// ErrContinuationUnsupported 表示機台開啟 optimal、未指定快照而請求續段，但入口
+	// ChooseNext[Choice] 沒有配置在這個 bet mode 的 after 中（含沒有 after 的設定）。
 	ErrContinuationUnsupported = errors.New("continuation is not supported by the optimal setting")
 	// ErrGameRejected 表示遊戲回傳 nil，拒絕了這次請求（例如不合法的入口或 checkpoint）。
 	ErrGameRejected = errors.New("game rejected the request")

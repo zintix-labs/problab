@@ -80,10 +80,19 @@ plans:
 
     # Select one frozen Problab catalog game and exactly one zero-based bet mode.
     # Sibling modes require separate RunPlans so each mode may own an independent
-    # intent, seed, collection budget, solve, and pending-publication transaction.
+    # intent, seed, collection budget, solve, and publication.
     target:
       game: 0
       bet_modes: [0]
+      # Optional: collect the continuation segment entered through
+      # choose_next[choice] instead of the initial segment. The published gacha
+      # belongs to that entry value (7 below) and is listed under
+      # optimal_setting.modes[].after in the game config. Both keys are
+      # required; omit input entirely for the initial segment. RGS outputs are
+      # not supported with an input.
+      # input:
+      #   choose_next: [3, 7]
+      #   choice: 1
 
     # Stable engine routing key. v2 currently accepts only intent_lp_v2.
     engine: intent_lp_v2

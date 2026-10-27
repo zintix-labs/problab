@@ -182,7 +182,7 @@ func callCountChoiceLab(t testing.TB) (*Problab, *atomic.Int64) {
 	t.Helper()
 	calls := new(atomic.Int64)
 	reg := slot.NewLogicRegistry()
-	for _, key := range []string{"demo_normal", "demo_cascade", "demo_choice"} {
+	for _, key := range []string{"demo_normal", "demo_cascade", "demo_choice", "demo_entry"} {
 		if err := reg.Register(spec.LogicKey(key), func(g *slot.Game) (slot.GameLogic, error) {
 			inner, err := demo_logic.Logics.Build(spec.LogicKey(key), g)
 			return &callCountLogic{inner: inner, calls: calls}, err
@@ -418,6 +418,36 @@ func TestChoiceGameFullGameStatistics(t *testing.T) {
 		pl, est, _, err := s.SimPlayers(2, 10, 100, 0, 100, false)
 		if err != nil || est == nil || pl.Summary.Choose != mode.String() {
 			t.Fatalf("%v SimPlayers: %v %v", mode, pl, err)
+		}
+	}
+}
+
+// demo_entry 接上入口庫後以 first／last 完整模擬；只配置部分庫時同樣可以完整執行，
+// 整局只計一次投注。
+func TestSimEntryLibraries(t *testing.T) {
+	libs := newEntryLibs(t)
+	for name, setting := range map[string]string{
+		"all gachas": libs.setting("start", "a", "b"),
+		"start only": libs.setting("start", "", ""),
+		"entry only": libs.setting("", "a", ""),
+	} {
+		lab := libs.lab(t, setting, nil)
+		for _, mode := range []ChooseMode{ChooseFirst, ChooseLast} {
+			s, err := lab.NewSimulator(demoEntryID, MachineConfig{Seed: SeedInt64(4)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetCfg(BetConfig{Choose: mode}); err != nil {
+				t.Fatal(err)
+			}
+			const rounds = 5000
+			st, _, err := s.Sim(0, rounds, false)
+			if err != nil {
+				t.Fatalf("%s %v: %v", name, mode, err)
+			}
+			if st.Summary.Rounds != rounds || st.Summary.TotalBet != rounds*s.gs.BetUnits[0] {
+				t.Fatalf("%s %v: rounds %d bet %d", name, mode, st.Summary.Rounds, st.Summary.TotalBet)
+			}
 		}
 	}
 }

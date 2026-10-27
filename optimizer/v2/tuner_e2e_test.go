@@ -130,67 +130,7 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 		t.Fatalf("fixture collection=%+v diagnostics=%+v", collected, diagnostics)
 	}
 
-	minimum, maximum := math.Inf(1), math.Inf(-1)
-	mean, secondMoment := 0.0, 0.0
-	for _, sample := range collected.Classes[0].Samples {
-		minimum = math.Min(minimum, sample.Win)
-		maximum = math.Max(maximum, sample.Win)
-		mean += sample.Win
-		secondMoment += sample.Win * sample.Win
-	}
-	mean /= float64(samples)
-	secondMoment /= float64(samples)
-	if !(minimum < maximum) || !(mean > 0) {
-		t.Fatalf("demo fixture needs nondegenerate positive support, got min=%g max=%g mean=%g", minimum, maximum, mean)
-	}
-	midpoint := minimum + (maximum-minimum)/2
-	variance := math.Max(0, secondMoment-mean*mean)
-	empiricalCV := math.Sqrt(variance) / mean
-	enabled := true
-	intent := MathIntent{
-		Overall: OverallIntent{CV: NumericRange{Min: 0, Max: empiricalCV + 1}},
-		Classes: []ClassIntent{{
-			Name: "all_outcomes", Weight: ClassWeightBase,
-			Collect: CollectIntent{Samples: samples, WinRange: ClosedInterval{minimum, maximum}},
-			Design: ClassDesign{
-				Exp: mean, Median: ClosedInterval{minimum, maximum},
-				Subjective: SubjectiveIntent{
-					Intent:  &enabled,
-					Buckets: []float64{minimum, midpoint, maximum},
-					MainExperience: &MainExperience{
-						Groups:      []ClosedInterval{{minimum, maximum}},
-						Probability: NumericRange{Min: 1, Max: 1},
-						Prefer:      []float64{1},
-					},
-				},
-			},
-		}},
-	}
-	options := DefaultEngineOptions()
-	if len(bases) > 0 {
-		base := ClassWeightDenominator(bases[0])
-		intent.Overall.ClassWeightBase = &base
-		intent.Classes[0].Weight = int(base)
-	}
-	// 28 halvings of [0,2] reach the 1e-8 completion precision (techspec §8.1).
-	options.ProfileBisectionIterations = 30
-	options.OtherVisibilityBisectionIterations = 30
-	options.MainGroupInternalVisibilityBisectionIterations = 30
-	outputDirectory := t.TempDir()
-	config := Config{
-		Version: ConfigVersion,
-		Plans: []RunPlan{{
-			ID: planID, Target: Target{Game: spec.GID(1), BetModes: []int{0}},
-			Engine: EngineIntentLPV2, Intent: planID, Seed: seed.clone(),
-			Collection:         collection,
-			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
-			Output: OutputOptions{
-				Format: []OutputFormat{OutputOptimalGacha}, Directory: outputDirectory,
-			},
-		}},
-		Intents:       map[string]MathIntent{planID: intent},
-		EngineOptions: options,
-	}
+	config := exactPipelineConfig(t, collected, samples, collection, seed, planID, Target{Game: spec.GID(1), BetModes: []int{0}}, bases...)
 
 	tuner, err := NewTuner(config, lab)
 	if err != nil {
@@ -257,6 +197,76 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 		}
 	}
 	return result
+}
+
+// exactPipelineConfig derives an exactly feasible single-Class intent from one
+// deterministic raw collection and wraps it in a one-plan Config that publishes
+// a gacha pair into a temporary directory.
+func exactPipelineConfig(t *testing.T, collected CollectedProblem, samples uint64, collection CollectionOptions, seed SeedSpec, planID string, target Target, bases ...int) Config {
+	t.Helper()
+	minimum, maximum := math.Inf(1), math.Inf(-1)
+	mean, secondMoment := 0.0, 0.0
+	for _, sample := range collected.Classes[0].Samples {
+		minimum = math.Min(minimum, sample.Win)
+		maximum = math.Max(maximum, sample.Win)
+		mean += sample.Win
+		secondMoment += sample.Win * sample.Win
+	}
+	mean /= float64(samples)
+	secondMoment /= float64(samples)
+	if !(minimum < maximum) || !(mean > 0) {
+		t.Fatalf("demo fixture needs nondegenerate positive support, got min=%g max=%g mean=%g", minimum, maximum, mean)
+	}
+	midpoint := minimum + (maximum-minimum)/2
+	variance := math.Max(0, secondMoment-mean*mean)
+	empiricalCV := math.Sqrt(variance) / mean
+	enabled := true
+	intent := MathIntent{
+		Overall: OverallIntent{CV: NumericRange{Min: 0, Max: empiricalCV + 1}},
+		Classes: []ClassIntent{{
+			Name: "all_outcomes", Weight: ClassWeightBase,
+			Collect: CollectIntent{Samples: samples, WinRange: ClosedInterval{minimum, maximum}},
+			Design: ClassDesign{
+				Exp: mean, Median: ClosedInterval{minimum, maximum},
+				Subjective: SubjectiveIntent{
+					Intent:  &enabled,
+					Buckets: []float64{minimum, midpoint, maximum},
+					MainExperience: &MainExperience{
+						Groups:      []ClosedInterval{{minimum, maximum}},
+						Probability: NumericRange{Min: 1, Max: 1},
+						Prefer:      []float64{1},
+					},
+				},
+			},
+		}},
+	}
+	options := DefaultEngineOptions()
+	if len(bases) > 0 {
+		base := ClassWeightDenominator(bases[0])
+		intent.Overall.ClassWeightBase = &base
+		intent.Classes[0].Weight = int(base)
+	}
+	// 28 halvings of [0,2] reach the 1e-8 completion precision (techspec §8.1).
+	options.ProfileBisectionIterations = 30
+	options.OtherVisibilityBisectionIterations = 30
+	options.MainGroupInternalVisibilityBisectionIterations = 30
+	outputDirectory := t.TempDir()
+	config := Config{
+		Version: ConfigVersion,
+		Plans: []RunPlan{{
+			ID: planID, Target: target,
+			Engine: EngineIntentLPV2, Intent: planID, Seed: seed.clone(),
+			Collection:         collection,
+			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
+			Output: OutputOptions{
+				Format: []OutputFormat{OutputOptimalGacha}, Directory: outputDirectory,
+			},
+		}},
+		Intents:       map[string]MathIntent{planID: intent},
+		EngineOptions: options,
+	}
+
+	return config
 }
 
 func assertReportSeedJSON(t *testing.T, report RunReport, wantFragment string) {

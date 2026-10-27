@@ -481,6 +481,10 @@ func (t *Tuner) Run(ctx context.Context, request RunRequest) (out RunResult, run
 		Solver: solverProvenance(solution.Evidence), Intent: intentReport,
 		Verification: verification, Distribution: distribution, ModelHash: modelHash, SolutionHash: modeHash,
 	}
+	if input := resolved.Plan.Target.Input; input != nil {
+		entry := input.Entry()
+		modeReport.Entry = &entry
+	}
 	report.Modes = append(report.Modes, modeReport)
 	report.Intent = intentReport
 	report.Solver = modeReport.Solver

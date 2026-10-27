@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/zintix-labs/problab/sdk/sampler"
@@ -31,7 +32,7 @@ func loadLegacyArtifact(source artifactSource, key string, expectedSnapshotSize 
 		return nil, fmt.Errorf("seed_bank count (%d) must match bet_units count (%d)", len(opt.SeedBank), len(gs.BetUnits))
 	}
 
-	modes := make([]mode, len(gs.BetUnits))
+	modes := make([]modeSources, len(gs.BetUnits))
 	closeFns := make([]func() error, 0, len(gs.BetUnits))
 	loaded := false
 	defer func() {
@@ -49,10 +50,79 @@ func loadLegacyArtifact(source artifactSource, key string, expectedSnapshotSize 
 		}
 		closeFns = append(closeFns, closeFn)
 		backend = mergeBackend(backend, modeBackend)
-		modes[i] = m
+		modes[i] = modeSources{start: seedSource{seeded: true, pair: m}}
 	}
 	loaded = true
 	return newArtifact(key, backend, modes, gs.BetUnits, closeFns...), nil
+}
+
+// loadModesArtifact 載入 optimal_setting.modes：每個 bet mode 先載入 start，再依入口值遞增
+// 載入 after，讓載入順序與錯誤訊息固定。抽庫的位置經由 loadGachaPair（mmap 與首筆檢查），
+// 照常使用 RNG 的位置不開任何檔案。任一份失敗時，以相反順序釋放已載入的部分。同一組路徑
+// 出現多次時各載入一次。
+func loadModesArtifact(files artifactSource, key string, expectedSnapshotSize int, checkSnapshot func([]byte) error, gs *spec.GameSetting) (*Artifact, error) {
+	settings := gs.OptimalSetting.Modes
+	if len(settings) != len(gs.BetUnits) {
+		return nil, fmt.Errorf("modes count (%d) must match bet_units count (%d)", len(settings), len(gs.BetUnits))
+	}
+	modes := make([]modeSources, len(settings))
+	var closeFns []func() error
+	loaded := false
+	defer func() {
+		if !loaded {
+			for i := len(closeFns) - 1; i >= 0; i-- {
+				_ = closeFns[i]()
+			}
+		}
+	}()
+	backend := ""
+	load := func(slot *spec.GachaSlot, where string) (seedSource, error) {
+		if slot == nil {
+			return seedSource{}, fmt.Errorf("%s: gacha slot is missing", where)
+		}
+		if !slot.Seeded() {
+			return seedSource{}, nil
+		}
+		m, closeFn, slotBackend, err := loadGachaPair(files, slot.Dist, slot.Bank, expectedSnapshotSize, checkSnapshot)
+		if err != nil {
+			return seedSource{}, fmt.Errorf("%s: %w", where, err)
+		}
+		closeFns = append(closeFns, closeFn)
+		backend = mergeBackend(backend, slotBackend)
+		return seedSource{seeded: true, pair: m}, nil
+	}
+	for i, setting := range settings {
+		start, err := load(setting.Start, fmt.Sprintf("load bet mode %d start", i))
+		if err != nil {
+			return nil, err
+		}
+		modes[i].start = start
+		if setting.After == nil {
+			continue
+		}
+		modes[i].after = make(map[int]seedSource, len(setting.After))
+		for _, entry := range sortedEntries(setting.After) {
+			src, err := load(setting.After[entry], fmt.Sprintf("load bet mode %d after[%d]", i, entry))
+			if err != nil {
+				return nil, err
+			}
+			modes[i].after[entry] = src
+		}
+	}
+	if backend == "" {
+		backend = "none" // 所有位置都照常使用 RNG：沒有載入任何 seed bank
+	}
+	loaded = true
+	return newArtifact(key, backend, modes, gs.BetUnits, closeFns...), nil
+}
+
+func sortedEntries(after map[int]*spec.GachaSlot) []int {
+	entries := make([]int, 0, len(after))
+	for entry := range after {
+		entries = append(entries, entry)
+	}
+	sort.Ints(entries)
+	return entries
 }
 
 // loadGachaPair 載入一對 gacha 與 seed bank。seed bank 經由 OpenBinary 取得：目錄來源在支援的平台上

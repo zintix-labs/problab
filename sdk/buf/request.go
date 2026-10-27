@@ -31,6 +31,13 @@ import "github.com/zintix-labs/problab/spec"
 // Choice 為 0；Cycle > 0 時 ChooseNext 非空且 0 <= Choice < len(ChooseNext)。因此續段
 // 分支可以直接讀取 ChooseNext[Choice]。入口值與 Checkpoint 是否符合本遊戲此時的狀態，
 // 由遊戲自行判斷，不合法時回傳 nil。RNG 快照只供引擎選擇起點，不交給遊戲。
+//
+// 入口值（ChooseNext 的內容）由遊戲自訂，是續段 optimal 庫的身分：遊戲設定的
+// optimal_setting.modes[].after 以入口值為鍵，不要求從 0 開始或連續。配置了庫的入口，
+// 在同一遊戲邏輯、設定、BetMode 與投注條件下，續段結果只能取決於入口值與 seed：除了以
+// ChooseNext[Choice] 取得入口值，不得依賴 Choice、其他選項、Cycle（正整數）、Checkpoint
+// 或先前執行留下的狀態。沒有配置庫、照常使用 RNG 的入口不受此限。改變某個入口值的意義是
+// 相容性變更。
 type SpinRequest struct {
 	GameName   string   // 要玩的遊戲
 	GameId     spec.GID // 遊戲機台編號

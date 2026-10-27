@@ -33,7 +33,7 @@ type SpinResult struct {
 	GameModeCount int               // 經過幾個GameMode
 	GameModeList  []*GameModeResult // 每個遊戲模式的完整結構
 	Cycle         int               // 第幾段，從 0 開始；由 Machine 在遊戲執行後覆寫，遊戲寫入的值不會保留
-	ChooseNext    []int             // 本段結束時可選的入口；空表示沒有選項。IsGameEnd 為 false 時必須非空，反之必須為空。有效到下一次執行，需要保留時自行複製
+	ChooseNext    []int             // 本段結束時可選的入口值（見 SpinRequest）；空表示沒有選項。IsGameEnd 為 false 時必須非空，反之必須為空。有效到下一次執行，需要保留時自行複製
 	IsGameEnd     bool              // 遊戲結束旗標
 	State         *SpinState        // 遊戲狀態
 }

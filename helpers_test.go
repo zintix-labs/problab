@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -31,6 +32,7 @@ import (
 	"github.com/zintix-labs/problab/demo/demo_logic"
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
+	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/sampler"
@@ -402,4 +404,120 @@ func choiceDevSimulator(t testing.TB, lab *Problab, seed int64) *DevSimulator {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// ============================================================
+// demo_entry（game 3）的入口庫：在暫存目錄合成 start、a、b 三份庫，各取 raw 機台依序的
+// 快照、均勻權重。任何快照都是合法的 seed，所以不必經過 optimizer。
+// ============================================================
+
+const demoEntryID spec.GID = 3
+
+type entryLibs struct {
+	root  string
+	paths map[string][2]string       // 庫名 → dist、bank（相對於 root）
+	seeds map[string]map[string]bool // 庫名 → 庫中的每一筆 seed
+}
+
+func newEntryLibs(t *testing.T) *entryLibs {
+	t.Helper()
+	raw, err := NewAuto(core.Default(), Configs(demo_configs.FS), Logics(demo_logic.Logics))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	libs := &entryLibs{root: t.TempDir(), paths: map[string][2]string{}, seeds: map[string]map[string]bool{}}
+	for i, name := range []string{"start", "a", "b"} {
+		m, err := raw.NewMachine(demoEntryID, MachineConfig{Seed: SeedInt64(int64(100 + i))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		const n = 64
+		var bank []byte
+		libs.seeds[name] = map[string]bool{}
+		weights := make([]float64, n)
+		for j := range n {
+			snap := append([]byte(nil), coreState(t, m)...)
+			bank = append(bank, snap...)
+			libs.seeds[name][string(snap)] = true
+			weights[j] = 1
+			m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1})
+		}
+		published, err := optimalrt.PublishGachaPair(filepath.Join(libs.root, name), optimalrt.GachaPair{
+			Picker: sampler.BuildAliasTableF64(weights), SeedLen: len(bank) / n, SeedBank: bank,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dist, _ := filepath.Rel(libs.root, published.Gacha)
+		seedBank, _ := filepath.Rel(libs.root, published.SeedBank)
+		libs.paths[name] = [2]string{filepath.ToSlash(dist), filepath.ToSlash(seedBank)}
+	}
+	return libs
+}
+
+// slot 回傳庫位置的 YAML：庫名為空時是成對 null。
+func (l *entryLibs) slot(name string) string {
+	if name == "" {
+		return "{dist: null, bank: null}"
+	}
+	p := l.paths[name]
+	return fmt.Sprintf("{dist: %s, bank: %s}", p[0], p[1])
+}
+
+// setting 以 start 與入口 3、7 的庫名組出 optimal_setting（庫名為空表示照常使用 RNG）。
+func (l *entryLibs) setting(start, entry3, entry7 string) string {
+	return fmt.Sprintf("optimal_setting:\n  use_optimal: true\n  modes:\n    - start: %s\n      after:\n        3: %s\n        7: %s\n",
+		l.slot(start), l.slot(entry3), l.slot(entry7))
+}
+
+var entryOptimalBlock = regexp.MustCompile(`(?m)^optimal_setting:\n(?:  .*\n)*`)
+
+// entryConfigFS 回傳只有 demo_entry 的設定，optimal_setting 換成 block。
+func entryConfigFS(t *testing.T, block string) fs.FS {
+	t.Helper()
+	raw, err := fs.ReadFile(demo_configs.FS, "game_3_demoentry.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !entryOptimalBlock.Match(raw) {
+		t.Fatal("demo_entry config has no optimal_setting block")
+	}
+	return fstest.MapFS{"game.yaml": &fstest.MapFile{Data: entryOptimalBlock.ReplaceAllLiteral(raw, []byte(block))}}
+}
+
+// entryLab 以 block 的 optimal_setting 建立 demo_entry 的 Lab；wrap 不為 nil 時包裝遊戲邏輯。
+func (l *entryLibs) lab(t *testing.T, block string, wrap func(slot.GameLogic) slot.GameLogic) *Problab {
+	t.Helper()
+	reg := slot.NewLogicRegistry()
+	if err := reg.Register("demo_entry", func(g *slot.Game) (slot.GameLogic, error) {
+		inner, err := demo_logic.Logics.Build("demo_entry", g)
+		if err != nil || wrap == nil {
+			return inner, err
+		}
+		return wrap(inner), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lab, err := NewAuto(core.Default(), Configs(entryConfigFS(t, block)), Logics(reg), WithOptimalDir(l.root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lab.Close() })
+	return lab
+}
+
+// unfinishedLogic 把每個第 0 段改成未結束、選項為 next（可為空），用來測試交付前的檢查。
+type unfinishedLogic struct {
+	inner slot.GameLogic
+	next  []int
+}
+
+func (l *unfinishedLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinResult {
+	sr := l.inner.GetResult(r, g)
+	if sr != nil && r.Cycle == 0 {
+		sr.IsGameEnd = false
+		sr.ChooseNext = append(sr.ChooseNext[:0], l.next...)
+	}
+	return sr
 }
