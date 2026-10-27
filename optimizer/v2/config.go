@@ -173,19 +173,41 @@ func checkTargetInputNodes(raw []byte) error {
 	return nil
 }
 
-// yamlMappingValue returns the value node of key in a mapping node, following
-// aliases; nil when node is not a mapping or has no such key.
+// yamlMappingValue returns the value node that the decoder assigns to key in a
+// mapping node, following aliases and "<<" merge keys the way yaml.v3 does: a
+// key written in the mapping wins over a merged one, and within a merge list
+// the first mapping that has the key wins. It returns nil when node is not a
+// mapping or has no such key.
 func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
 	node = yamlResolve(node)
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
 	}
 	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
+		if !yamlMergeKey(node.Content[i]) && node.Content[i].Value == key {
 			return yamlResolve(node.Content[i+1])
 		}
 	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if !yamlMergeKey(node.Content[i]) {
+			continue
+		}
+		merged := yamlResolve(node.Content[i+1])
+		sources := []*yaml.Node{merged}
+		if merged != nil && merged.Kind == yaml.SequenceNode {
+			sources = merged.Content
+		}
+		for _, source := range sources {
+			if value := yamlMappingValue(source, key); value != nil {
+				return value
+			}
+		}
+	}
 	return nil
+}
+
+func yamlMergeKey(node *yaml.Node) bool {
+	return node.Kind == yaml.ScalarNode && node.ShortTag() == "!!merge"
 }
 
 func yamlResolve(node *yaml.Node) *yaml.Node {

@@ -744,3 +744,27 @@ func TestLoadConfigRejectsRGSOutputWithTargetInput(t *testing.T) {
 		}
 	}
 }
+
+// The node check follows "<<" merge keys the way the decoder does, so merged
+// values cannot bypass it; a key written in the mapping still wins over a
+// merged one, as in the decoder.
+func TestLoadConfigChecksMergedTargetInput(t *testing.T) {
+	for name, c := range map[string]struct{ raw, want string }{
+		"merged into input":  {"      input:\n        <<: {choose_next: [3.7, 7], choice: 0}\n", "choose_next[0]: must be an integer"},
+		"merged choice":      {"      input:\n        <<: {choose_next: [3, 7], choice: 0.9}\n", "choice: must be an integer"},
+		"merged null input":  {"      <<: {input: null}\n", "target.input: must not be null"},
+		"merged into target": {"      <<: {input: {choose_next: [3.7], choice: 0}}\n", "choose_next[0]: must be an integer"},
+		"first merge wins":   {"      input:\n        <<: [{choice: 0.9}, {choice: 0}]\n        choose_next: [3, 7]\n", "choice: must be an integer"},
+	} {
+		if _, err := ParseConfig([]byte(withTargetInput(c.raw))); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error %v, want %q", name, err, c.want)
+		}
+	}
+	config, err := ParseConfig([]byte(withTargetInput("      input:\n        <<: {choice: 0.9}\n        choice: 1\n        choose_next: [3, 7]\n")))
+	if err != nil {
+		t.Fatalf("an explicit choice over a merged one was rejected: %v", err)
+	}
+	if input := config.Plans[0].Target.Input; input == nil || *input.Choice != 1 {
+		t.Fatalf("input %+v", input)
+	}
+}
