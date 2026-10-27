@@ -23,6 +23,7 @@ import (
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/strategy"
 	"github.com/zintix-labs/problab/sdk/tag"
 )
 
@@ -35,18 +36,18 @@ type compiledEvent struct {
 	want   tag.BitMasks // read-only condition; zero when the event has no tags
 }
 type compiledGroup struct {
-	factory StrategyFactory
+	factory strategy.Factory
 	initial int
 	events  []compiledEvent
 	tagger  *tag.Tagger // nil when no event of the group references a tag
 }
 type session struct {
 	tags      tag.BitMasks // working mask owned by this player
-	state     PlayerState
+	state     strategy.PlayerState
 	buckets   []BucketStat
 	hits      []uint64
 	unmatched uint64
-	end       EndType
+	end       strategy.EndType
 	capped    bool
 }
 
@@ -272,7 +273,7 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 			err = fmt.Errorf("group %q player %d spin %d %s: %w", g.Name, player, s.state.Spins, op, err)
 		}
 	}()
-	s = session{state: PlayerState{Balance: cg.initial}, buckets: bucketStats(g.WinBuckets), hits: make([]uint64, len(cg.events))}
+	s = session{state: strategy.PlayerState{Balance: cg.initial}, buckets: bucketStats(g.WinBuckets), hits: make([]uint64, len(cg.events))}
 	asm.Reset()
 	if cg.tagger != nil {
 		s.tags = cg.tagger.NewMasks()
@@ -280,29 +281,29 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 	if err = ctx.Err(); err != nil {
 		return s, err
 	}
-	strategy := cg.factory.NewStrategy(cg.initial)
-	if nilLike(strategy) {
+	st := cg.factory.NewStrategy(cg.initial)
+	if nilLike(st) {
 		return s, fmt.Errorf("factory returned nil strategy")
 	}
 	if err = ctx.Err(); err != nil {
 		return s, err
 	}
 	op = "FirstSpin"
-	decision := strategy.FirstSpin(s.state)
+	decision := st.FirstSpin(s.state)
 	for {
 		if err = ctx.Err(); err != nil {
 			return s, err
 		}
 		op = "decision"
 		if !decision.KeepPlay {
-			if decision.EndType != Other && decision.EndType != Satisfied && decision.EndType != Dissatisfied {
+			if decision.EndType != strategy.Other && decision.EndType != strategy.Satisfied && decision.EndType != strategy.Dissatisfied {
 				return s, fmt.Errorf("invalid strategy exit %d", decision.EndType)
 			}
 			s.end = decision.EndType
 			return s, nil
 		}
 		if s.state.Spins == MaxSpinsPerPlayer {
-			s.end = Other
+			s.end = strategy.Other
 			s.capped = true
 			return s, nil
 		}
@@ -315,7 +316,7 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 			return s, e
 		}
 		if s.state.Balance < cost {
-			s.end = Bust
+			s.end = strategy.Bust
 			return s, nil
 		}
 		op = "SpinUnsafe"
@@ -356,7 +357,7 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 		if e != nil {
 			return s, e
 		}
-		s.state = PlayerState{balance, s.state.Spins + 1, tb, tw}
+		s.state = strategy.PlayerState{Balance: balance, Spins: s.state.Spins + 1, TotalBet: tb, TotalWin: tw}
 		x := float64(result.TotalWin) / float64(cost)
 		bi := bucketIndex(g.WinBuckets, x)
 		s.buckets[bi].Count++
@@ -392,7 +393,7 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 			return s, err
 		}
 		op = "Next"
-		decision = strategy.Next(s.state, result)
+		decision = st.Next(s.state, result)
 	}
 }
 func emptyCheckpoint(v any) bool {
@@ -411,13 +412,13 @@ func add(a, b int) (int, error) {
 	return a + b, nil
 }
 func fits(a, b uint64) bool { return a <= math.MaxUint64-b }
-func exitIndex(e EndType) int {
+func exitIndex(e strategy.EndType) int {
 	switch e {
-	case Bust:
+	case strategy.Bust:
 		return 0
-	case Satisfied:
+	case strategy.Satisfied:
 		return 1
-	case Dissatisfied:
+	case strategy.Dissatisfied:
 		return 2
 	default:
 		return 3

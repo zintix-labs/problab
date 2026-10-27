@@ -8,19 +8,19 @@
 
 Go 呼叫端可使用 `ParseConfig` → `Run(ctx, config, Options)` → `WriteCSV`；也可用 `playerexp/cli.Run` 組合執行、進度與 CSV。`Output=nil` 只關閉文字；`OutputDir` 可改發布目錄。CLI 回傳 0 表示成功，錯誤或取消回傳 1 與 error。Lab 由呼叫端建立、關閉；分析不接管其生命週期。
 
-策略註冊為 `GameID → 名稱 → StrategyFactory`。同名可以分別註冊給不同遊戲；沒有自動跳過或自動註冊的策略。參考 `demo/demo_strategies`：Factory 保存遊戲設定，每位玩家建立獨立 Strategy。自訂策略若需要近期歷史，只複製需要的數值，不保留機台重用的結果指標。Tags 由 `Options.Tags` 注入，也依遊戲隔離；沒有內建 bg／fg。
+策略的契約（`Strategy`、`Factory`、`PlayerState`、`Decision`、`Registry`、`Catalog`）定義在 `sdk/strategy`，策略作者只需要依賴它與 `sdk/buf`，不必依賴本套件。策略註冊為 `GameID → 名稱 → Factory`。同名可以分別註冊給不同遊戲；沒有自動跳過或自動註冊的策略。參考 `demo/demo_strategies`：Factory 保存遊戲設定，每位玩家建立獨立 Strategy。自訂策略若需要近期歷史，只複製需要的數值，不保留機台重用的結果指標。Tags 由 `Options.Tags` 注入，也依遊戲隔離；沒有內建 bg／fg。
 
-宣告式組裝使用 `StrategyCatalog map[spec.GID][]StrategyRegistration`，每筆為 Name／Factory；
+宣告式組裝使用 `strategy.Catalog`（`map[spec.GID][]strategy.Registration`），每筆為 Name／Factory；
 `BuildRegistry()` 沿用 Registry 的驗證，按 GID 排序、按清單順序處理，失敗不回傳部分 Registry。
-官方可選策略放在 `playerexp/strategies`；Demo 的 `game_0.go` 選用策略與參數，`reg.go` 集中遊戲對應；
+官方可選策略放在 `sdk/strategy/builtin`；Demo 的 `game_0.go` 選用策略與參數，`reg.go` 集中遊戲對應；
 新增遊戲清單後，在 reg.go 加一行即可。不使用全域 init 自動註冊。
 `cmd/exp/main.go` 頂部集中 `strategyCatalog`、`gameTags`、`pLab` 三個注入點；
 私有專案替換這些來源與 YAML，不必修改下方執行流程。Catalog map／slice 不與建出的 Registry 共用，
 但 Factory 本體仍是借用，執行期間不可修改。
 
-官方 `strategies.Monotone` 固定 BetMode／BetMult，餘額達初始本金的 SatisfiedRatio 倍即滿意離場；
+官方 `builtin.Monotone` 固定 BetMode／BetMult，餘額達初始本金的 SatisfiedRatio 倍即滿意離場；
 未達標而完成 MaxSpins 則不滿意離場，同時達成時滿意優先。無法負擔下一注仍由執行器記 Bust。
-MaxSpins 必須在 1…20,000，SatisfiedRatio 為大於 1 的整數。Factory 收到的是已換算的實際本金，
+MaxSpins 至少為 1，SatisfiedRatio 為大於 1 的整數。MaxSpins 超過執行器的 20,000 局上限時，由執行器在第 20,000 局後以 Other（capped）結束；策略在此之前已決定離場的，照原本的判定順序。Factory 收到的是已換算的實際本金，
 不需要 BetUnits；非法設定／目標金額溢位會 panic，由 Run 的 factory 邊界轉成 error，不計為正常離場。
 私有策略可放在應用的 `internal/selfstrategies`，實作相同介面後加入遊戲清單；不注入遊戲算分邏輯，
 也不由核心自動註冊。`Monotone` 不需要保存逐局歷史；其他策略需要時應只複製所需欄位。

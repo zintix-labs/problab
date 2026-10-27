@@ -27,6 +27,7 @@ import (
 	"github.com/zintix-labs/problab/demo/demo_strategies"
 	"github.com/zintix-labs/problab/playerexp"
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/strategy"
 )
 
 func TestProgressTerminalAndMilestones(t *testing.T) {
@@ -88,7 +89,7 @@ type cancelFactory struct {
 	cancel  context.CancelFunc
 }
 
-func (f *cancelFactory) NewStrategy(int) playerexp.Strategy {
+func (f *cancelFactory) NewStrategy(int) strategy.Strategy {
 	f.created++
 	return &cancelStrategy{cancel: f.cancel, second: f.created == 2}
 }
@@ -98,14 +99,14 @@ type cancelStrategy struct {
 	second bool
 }
 
-func (s *cancelStrategy) FirstSpin(playerexp.PlayerState) playerexp.Decision {
-	return playerexp.Decision{KeepPlay: true, Bet: playerexp.Bet{BetMode: 0, BetMult: 1}}
+func (s *cancelStrategy) FirstSpin(strategy.PlayerState) strategy.Decision {
+	return strategy.Decision{KeepPlay: true, Bet: strategy.Bet{BetMode: 0, BetMult: 1}}
 }
-func (s *cancelStrategy) Next(playerexp.PlayerState, *buf.SpinResult) playerexp.Decision {
+func (s *cancelStrategy) Next(strategy.PlayerState, *buf.SpinResult) strategy.Decision {
 	if s.second {
 		s.cancel()
 	}
-	return playerexp.Decision{}
+	return strategy.Decision{}
 }
 func TestCLIPartialCancellationPublishesActualCounts(t *testing.T) {
 	lab, e := demo.NewProbLab()
@@ -115,7 +116,7 @@ func TestCLIPartialCancellationPublishesActualCounts(t *testing.T) {
 	defer func() { _ = lab.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	r := playerexp.NewStrategyRegistry()
+	r := strategy.NewRegistry()
 	if e = r.Register(0, "monotone", &cancelFactory{cancel: cancel}); e != nil {
 		t.Fatal(e)
 	}

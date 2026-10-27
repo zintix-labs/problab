@@ -26,10 +26,11 @@ import (
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/playerexp"
-	"github.com/zintix-labs/problab/playerexp/strategies"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/slot"
+	"github.com/zintix-labs/problab/sdk/strategy"
+	"github.com/zintix-labs/problab/sdk/strategy/builtin"
 	"github.com/zintix-labs/problab/sdk/tag"
 	"github.com/zintix-labs/problab/spec"
 )
@@ -76,7 +77,7 @@ func TestUnregisteredExtensionReachesStrategyAndTag(t *testing.T) {
 	defer func() { _ = lab.Close() }()
 	var starts [][]byte
 	players, next, tags := 0, 0, 0
-	rg := playerexp.NewStrategyRegistry()
+	rg := strategy.NewRegistry()
 	if e = rg.Register(0, "s", observedFactory{t, &starts, &players, &next, true}); e != nil {
 		t.Fatal(e)
 	}
@@ -98,7 +99,7 @@ func TestUnregisteredExtensionReachesStrategyAndTag(t *testing.T) {
 	}
 }
 
-func (f observedFactory) NewStrategy(int) playerexp.Strategy {
+func (f observedFactory) NewStrategy(int) strategy.Strategy {
 	*f.players++
 	return &observedStrategy{f: f}
 }
@@ -108,13 +109,13 @@ type observedStrategy struct {
 	spins int
 }
 
-func (s *observedStrategy) FirstSpin(p playerexp.PlayerState) playerexp.Decision {
+func (s *observedStrategy) FirstSpin(p strategy.PlayerState) strategy.Decision {
 	if p.Spins != 0 || s.spins != 0 {
 		s.f.t.Fatal("player history leaked")
 	}
-	return playerexp.Decision{KeepPlay: true, Bet: playerexp.Bet{BetMode: 0, BetMult: 1}}
+	return strategy.Decision{KeepPlay: true, Bet: strategy.Bet{BetMode: 0, BetMult: 1}}
 }
-func (s *observedStrategy) Next(p playerexp.PlayerState, r *buf.SpinResult) playerexp.Decision {
+func (s *observedStrategy) Next(p strategy.PlayerState, r *buf.SpinResult) strategy.Decision {
 	s.spins++
 	*s.f.next++
 	if p.Spins != s.spins {
@@ -125,9 +126,9 @@ func (s *observedStrategy) Next(p playerexp.PlayerState, r *buf.SpinResult) play
 	}
 	*s.f.starts = append(*s.f.starts, append([]byte(nil), r.State.StartCoreSnap...))
 	if s.spins == 2 {
-		return playerexp.Decision{EndType: playerexp.Satisfied}
+		return strategy.Decision{EndType: strategy.Satisfied}
 	}
-	return playerexp.Decision{KeepPlay: true, Bet: playerexp.Bet{BetMode: 0, BetMult: 2}}
+	return strategy.Decision{KeepPlay: true, Bet: strategy.Bet{BetMode: 0, BetMult: 2}}
 }
 func hasExtend(r *buf.SpinResult) bool {
 	for _, m := range r.GameModeList {
@@ -163,7 +164,7 @@ analysis:
 	for repeat := 0; repeat < 2; repeat++ {
 		var starts [][]byte
 		players, next, tags, extended := 0, 0, 0, 0
-		rg := playerexp.NewStrategyRegistry()
+		rg := strategy.NewRegistry()
 		if e = rg.Register(0, "s", observedFactory{t, &starts, &players, &next, false}); e != nil {
 			t.Fatal(e)
 		}
@@ -216,8 +217,8 @@ analysis:
 	if err != nil {
 		b.Fatal(err)
 	}
-	rg := playerexp.NewStrategyRegistry()
-	if err := rg.Register(0, "flat", strategies.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 200, SatisfiedRatio: 3}); err != nil {
+	rg := strategy.NewRegistry()
+	if err := rg.Register(0, "flat", builtin.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 200, SatisfiedRatio: 3}); err != nil {
 		b.Fatal(err)
 	}
 	tags := map[spec.GID]map[string]tag.IsTag{0: {
@@ -230,5 +231,29 @@ analysis:
 		if _, err := playerexp.Run(context.Background(), c, playerexp.Options{Lab: lab, Strategies: rg, Tags: tags}); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// builtin.Monotone no longer limits MaxSpins: a value above MaxSpinsPerPlayer is
+// cut short by the executor, which ends the player as Other (capped) while the
+// strategy still asks to wager.
+func TestMonotoneBeyondTheSpinLimitIsCapped(t *testing.T) {
+	lab, e := demo.NewProbLab()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { _ = lab.Close() }()
+	reg := strategy.NewRegistry()
+	if e = reg.Register(0, "long", builtin.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 30000, SatisfiedRatio: 1 << 20}); e != nil {
+		t.Fatal(e)
+	}
+	c := playerexp.Config{GameID: 0, Analysis: []playerexp.GroupConfig{{Name: "long", Player: playerexp.PlayerConfig{Players: 1, InitBet: 1 << 30, Strategy: "long"}, WinBuckets: []float64{0}}}}
+	r, e := playerexp.Run(context.Background(), c, playerexp.Options{Lab: lab, Strategies: reg})
+	if e != nil {
+		t.Fatal(e)
+	}
+	g := r.Groups[0]
+	if g.CompleteSpins != playerexp.MaxSpinsPerPlayer || g.MaxSpinReached != 1 {
+		t.Fatalf("spins %d capped %d", g.CompleteSpins, g.MaxSpinReached)
 	}
 }

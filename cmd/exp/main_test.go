@@ -20,6 +20,7 @@ import (
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/playerexp"
+	"github.com/zintix-labs/problab/sdk/strategy"
 )
 
 func TestEmbeddedConfigAndArguments(t *testing.T) {
@@ -41,7 +42,7 @@ func TestApplicationInjectionPoints(t *testing.T) {
 		t.Fatal(code, err)
 	}
 	pLab = oldLab
-	strategyCatalog = playerexp.StrategyCatalog{77: {{Name: "private", Factory: nil}}}
+	strategyCatalog = strategy.Catalog{77: {{Name: "private", Factory: nil}}}
 	if code, err := run(nil, nil); code != 1 || err == nil || !strings.Contains(err.Error(), "game 77") {
 		t.Fatal("catalog injection was bypassed", code, err)
 	}

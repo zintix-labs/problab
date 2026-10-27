@@ -27,9 +27,30 @@ import (
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/strategy"
 	"github.com/zintix-labs/problab/sdk/tag"
 	"github.com/zintix-labs/problab/spec"
 )
+
+// The strategy contract moved to sdk/strategy; these test-only aliases keep the
+// executor tests in this package readable.
+type (
+	Strategy        = strategy.Strategy
+	StrategyFactory = strategy.Factory
+	PlayerState     = strategy.PlayerState
+	Decision        = strategy.Decision
+	Bet             = strategy.Bet
+	EndType         = strategy.EndType
+)
+
+const (
+	Other        = strategy.Other
+	Bust         = strategy.Bust
+	Satisfied    = strategy.Satisfied
+	Dissatisfied = strategy.Dissatisfied
+)
+
+var NewStrategyRegistry = strategy.NewRegistry
 
 type factoryFunc func(int) Strategy
 
@@ -78,11 +99,11 @@ func fixture(n int) (Config, Options, *fakeMachine) {
 }
 func fixedFactory(spins int) factoryFunc {
 	return func(int) Strategy {
-		return &strategyFuncs{first: func(PlayerState) Decision { return Decision{KeepPlay: true, Bet: Bet{0, 1}} }, next: func(p PlayerState, _ *buf.SpinResult) Decision {
+		return &strategyFuncs{first: func(PlayerState) Decision { return Decision{KeepPlay: true, Bet: Bet{BetMode: 0, BetMult: 1}} }, next: func(p PlayerState, _ *buf.SpinResult) Decision {
 			if p.Spins >= spins {
 				return Decision{EndType: Satisfied}
 			}
-			return Decision{KeepPlay: true, Bet: Bet{0, 1}}
+			return Decision{KeepPlay: true, Bet: Bet{BetMode: 0, BetMult: 1}}
 		}}
 	}
 }
@@ -135,11 +156,11 @@ func TestStateSettlementAndDynamicRTP(t *testing.T) {
 		return &strategyFuncs{first: func(p PlayerState) Decision {
 			seen = append(seen, p)
 			p.Balance = 0
-			return Decision{KeepPlay: true, Bet: Bet{1, 1}}
+			return Decision{KeepPlay: true, Bet: Bet{BetMode: 1, BetMult: 1}}
 		}, next: func(p PlayerState, _ *buf.SpinResult) Decision {
 			seen = append(seen, p)
 			if p.Spins == 1 {
-				return Decision{KeepPlay: true, Bet: Bet{0, 2}}
+				return Decision{KeepPlay: true, Bet: Bet{BetMode: 0, BetMult: 2}}
 			}
 			return Decision{EndType: Dissatisfied}
 		}}
@@ -155,7 +176,7 @@ func TestStateSettlementAndDynamicRTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []PlayerState{{Balance: 500}, {430, 1, 100, 30}, {432, 2, 102, 34}}
+	want := []PlayerState{{Balance: 500}, {Balance: 430, Spins: 1, TotalBet: 100, TotalWin: 30}, {Balance: 432, Spins: 2, TotalBet: 102, TotalWin: 34}}
 	if !reflect.DeepEqual(seen, want) {
 		t.Fatalf("%+v", seen)
 	}
@@ -170,15 +191,17 @@ func TestPlayerLimitAndDecisionPrecedence(t *testing.T) {
 		c, o, m := fixture(1)
 		calls := 0
 		register(t, &o, factoryFunc(func(int) Strategy {
-			return &strategyFuncs{first: func(PlayerState) Decision { return Decision{KeepPlay: true, Bet: Bet{0, 1}, EndType: EndType(255)} }, next: func(p PlayerState, _ *buf.SpinResult) Decision {
+			return &strategyFuncs{first: func(PlayerState) Decision {
+				return Decision{KeepPlay: true, Bet: Bet{BetMode: 0, BetMult: 1}, EndType: EndType(255)}
+			}, next: func(p PlayerState, _ *buf.SpinResult) Decision {
 				calls++
 				if p.Spins == MaxSpinsPerPlayer {
 					if leave {
-						return Decision{EndType: Dissatisfied, Bet: Bet{-1, -1}}
+						return Decision{EndType: Dissatisfied, Bet: Bet{BetMode: -1, BetMult: -1}}
 					}
-					return Decision{KeepPlay: true, Bet: Bet{-1, -1}}
+					return Decision{KeepPlay: true, Bet: Bet{BetMode: -1, BetMult: -1}}
 				}
-				return Decision{KeepPlay: true, Bet: Bet{0, 1}}
+				return Decision{KeepPlay: true, Bet: Bet{BetMode: 0, BetMult: 1}}
 			}}
 		}))
 		r, e := runMachine(context.Background(), c, o, m, m.units)
@@ -206,10 +229,10 @@ func TestDecisionValidation(t *testing.T) {
 		bad  bool
 		bust bool
 	}{
-		{"zero", Decision{}, false, false}, {"ignoredBet", Decision{Bet: Bet{-1, -1}}, false, false},
+		{"zero", Decision{}, false, false}, {"ignoredBet", Decision{Bet: Bet{BetMode: -1, BetMult: -1}}, false, false},
 		{"strategyBust", Decision{EndType: Bust}, true, false}, {"unknown", Decision{EndType: 255}, true, false},
-		{"mode", Decision{KeepPlay: true, Bet: Bet{-1, 1}}, true, false}, {"mult", Decision{KeepPlay: true, Bet: Bet{0, 0}}, true, false},
-		{"overflow", Decision{KeepPlay: true, Bet: Bet{1, math.MaxInt}}, true, false}, {"unaffordable", Decision{KeepPlay: true, Bet: Bet{1, 6}}, false, true},
+		{"mode", Decision{KeepPlay: true, Bet: Bet{BetMode: -1, BetMult: 1}}, true, false}, {"mult", Decision{KeepPlay: true, Bet: Bet{BetMode: 0, BetMult: 0}}, true, false},
+		{"overflow", Decision{KeepPlay: true, Bet: Bet{BetMode: 1, BetMult: math.MaxInt}}, true, false}, {"unaffordable", Decision{KeepPlay: true, Bet: Bet{BetMode: 1, BetMult: 6}}, false, true},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -373,7 +396,7 @@ func TestPartialCancellationAndPanics(t *testing.T) {
 					if n == 2 && operation == "first" {
 						panic("first failure")
 					}
-					return Decision{KeepPlay: true, Bet: Bet{0, 1}}
+					return Decision{KeepPlay: true, Bet: Bet{BetMode: 0, BetMult: 1}}
 				}, next: func(p PlayerState, _ *buf.SpinResult) Decision {
 					if n == 2 {
 						if operation == "cancel" {
@@ -529,7 +552,7 @@ func TestCancellationBoundariesAndNilStrategies(t *testing.T) {
 					if where == "first" {
 						cancel()
 					}
-					return Decision{KeepPlay: true, Bet: Bet{0, 1}}
+					return Decision{KeepPlay: true, Bet: Bet{BetMode: 0, BetMult: 1}}
 				}, next: func(PlayerState, *buf.SpinResult) Decision {
 					if where == "next" {
 						cancel()

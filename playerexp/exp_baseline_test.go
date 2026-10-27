@@ -29,8 +29,9 @@ import (
 	"github.com/zintix-labs/problab/demo/demo_tags"
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/playerexp"
-	"github.com/zintix-labs/problab/playerexp/strategies"
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/strategy"
+	"github.com/zintix-labs/problab/sdk/strategy/builtin"
 	"github.com/zintix-labs/problab/spec"
 )
 
@@ -46,31 +47,31 @@ func expHash(raw []byte) string {
 
 // recordingFactory 包裝另一個 factory，記錄每次回呼的輸入與決策。
 type recordingFactory struct {
-	inner playerexp.StrategyFactory
+	inner strategy.Factory
 	log   *[]string
 }
 
-func (f recordingFactory) NewStrategy(initial int) playerexp.Strategy {
+func (f recordingFactory) NewStrategy(initial int) strategy.Strategy {
 	*f.log = append(*f.log, fmt.Sprintf("new %d", initial))
 	return &recordingStrategy{inner: f.inner.NewStrategy(initial), log: f.log}
 }
 
 type recordingStrategy struct {
-	inner playerexp.Strategy
+	inner strategy.Strategy
 	log   *[]string
 }
 
-func expDecision(d playerexp.Decision) string {
+func expDecision(d strategy.Decision) string {
 	return fmt.Sprintf("keep=%v mode=%d mult=%d end=%d", d.KeepPlay, d.BetMode, d.BetMult, d.EndType)
 }
 
-func (s *recordingStrategy) FirstSpin(p playerexp.PlayerState) playerexp.Decision {
+func (s *recordingStrategy) FirstSpin(p strategy.PlayerState) strategy.Decision {
 	d := s.inner.FirstSpin(p)
 	*s.log = append(*s.log, fmt.Sprintf("first %+v -> %s", p, expDecision(d)))
 	return d
 }
 
-func (s *recordingStrategy) Next(p playerexp.PlayerState, r *buf.SpinResult) playerexp.Decision {
+func (s *recordingStrategy) Next(p strategy.PlayerState, r *buf.SpinResult) strategy.Decision {
 	res, err := dto.NewSpinResultDTO(r)
 	if err != nil {
 		panic(err)
@@ -91,22 +92,24 @@ func (s *recordingStrategy) Next(p playerexp.PlayerState, r *buf.SpinResult) pla
 // alternating 交替倍數 1、2，第 25 局後依餘額決定滿足或不滿足離場。
 type alternating struct{}
 
-func (alternating) NewStrategy(initial int) playerexp.Strategy { return &alternatingStrategy{initial: initial} }
+func (alternating) NewStrategy(initial int) strategy.Strategy {
+	return &alternatingStrategy{initial: initial}
+}
 
 type alternatingStrategy struct{ initial int }
 
-func (s *alternatingStrategy) decide(p playerexp.PlayerState) playerexp.Decision {
+func (s *alternatingStrategy) decide(p strategy.PlayerState) strategy.Decision {
 	if p.Spins >= 25 {
-		end := playerexp.Dissatisfied
+		end := strategy.Dissatisfied
 		if p.Balance >= s.initial {
-			end = playerexp.Satisfied
+			end = strategy.Satisfied
 		}
-		return playerexp.Decision{EndType: end}
+		return strategy.Decision{EndType: end}
 	}
-	return playerexp.Decision{KeepPlay: true, Bet: playerexp.Bet{BetMode: 0, BetMult: 1 + p.Spins%2}}
+	return strategy.Decision{KeepPlay: true, Bet: strategy.Bet{BetMode: 0, BetMult: 1 + p.Spins%2}}
 }
-func (s *alternatingStrategy) FirstSpin(p playerexp.PlayerState) playerexp.Decision { return s.decide(p) }
-func (s *alternatingStrategy) Next(p playerexp.PlayerState, _ *buf.SpinResult) playerexp.Decision {
+func (s *alternatingStrategy) FirstSpin(p strategy.PlayerState) strategy.Decision { return s.decide(p) }
+func (s *alternatingStrategy) Next(p strategy.PlayerState, _ *buf.SpinResult) strategy.Decision {
 	return s.decide(p)
 }
 
@@ -118,10 +121,10 @@ func expRecord(t *testing.T, gid spec.GID) map[string]any {
 	}
 	defer func() { _ = lab.Close() }()
 	var log []string
-	reg := playerexp.NewStrategyRegistry()
-	for name, f := range map[string]playerexp.StrategyFactory{
-		"monotone":    strategies.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 60, SatisfiedRatio: 2},
-		"higher_bet":  strategies.Monotone{BetMode: 0, BetMult: 2, MaxSpins: 60, SatisfiedRatio: 2},
+	reg := strategy.NewRegistry()
+	for name, f := range map[string]strategy.Factory{
+		"monotone":    builtin.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 60, SatisfiedRatio: 2},
+		"higher_bet":  builtin.Monotone{BetMode: 0, BetMult: 2, MaxSpins: 60, SatisfiedRatio: 2},
 		"alternating": alternating{},
 	} {
 		if err := reg.Register(gid, name, recordingFactory{f, &log}); err != nil {

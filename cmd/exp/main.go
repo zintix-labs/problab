@@ -28,8 +28,8 @@ import (
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/demo/demo_strategies"
 	"github.com/zintix-labs/problab/demo/demo_tags"
-	"github.com/zintix-labs/problab/playerexp"
 	expcli "github.com/zintix-labs/problab/playerexp/cli"
+	"github.com/zintix-labs/problab/sdk/strategy"
 	"github.com/zintix-labs/problab/sdk/tag"
 )
 
@@ -39,12 +39,12 @@ var config []byte
 // Application-owned injection points. A private project replaces these sources
 // and its embedded YAML; the execution/lifecycle code below stays unchanged.
 var (
-	// strategyCatalog maps game IDs to named StrategyFactory lists.
+	// strategyCatalog maps game IDs to named strategy.Factory lists (sdk/strategy).
 	// Define strategies in your package, assemble its catalog like
 	// demo/demo_strategies/reg.go, then assign mystrategies.Strategies here.
 	// These are factories, never shared player Strategy instances. Registration
 	// validates duplicate names and nil factories before any player runs.
-	strategyCatalog playerexp.StrategyCatalog = demo_strategies.Catalog
+	strategyCatalog strategy.Catalog = demo_strategies.Catalog
 
 	// gameTags supplies the predicates referenced by events[].tags in YAML.
 	// Names are game-scoped; bg/fg are demo tags, not engine built-ins.
