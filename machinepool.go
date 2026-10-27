@@ -98,7 +98,7 @@ func newMachinePool(n int, gs *spec.GameSetting, reg *slot.LogicRegistry, cf cor
 		if err != nil {
 			return nil, err
 		}
-		m, err := newMachineWithSeed(gs, reg, cf, seed, false, optimal, rngProduction)
+		m, err := newMachine(gs, reg, cf, seed, false, optimal, rngProduction)
 		if err != nil {
 			return nil, err
 		}
@@ -265,21 +265,21 @@ func (p *MachinePool) Spin(ctx context.Context, req *dto.SpinRequest) (dto dto.S
 				p.closeWithReason("rebuild_failed")
 				return
 			}
-			newMachine, buildErr := newMachineWithSeed(p.gs, p.logic, p.cf, seed, false, p.optimal, rngProduction)
+			replacement, buildErr := newMachine(p.gs, p.logic, p.cf, seed, false, p.optimal, rngProduction)
 			p.rebuild.Add(1)
 			if buildErr != nil {
 				err = errs.NewFatal(fmt.Sprintf("machine %s can not build", p.gameName))
 				p.closeWithReason("rebuild_failed")
 				return
 			}
-			newMachine.poolSlot = m.poolSlot
-			newMachine.poolGen = nextGeneration
+			replacement.poolSlot = m.poolSlot
+			replacement.poolGen = nextGeneration
 
 			// 補機前再看一次是否已關閉（避免並行 Close 後 send / block）
 			select {
 			case <-p.done:
 				return
-			case p.pool <- newMachine:
+			case p.pool <- replacement:
 				// ok
 			}
 

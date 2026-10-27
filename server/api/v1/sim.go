@@ -48,6 +48,7 @@ func (sh *SimHandler) Sim(w http.ResponseWriter, q *http.Request) {
 		BetMode int      `json:"bet_mode"`
 		Round   int      `json:"round"`
 		Seed    *int64   `json:"seed,omitempty"`
+		Choose  string   `json:"choose,omitempty"` // 選擇類遊戲的選擇方式：first、last；省略時不指定
 	}
 	// 內部結構 不影響外部 也不被外部使用
 	type SimResponse struct {
@@ -111,6 +112,7 @@ func (sh *SimHandler) Sim(w http.ResponseWriter, q *http.Request) {
 			v := u
 			req.Seed = &v
 		}
+		req.Choose = q.URL.Query().Get("choose")
 	}
 	if q.Method == http.MethodPost {
 		if err := json.NewDecoder(q.Body).Decode(req); err != nil {
@@ -132,6 +134,11 @@ func (sh *SimHandler) Sim(w http.ResponseWriter, q *http.Request) {
 		httperr.Errs(w, errs.NewWarn("round must be between 1 to 1,000,000"))
 		return
 	}
+	choose, err := parseChoose(req.Choose)
+	if err != nil {
+		httperr.Errs(w, err)
+		return
+	}
 	if req.Seed == nil {
 		rnd, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 		if err != nil {
@@ -141,10 +148,14 @@ func (sh *SimHandler) Sim(w http.ResponseWriter, q *http.Request) {
 		v := rnd.Int64()
 		req.Seed = &v
 	}
-	sim, err := sh.Problab.NewSimulatorWithSeed(req.GID, *req.Seed)
+	sim, err := sh.Problab.NewSimulator(req.GID, problab.MachineConfig{Seed: problab.SeedInt64(*req.Seed)})
 	if err != nil {
 		// 這裡的錯誤是來自problab 尊重錯誤分級
 		httperr.Errs(w, errs.Wrap(err, fmt.Sprintf("build simulator err: %d", req.GID)))
+		return
+	}
+	if err := sim.SetCfg(problab.BetConfig{Choose: choose}); err != nil {
+		httperr.Errs(w, err)
 		return
 	}
 	st, used, err := sim.Sim(req.BetMode, req.Round, false)
@@ -171,6 +182,7 @@ func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
 		BetMode int      `json:"bet_mode"`
 		Round   int      `json:"round"`
 		Seed    *int64   `json:"seed,omitempty"`
+		Choose  string   `json:"choose,omitempty"` // 選擇類遊戲的選擇方式：first、last；省略時不指定
 	}
 	// 內部結構 不影響外部 也不被外部使用
 	type SimPlayerResponse struct {
@@ -266,6 +278,7 @@ func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
 			v := u
 			req.Seed = &v
 		}
+		req.Choose = r.URL.Query().Get("choose")
 	}
 	if r.Method == http.MethodPost {
 		if err := json.NewDecoder(r.Body).Decode(req); err != nil {
@@ -294,6 +307,11 @@ func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
 		httperr.Errs(w, errs.NewWarn("round must be between 1 and 15,000"))
 		return
 	}
+	choose, err := parseChoose(req.Choose)
+	if err != nil {
+		httperr.Errs(w, err)
+		return
+	}
 	if req.Seed == nil {
 		rnd, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 		if err != nil {
@@ -304,9 +322,13 @@ func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
 		req.Seed = &v
 	}
 	// 取得sim
-	sim, err := sh.Problab.NewSimulatorWithSeed(req.GID, *req.Seed)
+	sim, err := sh.Problab.NewSimulator(req.GID, problab.MachineConfig{Seed: problab.SeedInt64(*req.Seed)})
 	if err != nil {
 		httperr.Errs(w, errs.Wrap(err, fmt.Sprintf("build simulator err: %d", req.GID)))
+		return
+	}
+	if err := sim.SetCfg(problab.BetConfig{Choose: choose}); err != nil {
+		httperr.Errs(w, err)
 		return
 	}
 	st, est, used, err := sim.SimPlayers(4, req.Player, req.Bets, req.BetMode, req.Round, false)
@@ -323,4 +345,13 @@ func (sh *SimHandler) SimPlayers(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// parseChoose 解析請求的選擇方式：省略時不指定，只接受 first、last。
+func parseChoose(raw string) (problab.ChooseMode, error) {
+	mode, err := problab.ParseChooseMode(raw)
+	if err != nil {
+		return mode, errs.NewWarn("choose must be first or last")
+	}
+	return mode, nil
 }

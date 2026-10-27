@@ -33,9 +33,12 @@ max_win_limit : 400000
 # 優化配置(開啟並由problab注入優化設定FS)
 optimal_setting:
   use_optimal: false
-  # Local Optimal artifacts are intentionally not versioned. Enable this only
-  # after generating or publishing a compatible bundle to the configured source.
-  artifact: manifest.json
+  # Local optimal outputs are intentionally not versioned. cmd/opt publishes each
+  # bet mode as gacha.json.zst + seed_bank.bin in an immutable directory
+  # <output.directory>/gacha/game_0/mode_0/<id>/. To enable, load that output
+  # root with WithOptimalDir and point both lists at the published pair.
+  gachas: [game_0/mode_0/<id>/gacha.json.zst]
+  seed_bank: [game_0/mode_0/<id>/seed_bank.bin]
 
 # 遊戲模式設定列表，一個遊戲模式相當於一個狀態，遊戲將在各狀態間轉換
 game_mode_settings:

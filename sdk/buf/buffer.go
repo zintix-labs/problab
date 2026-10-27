@@ -32,6 +32,8 @@ type SpinResult struct {
 	BetMult       int               // 押注倍數
 	GameModeCount int               // 經過幾個GameMode
 	GameModeList  []*GameModeResult // 每個遊戲模式的完整結構
+	Cycle         int               // 第幾段，從 0 開始；由 Machine 在遊戲執行後覆寫，遊戲寫入的值不會保留
+	ChooseNext    []int             // 本段結束時可選的入口值（見 SpinRequest）；空表示沒有選項。IsGameEnd 為 false 時必須非空，反之必須為空。有效到下一次執行，需要保留時自行複製
 	IsGameEnd     bool              // 遊戲結束旗標
 	State         *SpinState        // 遊戲狀態
 }
@@ -49,6 +51,7 @@ func NewSpinResult(gs *spec.GameSetting) *SpinResult {
 		BetMult:       0,
 		GameModeCount: 0,
 		GameModeList:  make([]*GameModeResult, 0, capSpinGrow),
+		Cycle:         0,
 		IsGameEnd:     false,
 		State: &SpinState{
 			StartCoreSnap: nil,
@@ -82,6 +85,8 @@ func (s *SpinResult) Reset() {
 	s.BetMode = 0
 	s.GameModeCount = 0
 	s.GameModeList = s.GameModeList[:0]
+	s.Cycle = 0
+	s.ChooseNext = s.ChooseNext[:0]
 	s.IsGameEnd = false
 	if s.State != nil {
 		s.State.StartCoreSnap = nil
@@ -118,6 +123,10 @@ type GameModeResult struct {
 	HitsFlat   []int16            // 中獎圖稀疏矩陣 (只有中獎的格子idx會紀錄)
 
 	TmpAct *TmpAct // 狀態暫存點
+
+	// omitExtend 是建立時決定的 Extend 省略政策；為 true 時 AddAct 不呼叫
+	// ExtendResult.Snapshot()。Reset 不會修改它。
+	omitExtend bool
 }
 
 type ActResult struct {
@@ -174,8 +183,11 @@ type TmpAct struct {
 // ============================================================
 
 // NewGameModeResult 依照設定建立 GameModeResult，並預配快照與細項緩衝。
-func NewGameModeResult(modeId int, ganeModeSetting *spec.GameModeSetting, buffer int, hitsInitSize int) *GameModeResult {
-	gms := ganeModeSetting
+//
+// omitExtend 為 true 時，AddAct 不呼叫 ExtendResult.Snapshot()，ActResult 的
+// ExtendResult 一律為 nil（Simulator 使用）；為 false 時照常產生 Extend。
+func NewGameModeResult(modeId int, gameModeSetting *spec.GameModeSetting, buffer int, hitsInitSize int, omitExtend bool) *GameModeResult {
+	gms := gameModeSetting
 	gmr := &GameModeResult{
 		TotalWin:   0,
 		GameModeId: modeId,
@@ -191,6 +203,8 @@ func NewGameModeResult(modeId int, ganeModeSetting *spec.GameModeSetting, buffer
 		HitsFlat:   make([]int16, 0, hitsInitSize+capModeGrow),
 
 		TmpAct: &TmpAct{},
+
+		omitExtend: omitExtend,
 	}
 	return gmr
 }
@@ -333,8 +347,9 @@ func (gmr *GameModeResult) Discard() {
 //   - 一次只接受一個行為（Act），依序落地到 ActResults，維持 Round/Step/Act 三層索引。
 //   - 呼叫者先累積暫存分數/細項/盤面，最後用 AddAct 落地；之後才會呼叫 FinishStep / FinishRound 標記邊界。
 //   - screen 參數：可選的盤面快照，長度必須符合 ScreenSize；若不需要快照可傳空 slice。
-//   - ext 參數：遊戲的 ExtendResult 介面。AddAct 內部只負責呼叫 Snapshot()，不涉入 isSim 判斷；
-//     是否回傳 nil (Sim 模式) 或深拷貝副本 (Server 模式) 完全由遊戲實作端決定。
+//   - ext 參數：遊戲的 ExtendResult 介面。是否產生 Extend 由引擎決定：建立時指定
+//     omitExtend 為 true（Simulator）時不呼叫 Snapshot()，ExtendResult 為 nil；否則呼叫
+//     Snapshot() 並保存其回傳值。
 //   - at 參數：指定本次行為是否同時結束 Step / Round（FinishAct 代表僅結束 Act）。
 //
 // 整體流程：
@@ -368,7 +383,7 @@ func (gmr *GameModeResult) AddAct(at FinishType, actType string, screen []int16,
 		DetailsEnd:   t.CurrDetail,
 		ScreenStart:  screenStart,
 	}
-	if ext != nil {
+	if ext != nil && !gmr.omitExtend {
 		a.ExtendResult = ext.Snapshot()
 	}
 	gmr.ActResults = append(gmr.ActResults, a)
@@ -523,14 +538,20 @@ type ExtendResult interface {
 	//	- 由遊戲自行決定要不要重用記憶體，以避免 GC 負擔。
 	//	- 只在遊戲內被呼叫，不經過 GameModeResult，避免污染共用流程。
 	//	- 保證下一次 Snapshot 不會帶著上一局遺留狀態。
-	//	- 是否依據 isSim 做額外優化（例如跳過清空內容），完全由遊戲實作者自行決定。
+	//	- 是否依據省略政策（slot.Game.OmitExtend()）做額外優化（例如跳過清空內容），由遊戲實作者自行決定，
+	//	  但必須保證結果不因此改變。
 	//	- 一般而言Spin(BaseGame) 一開始會先Reset一次，進入FG也會先Reset一次
 	Reset()
 	// Snapshot 建立快照
-	//  - 呼叫端（GameModeResult/Act/DTO）一律只呼叫 Snapshot，不需要知道 isSim 的存在。
-	//  - 遊戲實作者可以在內部判斷 isSim 以回傳 nil (觸發 JSON omitempty)，省去深拷貝 CPU 成本與流量。
+	//  - 契約：Snapshot 只產生輸出快照，不得影響後續玩法、遊戲狀態與 RNG。
+	//    引擎在省略 Extend 的模式（Simulator）下不呼叫 Snapshot；只有在這個契約成立時，
+	//    「不呼叫」才與「呼叫後回傳 nil」等價。違反此契約的遊戲，在省略模式下行為會改變。
+	//  - 是否產生 Extend 由引擎決定，遊戲不需要自行判斷；回傳 nil 會觸發 JSON omitempty。
 	//  - 回傳型別使用 any 是為了相容 JSON 序列化，避免強轉型。
-	//  - 建議：總是先考量並實作深拷貝方式以確保併發安全；Sim 模式可依需求回傳 nil 或輕量資料。
+	//  - 契約：回傳的快照，以及它可以修改的參照資料，不得被後續的遊戲執行修改；消費端只能讀取。
+	//    同一段內的多個 Act 與 SpinAssembler 組出的完整局都會保留並共享這些參照；違反時，
+	//    前面 Act 或前面各段的 Extend 可能被覆寫。深拷貝是常見的達成方式；不可變的資料可以
+	//    直接共享，不必每次重新配置。
 	Snapshot() any
 }
 
@@ -550,14 +571,10 @@ func (e *NoExtend) Reset() {}
 
 // Snapshot 是 NoExtend 的空實作：
 //   - 永遠回傳 nil，這樣 JSON 輸出時該欄位會被完全省略 (omitempty)。
-//   - 呼叫端永遠只呼叫 Snapshot；是否有 isSim 優化由具體遊戲 extend 決定，這裡保持單純。
-//   - GameModeResult.AddAct 內會直接呼叫此方法，減少分支與 nil 判斷。
+//   - 是否呼叫 Snapshot 由引擎依省略政策決定，這裡保持單純。
+//   - GameModeResult.AddAct 在保留 Extend 時會直接呼叫此方法，減少分支與 nil 判斷。
 //   - 若未來需要占位資料或想顯式傳遞空物件，可在此改為回傳 new(NoExtend)。
 func (e *NoExtend) Snapshot() any {
-	// if e.isSim {
-	// 	return nil
-	// }
-	// return new(NoExtend)
 	return nil
 }
 

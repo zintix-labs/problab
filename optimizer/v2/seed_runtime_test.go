@@ -135,7 +135,7 @@ func TestReplayFilledQuotaNeverDerivesWorkerSeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := collectionFixturePlan(77, 4, 16, 16, 4)
-	plan.Plan.Collection.CollectedSeed = []string{preSeedSpecBankFixture}
+	plan.Plan.Collection.CollectedSeed = []string{fixtureBankPath}
 	collector := NewCollector(lab)
 	collector.WorkingDirectory = workingDirectory
 	collected, diagnostics, err := collector.Collect(context.Background(), plan, 0)

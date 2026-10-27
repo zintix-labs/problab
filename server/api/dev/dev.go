@@ -65,6 +65,7 @@ type devRequest struct {
 	Round      int    `json:"round"`
 	Seed       string `json:"seed"`
 	Snap       string `json:"snap"`
+	Choose     string `json:"choose"` // 選擇類遊戲的選擇方式：first、last；省略時不指定
 }
 
 // round() 將 rounds/round 做兼容合併：優先 rounds，其次 round；若都未提供則回 0。
@@ -179,6 +180,13 @@ const devPageHTML = `<!doctype html>
       <label>Bet Mode
         <select id="betunit"></select>
       </label>
+      <label>Choose (choice games)
+        <select id="choose">
+          <option value="">Not set</option>
+          <option value="first">first</option>
+          <option value="last">last</option>
+        </select>
+      </label>
       <label>Rounds
         <input id="rounds" type="number" min="1" max="3000000" value="1" />
       </label>
@@ -205,6 +213,7 @@ const gameSel = document.getElementById('game');
 const betUnitSel = document.getElementById('betunit');
 const seedInput = document.getElementById('seed');
 const snapInput = document.getElementById('snap');
+const chooseSel = document.getElementById('choose');
 const roundsInput = document.getElementById('rounds');
 const summary = document.getElementById('summary');
 const roundsBox = document.getElementById('roundsBox');
@@ -370,6 +379,9 @@ async function run() {
   } else if (seed) {
     payload.seed = seed;
   }
+  if (chooseSel.value) {
+    payload.choose = chooseSel.value;
+  }
   try {
     const res = await fetch('/dev/spin', {
       method: 'POST',
@@ -473,6 +485,9 @@ async function runSim() {
     payload.snap = snap;
   } else if (seed) {
     payload.seed = seed;
+  }
+  if (chooseSel.value) {
+    payload.choose = chooseSel.value;
   }
   try {
     const res = await fetch('/dev/sim', {
@@ -592,8 +607,17 @@ func devSpin(cfg *svrcfg.SvrCfg) http.HandlerFunc {
 			httperr.Errs(w, err)
 			return
 		}
+		choose, err := problab.ParseChooseMode(req.Choose)
+		if err != nil {
+			httperr.Errs(w, errs.NewWarn("choose must be first or last"))
+			return
+		}
 		sim, err := pb.NewDevSimulator(sum.GID, seed)
 		if err != nil {
+			httperr.Errs(w, err)
+			return
+		}
+		if err := sim.SetCfg(problab.BetConfig{Choose: choose}); err != nil {
 			httperr.Errs(w, err)
 			return
 		}
@@ -654,8 +678,17 @@ func devSim(cfg *svrcfg.SvrCfg) http.HandlerFunc {
 			httperr.Errs(w, err)
 			return
 		}
+		choose, err := problab.ParseChooseMode(req.Choose)
+		if err != nil {
+			httperr.Errs(w, errs.NewWarn("choose must be first or last"))
+			return
+		}
 		sim, err := pb.NewDevSimulator(sum.GID, seed)
 		if err != nil {
+			httperr.Errs(w, err)
+			return
+		}
+		if err := sim.SetCfg(problab.BetConfig{Choose: choose}); err != nil {
 			httperr.Errs(w, err)
 			return
 		}

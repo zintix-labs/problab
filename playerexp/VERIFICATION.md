@@ -44,7 +44,7 @@ GOCACHE=/tmp/problab-playerexp-cache make exp
 | A04 | `TestPreflightAndRegistry`、`TestCancellationBoundariesAndNilStrategies`：跨 GID 同名合法、重複／typed-nil 拒絕、Factory 回 nil／typed-nil、tag 不跨 GID |
 | A05 | root `TestSpinOfflineParity/native`：兩個 mode、三種 mult、60 局逐局 DTO 與 RNG bytes 相等 |
 | A06 | root `TestSpinOfflineParity/optimal`、`TestSpinOfflineValidationAndOptimalError`、`TestSpinOfflineSnapshotRestoreFaults`：真 manifest、closed artifact、前後 Snapshot、seed／selector Restore 故障；panic 仍恢復 selector，雙重錯誤保留 |
-| A07 | `TestUnregisteredExtensionReachesStrategyAndTag`：自訂遊戲檢查 isSim=false／乾淨 request，無 DTO renderer；策略及 tag 都看到 raw Extend |
+| A07 | `TestUnregisteredExtensionReachesStrategyAndTag`：自訂遊戲檢查 OmitExtend()=false／乾淨 request，無 DTO renderer；策略及 tag 都看到 raw Extend |
 | A08 | `TestStateSettlementAndDynamicRTP`：500→430→432；修改 state 副本無效；TotalWin 不重乘 |
 | A09 | 同上：成本 100 與 2、贏分 30 與 4，玩家與 pooled RTP 都為 34/102，不是倍率平均 |
 | A10 | `TestRealRunReproducibilityAndContinuousStream`：200 個獨立 Strategy、400 次 Next、每次 FirstSpin state／策略歷史為初始；demo factory 每人複製設定 |
@@ -97,8 +97,25 @@ GOCACHE=/tmp/problab-playerexp-cache make exp
 
 ## 已知、刻意保留的邊界
 
-不支援 checkpoint／續玩選擇；不自動回復 RNG 後重試；不可強制終止阻塞 callback；不偵測遊戲偷偷維護的隱藏跨局狀態；不保證不受控策略 RNG 可重現。不新增 optimizer 串接或評選器。
+（第一階段的紀錄；選擇類遊戲與局內 checkpoint 已在後續支援，見下方「選擇類遊戲」。）不支援 checkpoint／續玩選擇；不自動回復 RNG 後重試；不可強制終止阻塞 callback；不偵測遊戲偷偷維護的隱藏跨局狀態；不保證不受控策略 RNG 可重現。不新增 optimizer 串接或評選器。
 
 ## 完整 JSON 報告擴充
 
 `TestFullJSONReportPreservesGroupsAndTags` 驗證完整公開報告 round-trip、不同組的 tags、NOT_STARTED／失敗資訊及大整數；不包含私人逐玩家暫存。原 CSV golden 不變。`TestCSVAtomicPublicationFailures` 額外涵蓋 report.json create/write/close 故障，確保 CSV 和 JSON 同批發布，失敗不留下半份輸出。CLI 測試涵蓋成功／取消／文字輸出錯誤下仍有五份 CSV 與一份 report.json。
+
+## 選擇類遊戲
+
+策略的契約移到 `sdk/strategy`，`Monotone` 移到 `sdk/strategy/builtin`；每一局改由 `BetRunner` 的 player 模式執行，策略在選擇點以 `Decision.Choice` 選擇。單段遊戲的報告、CSV、每次回呼收到的帳本與結果（含兩個快照）及決策，以施工前錄製的暫時基準逐位元組比對相同。
+
+| 項目 | 驗證 |
+| --- | --- |
+| 選擇點的帳本與一次結算 | `TestChoicePointLedgerAndSettlement`：選擇點收到「已付投注、尚未結算」的帳本與本段，局結束收到完整局與結算後帳本 |
+| 局中不破產 | `TestNoBustInsideAGame` |
+| 不合法的決策 | `TestInvalidDecisions`：沒有選擇、選擇點帶投注或離場、位置超出範圍、局界帶 `Choice`；`errors.Is` 判斷 cause |
+| runner 的錯誤 | `TestRunnerErrorsKeepTheirCause`：選擇後遊戲拒絕（`ErrGameRejected`）、段數上限（`ErrSegmentLimit`） |
+| 判定順序 | `TestSpinLimitBeforeWagerValidation`：到達局數上限時，不合法的投注仍以 capped 結束 |
+| 取消 | `TestCancelInsideNext`：在選擇點與局結束後的 `Next` 中取消 |
+| `max_segments` | `TestMaxSegmentsConfig`：整數驗證、負數拒絕、未設定時不出現在 JSON |
+| 真實遊戲 | `TestChoiceGamesWithBuiltinChoices`：demo_2（checkpoint）與 demo_3（A→B→A）以 first、last、iter 完整執行；每局結算一次；完整局中 game mode 重複時，tag 與事件只判定一次 |
+| 內建選法 | `TestSelectorIter`、`TestSelectorFirstLastUnset`、`TestMonotoneChoices` |
+| 範例 | `cmd/exp` 的 `TestConfigFlagAndChoiceExamples`：`-config` 與 game 2、3 的範例設定 |

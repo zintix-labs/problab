@@ -5,6 +5,7 @@ package v2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -22,6 +23,9 @@ type rgsReplay struct {
 
 // Only definite source/result mismatches are representation failures. Unknown
 // third-party Restore/Snapshot errors remain operational and keep their chain.
+// errRGSUnfinishedSegment 表示重播的結果需要續段；RGS 輸出只支援一段就結束的遊戲。
+var errRGSUnfinishedSegment = errors.New("rgs replay: unfinished segment result; multi-segment games are not supported")
+
 type rgsReplayMismatch struct{ message string }
 
 func (e *rgsReplayMismatch) Error() string { return e.message }
@@ -45,8 +49,6 @@ func (r *rgsReplay) spin(ctx context.Context, snapshot []byte, win float64) (*bu
 	if len(snapshot) != r.snapshotLength {
 		return nil, &rgsReplayMismatch{message: fmt.Sprintf("snapshot length=%d want=%d", len(snapshot), r.snapshotLength)}
 	}
-	request := r.machine.SpinRequest
-	request.Choice, request.HasChoice, request.Cycle, request.StartState = 0, false, 0, nil
 	if r.previous != nil && r.previous.State != nil {
 		r.previous.State.StartCoreSnap, r.previous.State.AfterCoreSnap, r.previous.State.Checkpoint = nil, nil, nil
 	}
@@ -56,13 +58,17 @@ func (r *rgsReplay) spin(ctx context.Context, snapshot []byte, win float64) (*bu
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	result := r.machine.SpinInternal(r.mode)
+	result := r.machine.SpinUnsafe(problab.SpinInput{BetMode: r.mode, BetMult: 1})
 	r.previous = result
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if result == nil || result.Bet <= 0 || result.Bet != r.bet || result.BetMode != r.mode || result.BetMult != 1 || result.TotalWin < 0 {
 		return nil, &rgsReplayMismatch{message: "invalid replay result or bet identity"}
+	}
+	if !result.IsGameEnd {
+		// RGS 只交付單段遊戲；未結束的段不能當成一局輸出。
+		return nil, errRGSUnfinishedSegment
 	}
 	actual := float64(result.TotalWin) / float64(result.Bet)
 	if !isFinite(actual) || actual != win {

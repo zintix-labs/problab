@@ -15,7 +15,10 @@
 package stats_test
 
 import (
+	"encoding/json"
 	"math"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/zintix-labs/problab/spec"
@@ -40,6 +43,10 @@ func buildStatReport(betUnit int, wins []int) *stats.StatReport {
 	}
 
 	totalBet := betUnit * len(wins)
+	// Std 由 Recorder 填入；這裡以平方和直接算出，作為報表的輸入。
+	n := float64(len(wins))
+	sum, sq := float64(totalWin)/float64(betUnit), float64(totalWinSq)/float64(betUnit*betUnit)
+	std := math.Sqrt(max0((sq - sum*sum/n) / (n - 1)))
 	report := &stats.StatReport{
 		Summary: &stats.SummaryReport{
 			GameName:    "TestGame",
@@ -55,13 +62,12 @@ func buildStatReport(betUnit int, wins []int) *stats.StatReport {
 			Trigger:     0,
 			NoWinRounds: twc[0],
 			Rounds:      len(wins),
+			Std:         std,
 		},
 		Mult: &stats.MultReport{
-			TotalWinMult:      float64(totalWin) / float64(betUnit),
-			BaseWinMult:       float64(totalWin) / float64(betUnit),
-			FreeWinMult:       0,
-			TotalWinMultSqSum: float64(totalWinSq) / float64(betUnit*betUnit),
-			BaseWinMultSqSum:  float64(totalWinSq) / float64(betUnit*betUnit),
+			TotalWinMult: float64(totalWin) / float64(betUnit),
+			BaseWinMult:  float64(totalWin) / float64(betUnit),
+			FreeWinMult:  0,
 		},
 		Dist: &stats.DistReport{
 			WinBucket:       stats.Buckets.WinBucketStr(),
@@ -112,9 +118,17 @@ func TestStatReportCoreMetrics(t *testing.T) {
 		t.Fatalf("distribution total %d != rounds %d", totalRounds, rep.Summary.Rounds)
 	}
 
+	before := *rep.Summary
 	rep.Done() // idempotent
-	if rep.Rtp() != wantRTP {
-		t.Fatalf("RTP changed after second Done")
+	if !reflect.DeepEqual(*rep.Summary, before) {
+		t.Fatalf("summary changed after second Done")
+	}
+	raw, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "SqSum") || !strings.Contains(string(raw), `"BaseCv"`) || !strings.Contains(string(raw), `"FreeCv"`) {
+		t.Fatalf("report JSON %s", raw)
 	}
 }
 

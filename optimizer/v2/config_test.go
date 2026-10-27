@@ -15,6 +15,7 @@
 package v2
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -44,7 +45,7 @@ plans:
       evaluator: none
       max_candidates: 1
     output:
-      format: [optimal_artifact_v1]
+      format: [optimal_gacha]
       directory: build/optimizer
 
 intents:
@@ -117,7 +118,7 @@ func TestLoadConfigStrictAndResolve(t *testing.T) {
 	if config.Plans[0].Engine != EngineIntentLPV2 {
 		t.Fatalf("Engine = %q, want %q", config.Plans[0].Engine, EngineIntentLPV2)
 	}
-	if !slices.Equal(config.Plans[0].Output.Format, []OutputFormat{OutputOptimalArtifactV1}) {
+	if !slices.Equal(config.Plans[0].Output.Format, []OutputFormat{OutputOptimalGacha}) {
 		t.Fatalf("output formats=%v", config.Plans[0].Output.Format)
 	}
 	if got := config.EngineOptions.MainGroupInternalVisibilityBisectionIterations; got != 60 {
@@ -151,7 +152,7 @@ func TestLoadConfigStrictAndResolve(t *testing.T) {
 	if resolved.Plan.Target.BetModes[0] != 0 {
 		t.Fatalf("resolved bet mode aliased Config: got %d", resolved.Plan.Target.BetModes[0])
 	}
-	if !slices.Equal(resolved.Plan.Output.Format, []OutputFormat{OutputOptimalArtifactV1}) {
+	if !slices.Equal(resolved.Plan.Output.Format, []OutputFormat{OutputOptimalGacha}) {
 		t.Fatalf("resolved output formats aliased Config: %v", resolved.Plan.Output.Format)
 	}
 	if resolved.EngineOptions.MainGroupInternalVisibilityBisectionIterations != 60 {
@@ -255,25 +256,28 @@ func TestResolvePlanDeepCopiesCollectedSeedAndHashIncludesOrder(t *testing.T) {
 	}
 }
 
-func TestLoadConfigAcceptsBothOutputFormatsInDeclarationOrder(t *testing.T) {
-	raw := strings.Replace(
-		validConfigYAML,
-		"format: [optimal_artifact_v1]",
-		"format: [optimal_gacha, optimal_artifact_v1]",
-		1,
-	)
+func TestLoadConfigKeepsOutputFormatDeclarationOrder(t *testing.T) {
+	raw := strings.Replace(validConfigYAML, "format: [optimal_gacha]", "format: [rgs-collected, optimal_gacha]", 1)
 	config, err := ParseConfig([]byte(raw))
 	if err != nil {
 		t.Fatalf("ParseConfig() error = %v", err)
 	}
-	want := []OutputFormat{OutputOptimalGacha, OutputOptimalArtifactV1}
+	want := []OutputFormat{OutputRGSCollected, OutputOptimalGacha}
 	if !slices.Equal(config.Plans[0].Output.Format, want) {
 		t.Fatalf("output formats=%v, want %v", config.Plans[0].Output.Format, want)
 	}
 }
 
+// 已移除的 optimal_artifact_v1 以明確的訊息指向 optimal_gacha。
+func TestLoadConfigRejectsRemovedArtifactV1Format(t *testing.T) {
+	raw := strings.Replace(validConfigYAML, "format: [optimal_gacha]", "format: [optimal_artifact_v1]", 1)
+	if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), "optimal_artifact_v1 was removed; use optimal_gacha") {
+		t.Fatalf("removed format error=%v", err)
+	}
+}
+
 func TestLoadConfigRejectsScalarOutputFormat(t *testing.T) {
-	raw := strings.Replace(validConfigYAML, "format: [optimal_artifact_v1]", "format: optimal_artifact_v1", 1)
+	raw := strings.Replace(validConfigYAML, "format: [optimal_gacha]", "format: optimal_gacha", 1)
 	if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
 		t.Fatalf("scalar output format error=%v", err)
 	}
@@ -666,4 +670,101 @@ func updateClass(config *Config, index int, update func(*ClassIntent)) {
 	intent := config.Intents["high-win-v2"]
 	update(&intent.Classes[index])
 	config.Intents["high-win-v2"] = intent
+}
+
+// withTargetInput inserts raw YAML under plans[0].target of validConfigYAML.
+func withTargetInput(raw string) string {
+	return strings.Replace(validConfigYAML, "      bet_modes: [0]\n", "      bet_modes: [0]\n"+raw, 1)
+}
+
+func TestLoadConfigAcceptsTargetInput(t *testing.T) {
+	config, err := ParseConfig([]byte(withTargetInput("      input:\n        choose_next: [3, 7]\n        choice: 0\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := config.Plans[0].Target.Input
+	if input == nil || !slices.Equal(input.ChooseNext, []int{3, 7}) || input.Choice == nil || *input.Choice != 0 || input.Entry() != 3 {
+		t.Fatalf("input %+v", input)
+	}
+	resolved, err := config.ResolvePlan("demo-high-win-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.ChooseNext[0], *input.Choice = 99, 1
+	if got := resolved.Plan.Target.Input; got.ChooseNext[0] != 3 || *got.Choice != 0 {
+		t.Fatalf("ResolvePlan aliased target.input: %+v", got)
+	}
+	raw, err := json.Marshal(resolved.Plan.Target)
+	if err != nil || !strings.Contains(string(raw), `"input":{"choose_next":[3,7],"choice":0}`) {
+		t.Fatalf("target JSON %s: %v", raw, err)
+	}
+}
+
+// Without target.input the target JSON, and so the config hash, has no input key.
+func TestTargetWithoutInputOmitsItFromJSON(t *testing.T) {
+	config, err := ParseConfig([]byte(validConfigYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(config.Plans[0].Target)
+	if err != nil || strings.Contains(string(raw), "input") {
+		t.Fatalf("target JSON %s: %v", raw, err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidTargetInput(t *testing.T) {
+	for name, c := range map[string]struct{ raw, want string }{
+		"empty value":      {"      input:\n", "target.input: must not be null"},
+		"tilde":            {"      input: ~\n", "target.input: must not be null"},
+		"null":             {"      input: null\n", "target.input: must not be null"},
+		"empty mapping":    {"      input: {}\n", "target.input.choose_next: must list"},
+		"missing choice":   {"      input: {choose_next: [3]}\n", "target.input.choice: is required"},
+		"null choice":      {"      input: {choose_next: [3], choice: null}\n", "target.input.choice: is required"},
+		"choice too large": {"      input: {choose_next: [3, 7], choice: 2}\n", "must be in [0, 2), got 2"},
+		"negative choice":  {"      input: {choose_next: [3, 7], choice: -1}\n", "must be in [0, 2), got -1"},
+		"unknown cycle":    {"      input: {choose_next: [3], choice: 0, cycle: 1}\n", "field cycle not found"},
+		"unknown cp":       {"      input: {choose_next: [3], choice: 0, checkpoint: x}\n", "field checkpoint not found"},
+		"float entry":      {"      input: {choose_next: [3.7, 7], choice: 0}\n", "choose_next[0]: must be an integer"},
+		"float choice":     {"      input: {choose_next: [3, 7], choice: 0.9}\n", "choice: must be an integer"},
+		"whole float":      {"      input: {choose_next: [3, 7], choice: 1.0}\n", "choice: must be an integer"},
+		"string choice":    {"      input: {choose_next: [3, 7], choice: '1'}\n", "cannot unmarshal"},
+	} {
+		if _, err := ParseConfig([]byte(withTargetInput(c.raw))); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error %v, want %q", name, err, c.want)
+		}
+	}
+}
+
+func TestLoadConfigRejectsRGSOutputWithTargetInput(t *testing.T) {
+	for _, format := range []string{"rgs-optimized", "rgs-collected"} {
+		raw := strings.Replace(withTargetInput("      input: {choose_next: [3], choice: 0}\n"),
+			"format: [optimal_gacha]", "format: [optimal_gacha, "+format+"]", 1)
+		if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), "not supported when target.input is set") {
+			t.Errorf("%s: error %v", format, err)
+		}
+	}
+}
+
+// The node check follows "<<" merge keys the way the decoder does, so merged
+// values cannot bypass it; a key written in the mapping still wins over a
+// merged one, as in the decoder.
+func TestLoadConfigChecksMergedTargetInput(t *testing.T) {
+	for name, c := range map[string]struct{ raw, want string }{
+		"merged into input":  {"      input:\n        <<: {choose_next: [3.7, 7], choice: 0}\n", "choose_next[0]: must be an integer"},
+		"merged choice":      {"      input:\n        <<: {choose_next: [3, 7], choice: 0.9}\n", "choice: must be an integer"},
+		"merged null input":  {"      <<: {input: null}\n", "target.input: must not be null"},
+		"merged into target": {"      <<: {input: {choose_next: [3.7], choice: 0}}\n", "choose_next[0]: must be an integer"},
+		"first merge wins":   {"      input:\n        <<: [{choice: 0.9}, {choice: 0}]\n        choose_next: [3, 7]\n", "choice: must be an integer"},
+	} {
+		if _, err := ParseConfig([]byte(withTargetInput(c.raw))); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error %v, want %q", name, err, c.want)
+		}
+	}
+	config, err := ParseConfig([]byte(withTargetInput("      input:\n        <<: {choice: 0.9}\n        choice: 1\n        choose_next: [3, 7]\n")))
+	if err != nil {
+		t.Fatalf("an explicit choice over a merged one was rejected: %v", err)
+	}
+	if input := config.Plans[0].Target.Input; input == nil || *input.Choice != 1 {
+		t.Fatalf("input %+v", input)
+	}
 }

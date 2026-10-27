@@ -40,7 +40,7 @@ func TestCalculatorsExcludeNegativeCells(t *testing.T) {
 		t.Run(tc.mode, func(t *testing.T) {
 			gms := buildGameModeSetting(5, 1, tc.mode, [][]int16{{0, 0, 0, 0, 0}}, []string{"H1"}, [][]int{{0, 0, 7, 11, 19}})
 			sc := NewScreenCalculator(&gms)
-			gmr := buf.NewGameModeResult(0, &gms, 4, 4)
+			gmr := buf.NewGameModeResult(0, &gms, 4, 4, false)
 			before := slices.Clone(tc.screen)
 			sc.CalcScreen(1, tc.screen, gmr)
 			if gmr.GetTmpWin() != tc.want {
@@ -78,7 +78,7 @@ func buildGameModeSetting(cols, rows int, betType string, lineTable [][]int16, s
 func TestCalcByLine(t *testing.T) {
 	gms := buildGameModeSetting(5, 3, "line_ltr", [][]int16{{1, 1, 1, 1, 1}}, []string{"H1", "W1"}, [][]int{{0, 0, 0, 0, 9}, {0, 0, 0, 0, 0}})
 	sc := NewScreenCalculator(&gms)
-	gmr := buf.NewGameModeResult(0, &gms, 4, 4)
+	gmr := buf.NewGameModeResult(0, &gms, 4, 4, false)
 	maxIdx := int16(-1)
 	for _, v := range sc.LineTableFlat {
 		if v > maxIdx {
@@ -107,7 +107,7 @@ func TestCalcByLine(t *testing.T) {
 func TestCalcByWay(t *testing.T) {
 	gms := buildGameModeSetting(3, 1, "way_ltr", nil, []string{"H1"}, [][]int{{0, 3, 6}})
 	sc := NewScreenCalculator(&gms)
-	gmr := buf.NewGameModeResult(0, &gms, 4, 4)
+	gmr := buf.NewGameModeResult(0, &gms, 4, 4, false)
 	screen := []int16{0, 0, 0}
 
 	sc.CalcScreen(1, screen, gmr)
@@ -124,7 +124,7 @@ func TestCalcByWay(t *testing.T) {
 func TestCalcByCount(t *testing.T) {
 	gms := buildGameModeSetting(3, 1, "count", nil, []string{"H1", "W1"}, [][]int{{0, 0, 4}, {0, 0, 0}})
 	sc := NewScreenCalculator(&gms)
-	gmr := buf.NewGameModeResult(0, &gms, 4, 4)
+	gmr := buf.NewGameModeResult(0, &gms, 4, 4, false)
 	screen := []int16{0, 0, 1}
 
 	sc.CalcScreen(1, screen, gmr)
@@ -141,7 +141,7 @@ func TestCalcByCount(t *testing.T) {
 func TestCalcByCluster(t *testing.T) {
 	gms := buildGameModeSetting(2, 2, "cluster", nil, []string{"H1"}, [][]int{{0, 0, 5, 10}})
 	sc := NewScreenCalculator(&gms)
-	gmr := buf.NewGameModeResult(0, &gms, 4, 4)
+	gmr := buf.NewGameModeResult(0, &gms, 4, 4, false)
 	screen := []int16{0, 0, 0, 0}
 
 	sc.CalcScreen(1, screen, gmr)

@@ -18,6 +18,7 @@ import (
 	"github.com/zintix-labs/problab/corefmt"
 	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/errs"
+	"github.com/zintix-labs/problab/recorder"
 	"github.com/zintix-labs/problab/stats"
 )
 
@@ -25,12 +26,20 @@ import (
 //
 // 只提供給Dev模式使用的模擬器，單線(不併發)，重點在可審計、可重現
 type DevSimulator struct {
-	sim      *Simulator // 只開放Sim功能
-	m        *Machine   // 同步seed
-	before   []byte
-	after    []byte
-	before64 string
-	after64  string
+	sim *Simulator // 只開放Sim功能
+	m   *Machine   // 保留 Extend，供 Spins 使用
+	cfg betCfg     // Spins 的執行設定；Sim 使用 sim.cfg，兩者由 SetCfg 一起設定
+}
+
+// SetCfg 以 c 整份取代 Spins、RestoreSpins 與 Sim、RestoreSim 的執行設定；規則同
+// Simulator.SetCfg。
+func (d *DevSimulator) SetCfg(c BetConfig) error {
+	r, err := c.resolve()
+	if err != nil {
+		return err
+	}
+	d.cfg, d.sim.cfg = r, r
+	return nil
 }
 
 type DevSpinReport struct {
@@ -43,57 +52,73 @@ type DevSpinReport struct {
 	BaseWin  int              `json:"base_win"`
 	FreeWin  int              `json:"free_win"`
 	Results  []dto.SpinResult `json:"results"`
+	Choose   string           `json:"choose,omitempty"` // 選擇類遊戲自動選擇的方式；未指定時不輸出
 }
 
-func (d *DevSimulator) spinOne(betmode int) (dto.SpinResult, error) {
-	bu := d.m.gh.GameSetting.BetUnits
-	if betmode < 0 || betmode >= len(bu) {
-		return dto.SpinResult{}, errs.NewWarn("bet_mode out of range")
-	}
-	req := &dto.SpinRequest{
-		GameName: d.m.gameName,
-		GameId:   d.m.gameId,
-		BetMode:  betmode,
-		BetMult:  1,
-		Bet:      bu[betmode],
-	}
-	return d.m.Spin(req)
-}
-
+// Spins 從機台目前的位置連續執行 round 局，回傳每局結果與統計。每局經 BetRunner 依執行
+// 設定跑完整局並擷取快照，統計由 Recorder 計算；Before／After 是機台在整批前後的位置，
+// 可交給 RestoreSpins 重跑同一批。
 func (d *DevSimulator) Spins(betmode int, round int) (DevSpinReport, error) {
 	// 限制檢查
 	if round < 1 || round > 5000 {
 		return DevSpinReport{}, errs.NewWarn("round must be between 1 and 5,000")
 	}
+	m := d.m
+	if betmode < 0 || betmode >= len(m.BetUnits) {
+		return DevSpinReport{}, errs.Wrap(errs.NewWarn("bet_mode out of range"), "spin error")
+	}
+	rec, err := recorder.NewSpinRecorder(m.gameName, m.gameId, m.BetUnits, 0, betmode)
+	if err != nil {
+		return DevSpinReport{}, err
+	}
+	// PRNG 可以重用 Snapshot 的緩衝區，整批期間還會擷取快照，所以立即編碼。
+	be, err := m.SnapshotCore()
+	if err != nil {
+		return DevSpinReport{}, err
+	}
+	before := corefmt.EncodeBase64URL(be)
 
 	// spin
+	cfg := d.cfg
+	br, err := cfg.runner(m)
+	if err != nil {
+		return DevSpinReport{}, err
+	}
+	in := SpinInput{BetMode: betmode, BetMult: 1, CaptureSnapshots: true}
 	ds := make([]dto.SpinResult, 0, round)
-	for range round {
-		result, err := d.spinOne(betmode)
+	for i := range round {
+		res, err := playBet(br, &in, cfg.choose)
+		if err != nil {
+			if isSettingError(err) {
+				return DevSpinReport{}, &errs.E{ErrLv: errs.Warn, Message: "spin error", Cause: simFault(m.gameId, betmode, i, err)}
+			}
+			return DevSpinReport{}, errs.Wrap(err, "spin error")
+		}
+		rec.Record(res)
+		out, err := dto.NewSpinResultDTO(res)
 		if err != nil {
 			return DevSpinReport{}, errs.Wrap(err, "spin error")
 		}
-		ds = append(ds, result)
+		ds = append(ds, out)
 	}
-	// 統計
-	bet, win, base, free := 0, 0, 0, 0
-	for _, r := range ds {
-		bet += r.Bet
-		win += r.TotalWin
-		base += r.GameModes[0].TotalWin
-		free += (win - base)
+	af, err := m.SnapshotCore()
+	if err != nil {
+		return DevSpinReport{}, err
 	}
 
+	// 統計；RTP 維持百分比與原本的運算順序
+	b := rec.Basic
 	de := DevSpinReport{
-		Before:   ds[0].State.StartCoreSnapB64U,
-		After:    ds[len(ds)-1].State.AfterCoreSnapB64U,
+		Before:   before,
+		After:    corefmt.EncodeBase64URL(af),
 		Round:    len(ds),
-		Rtp:      100.0 * float64(win) / float64(bet),
-		TotalBet: bet,
-		TotalWin: win,
-		BaseWin:  base,
-		FreeWin:  free,
+		Rtp:      100.0 * float64(b.TotalWin) / float64(b.TotalBet),
+		TotalBet: b.TotalBet,
+		TotalWin: b.TotalWin,
+		BaseWin:  b.BaseWin,
+		FreeWin:  b.FreeWin,
 		Results:  ds,
+		Choose:   cfg.label(),
 	}
 	return de, nil
 }
@@ -129,8 +154,6 @@ func (d *DevSimulator) Sim(betmode int, round int) (DevSimReport, error) {
 		return DevSimReport{}, err
 	}
 	be64 := corefmt.EncodeBase64URL(be)
-	d.before = be
-	d.before64 = be64
 
 	// Spin
 	bu := d.m.gh.GameSetting.BetUnits
@@ -151,8 +174,6 @@ func (d *DevSimulator) Sim(betmode int, round int) (DevSimReport, error) {
 		return DevSimReport{}, err
 	}
 	af64 := corefmt.EncodeBase64URL(af)
-	d.after = af
-	d.after64 = af64
 
 	return DevSimReport{
 		Before: be64,
@@ -167,8 +188,6 @@ func (d *DevSimulator) RestoreSim(be64 string, betmode int, round int) (DevSimRe
 	if err != nil {
 		return DevSimReport{}, errs.Wrap(err, "decode seed failed")
 	}
-	d.before = be
-	d.before64 = be64
 
 	// restore
 	if err := d.sim.mBuf[0].RestoreCore(be); err != nil {

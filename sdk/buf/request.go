@@ -23,20 +23,29 @@ import "github.com/zintix-labs/problab/spec"
 // 購買模式的價格倍率 = BetUnits[BetMode] / BetUnits[0] （數學比值，非整數除法）。
 // 賠率表與 max_win_limit 以 BetMult=1 的金額定義（對應基礎投注額）
 // 算分時乘 BetMult，不乘購買模式的價格倍率。
+//
+// 交給遊戲的 SpinRequest 由 Machine 持有，並在每次執行前重設；遊戲只讀，且不得保留
+// 它或其內含參照。
+//
+// Machine 在呼叫遊戲前保證結構不變量：Cycle >= 0；Cycle 為 0 時 ChooseNext 為空、
+// Choice 為 0；Cycle > 0 時 ChooseNext 非空且 0 <= Choice < len(ChooseNext)。因此續段
+// 分支可以直接讀取 ChooseNext[Choice]。入口值與 Checkpoint 是否符合本遊戲此時的狀態，
+// 由遊戲自行判斷，不合法時回傳 nil。RNG 快照只供引擎選擇起點，不交給遊戲。
+//
+// 入口值（ChooseNext 的內容）由遊戲自訂，是續段 optimal 庫的身分：遊戲設定的
+// optimal_setting.modes[].after 以入口值為鍵，不要求從 0 開始或連續。配置了庫的入口，
+// 在同一遊戲邏輯、設定、BetMode 與投注條件下，續段結果只能取決於入口值與 seed：除了以
+// ChooseNext[Choice] 取得入口值，不得依賴 Choice、其他選項、Cycle（正整數）、Checkpoint
+// 或先前執行留下的狀態。沒有配置庫、照常使用 RNG 的入口不受此限。改變某個入口值的意義是
+// 相容性變更。
 type SpinRequest struct {
-	UID        string   // 唯一識別碼
 	GameName   string   // 要玩的遊戲
 	GameId     spec.GID // 遊戲機台編號
-	Bet        int      // 呼叫端提供的本次實際投注額，應符合 BetUnits[BetMode] * BetMult ；續局沿用，不表示再次扣款。
+	Bet        int      // 本次實際投注額，等於 BetUnits[BetMode] * BetMult；續段沿用第 0 段，不表示再次扣款。
 	BetMode    int      // 投注模式索引，對應 BetUnits。
 	BetMult    int      // 投注倍數，不包含購買模式的價格倍率。
-	Cycle      int      // 第幾段會話
-	Choice     int      // 玩家在本段（cycle）所做的選擇值（允許為 0）。
-	HasChoice  bool     // 是否有「提供選擇」。
-	StartState *StartState
-}
-
-type StartState struct {
-	StartCoreSnap []byte
-	Checkpoint    any
+	Cycle      int      // 第幾段，0 為新局
+	Choice     int      // ChooseNext 的位置索引；Cycle 為 0 時為 0
+	ChooseNext []int    // 上一段結果的選項（入口值）；Cycle 為 0 時為空。由 Machine 複製
+	Checkpoint any      // 上一段結果輸出的 checkpoint；唯讀，不得保留參照
 }

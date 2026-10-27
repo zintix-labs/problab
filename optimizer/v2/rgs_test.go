@@ -26,7 +26,6 @@ import (
 	"github.com/zintix-labs/problab/corefmt"
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/dto"
-	"github.com/zintix-labs/problab/sdk/buf"
 )
 
 func rgsTestTuner(t *testing.T, base RunResult, formats []OutputFormat, options ...TunerOption) *Tuner {
@@ -78,7 +77,7 @@ func readRGSJSON(t *testing.T, path string) [][]byte {
 
 func TestRGSRoutingAndPairing(t *testing.T) {
 	base := runCompleteProductionPipeline(t, Int64Seed(4127483647), "rgs-routing")
-	for _, formats := range [][]OutputFormat{{OutputRGSCollected}, {OutputRGSOptimized}, {OutputOptimalGacha, OutputRGSOptimized, OutputRGSCollected, OutputOptimalArtifactV1}} {
+	for _, formats := range [][]OutputFormat{{OutputRGSCollected}, {OutputRGSOptimized}, {OutputOptimalGacha, OutputRGSOptimized, OutputRGSCollected}} {
 		t.Run(fmt.Sprint(formats), func(t *testing.T) {
 			calls := 0
 			recorder := &recordingReporter{}
@@ -341,10 +340,6 @@ func TestRGSIdentityReplayStateAndExactPayout(t *testing.T) {
 		snapshot := bank[i*replay.snapshotLength : (i+1)*replay.snapshotLength]
 		if replay.previous != nil {
 			replay.previous.State.Checkpoint = json.RawMessage(`{"old":true}`)
-			replay.machine.SpinRequest.Choice = 99
-			replay.machine.SpinRequest.HasChoice = true
-			replay.machine.SpinRequest.Cycle = 4
-			replay.machine.SpinRequest.StartState = &buf.StartState{Checkpoint: "stale"}
 		}
 		actual, e := replay.spin(context.Background(), snapshot, rows[i].WinMultiplier)
 		if e != nil {

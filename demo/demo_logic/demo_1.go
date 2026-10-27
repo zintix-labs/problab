@@ -63,7 +63,7 @@ func buildGame0001(g *slot.Game) (slot.GameLogic, error) {
 	fix.screenFillPos = make([]int, g.GameSetting.GameModeSettings[0].ScreenSetting.Columns)
 	fix.symbolTypes = g.GameSetting.GameModeSettings[0].SymbolSetting.SymbolTypes
 	g1 := &game0001{fixed: fix}
-	g1.ext = g1.newext(g.GameSetting.GameModeSettings[0].ScreenSetting.ScreenSize, g.IsSim)
+	g1.ext = g1.newext(g.GameSetting.GameModeSettings[0].ScreenSetting.ScreenSize, g.OmitExtend())
 	return g1, nil
 }
 

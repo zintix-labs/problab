@@ -16,7 +16,6 @@ package problab
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 
 	"github.com/zintix-labs/problab/dto"
@@ -36,12 +35,18 @@ import (
 //   - 對內：持有 RNG（Core）與真正執行遊戲邏輯的核心（sdk/slot.Game）。
 //
 // 並發語意：
-//   - Machine 預設不是 lock-free 結構；它內含可重用的 request/result buffer（熱路徑），因此同一台 Machine 不應被多 goroutine 同時 Spin。
+//   - Machine 預設不是 lock-free 結構；它持有可重用的請求、結果與快照緩衝區（熱路徑），因此同一台 Machine 不應被多 goroutine 同時執行。
+//   - Spin 會上鎖；SpinUnsafe 不上鎖，呼叫端必須保證獨占同一台 Machine。
 //   - 若要併發模擬，由更高層建立多台 Machine 分散到不同 worker 並管理其生命週期。
 //
 // Buffer 語意（非常重要，影響 DX 與正確性）：
-//   - SpinRequest / SpinResult 會被重用（避免 GC），每次 Spin 會覆寫內容。
-//   - 你若需要在 Spin 後保留結果，請在離開臨界區前轉成 DTO（或自行 copy 你需要的欄位）。
+//   - Machine 持有交給遊戲的請求，每次執行前重設；遊戲不得保留請求的參照。
+//   - 結果與快照緩衝區會被重用（避免 GC），每次執行會覆寫內容。
+//   - 你若需要在執行後保留結果，請在下一次呼叫前轉成 DTO（或自行 copy 你需要的欄位）。
+//
+// 錯誤語意：可預期的輸入錯誤以 error 回傳；內部執行故障以 panic 呈現，由最外層執行邊界
+// （MachinePool，或離線工具自己的工作迴圈）處理。RNG 恢復失敗後 Machine 不可再用；遊戲
+// panic 後，即使 RNG 已還原，Machine 也不保證可以繼續使用。
 //
 // Gacha is the legacy JSON compatibility shape for optimizer.Gacha.
 // Deprecated: runtime Machines use the immutable internal Artifact instead.
@@ -66,24 +71,29 @@ type OptimalRuntime struct {
 }
 
 type Machine struct {
-	// Offline buffers are borrowed until the next call, protected by mu.
-	// Keep selector/start, selected seed and after-state storage disjoint:
-	// third-party PRNG snapshots may alias their own reusable scratch buffer.
-	offlineRequest                          buf.SpinRequest
-	offlineState                            buf.SpinState
-	offlineStart, offlineSeed, offlineAfter []byte
-	gameName                                string              // 遊戲名稱（來自 GameSetting.GameName，主要用於觀測/日誌）
-	gameId                                  spec.GID            // 遊戲 ID（Catalog 內唯一；用於路由與查表）
-	core                                    *core.Core          // RNG 核心（PRNG + Snapshot/Restore 合約；熱路徑會頻繁取樣）
-	gh                                      *slot.Game          // 遊戲執行核心（Slot 邏輯入口；由 LogicRegistry + GameSetting 組裝）
-	BetUnits                                []int               // 押注單位（由遊戲設定衍生；通常給外部列舉 UI/測試）
-	SpinRequest                             *buf.SpinRequest    // 可重用的請求 buffer（每次 Spin 會覆寫/填充）
-	SpinResult                              *buf.SpinResult     // 可重用的結果 buffer（熱路徑；每次 Spin 會覆寫）
-	mu                                      sync.Mutex          // 防併發鎖：保護可重用 buffers 與核心狀態一致性
-	rngMode                                 rngMode             // deterministic 或 production new-cycle reseed lifecycle
-	poolSlot                                uint64              // MachinePool 的穩定 slot identity；非 pool Machine 為 0
-	poolGen                                 uint64              // 此 slot 的重建 generation；非 pool Machine 為 0
-	optimal                                 *optimalrt.Artifact // Problab instance 共用的不可變優化資料
+	// 請求與快照緩衝區由 Machine 持有，借用到下一次呼叫為止。
+	// restoreBuf、reqSnap、seedBuf、startBuf、afterBuf 必須是彼此獨立的底層陣列：
+	// 第三方 PRNG 的 snapshot 可能重用自己的緩衝區，artifact 的 bank 則是唯讀的共用資料。
+	spinRequest   buf.SpinRequest // 交給遊戲的請求；每次執行前以 fillSegment 整份寫入
+	reqChooseNext []int           // spinRequest.ChooseNext 的底層陣列（輸入的複製）
+	reqSnap       []byte          // 本段的指定起始快照（外部快照或 SpinInput.StartSnap），不交給遊戲
+	seedBuf       []byte          // 抽出的 seed
+	restoreBuf    []byte          // 恢復點
+	startBuf      []byte          // 不指定起點時擷取的起始快照
+	afterBuf      []byte          // 結束快照
+	fallbackState buf.SpinState   // 遊戲回傳的結果 State 為 nil 時使用
+	faulted       bool            // RNG 恢復失敗後為 true；Spin 會主動檢查並 panic，SpinUnsafe 不檢查（由呼叫端棄用機台）
+
+	gameName string              // 遊戲名稱（來自 GameSetting.GameName，主要用於觀測/日誌）
+	gameId   spec.GID            // 遊戲 ID（Catalog 內唯一；用於路由與查表）
+	core     *core.Core          // RNG 核心（PRNG + Snapshot/Restore 合約；熱路徑會頻繁取樣）
+	gh       *slot.Game          // 遊戲執行核心（Slot 邏輯入口；由 LogicRegistry + GameSetting 組裝）
+	BetUnits []int               // 押注單位（由遊戲設定衍生；通常給外部列舉 UI/測試）
+	mu       sync.Mutex          // 防併發鎖：保護可重用 buffers 與核心狀態一致性
+	rngMode  rngMode             // deterministic 或 production new-cycle reseed lifecycle
+	poolSlot uint64              // MachinePool 的穩定 slot identity；非 pool Machine 為 0
+	poolGen  uint64              // 此 slot 的重建 generation；非 pool Machine 為 0
+	optimal  *optimalrt.Artifact // Problab instance 共用的不可變優化資料
 }
 
 type rngMode uint8
@@ -93,16 +103,22 @@ const (
 	rngProduction
 )
 
-// newMachineWithSeed 以指定 opaque byte seed 建立 Machine。
+// newMachine 是 Machine 的私有建構核心：所有建構入口（公開入口、
+// Simulator worker、MachinePool、測試輔助函式）最後都經由它建立 Machine。
 //
-// 這是最常用的「可重現」入口：同一份 GameSetting + 同一個 seed，應能得到一致的隨機序列（取決於 Core 實作）。
+// 它不推導政策：RNG 政策（mode）與 Extend 省略政策（omitExtend）由呼叫者決定，
+// 呼叫者也負責維持取設定、resolveOptimal、產生 seed 的先後順序。
 //
-// 建立流程（概念）：
-//  1. cf.New(seed) + core.New(...) 建出 RNG 核心
-//  2. slot.NewGame(gs, reg, core, isSim) 依設定 + registry 建出 Slot 遊戲執行核心
-//  3. 初始化 Machine 需要的 buffers（SpinRequest/SpinResult）
-//  4. 如果啟用優化（UseOptimal = true），使用 Problab 預先解析的共用 Artifact
-func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, isSim bool, optimal *optimalrt.Artifact, mode rngMode) (*Machine, error) {
+// 建立流程：
+//  1. 檢查不變條件：production 必須保留 Extend（正式回應需要完整 Extend）
+//  2. cf.New(seed) + core.New(...) 建出 RNG 核心
+//  3. slot.NewGame(gs, reg, core, omitExtend) 依設定 + registry 建出 Slot 遊戲執行核心
+//  4. 填好請求基底（GameId、GameName）
+//  5. 如果啟用優化（UseOptimal = true），使用 Problab 預先解析的共用 Artifact
+func newMachine(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFactory, seed []byte, omitExtend bool, optimal *optimalrt.Artifact, mode rngMode) (*Machine, error) {
+	if mode == rngProduction && omitExtend {
+		return nil, errs.NewFatal("production machine must not omit Extend")
+	}
 	seed = append([]byte(nil), seed...)
 	rng, err := cf.New(seed)
 	if err != nil {
@@ -112,23 +128,18 @@ func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.P
 		return nil, errs.NewFatal("core factory returned nil PRNG")
 	}
 	m := &Machine{
-		gameName:    gs.GameName,
-		gameId:      spec.GID(gs.GameID),
-		core:        core.New(rng),
-		gh:          nil,
-		BetUnits:    nil,
-		SpinRequest: nil,
-		SpinResult:  nil,
-		rngMode:     mode,
-		optimal:     optimal,
+		gameName: gs.GameName,
+		gameId:   spec.GID(gs.GameID),
+		core:     core.New(rng),
+		rngMode:  mode,
+		optimal:  optimal,
 	}
-	m.gh, err = slot.NewGame(gs, reg, m.core, isSim)
+	m.gh, err = slot.NewGame(gs, reg, m.core, omitExtend)
 	if err != nil {
 		return nil, err
 	}
 	m.BetUnits = m.gh.BetUnits
-	m.SpinRequest = &buf.SpinRequest{}
-	m.SpinResult = m.gh.SpinResult
+	m.resetSpinRequest()
 
 	if gs.OptimalSetting.UseOptimal && optimal == nil {
 		return nil, errs.NewFatal("resolved optimal artifact is required when use_optimal=true")
@@ -137,186 +148,138 @@ func newMachineWithSeed(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.P
 	return m, nil
 }
 
-// Spin 為主要公開入口，會驗證投注請求，執行遊戲並回傳Spin結果。
+// Spin 為主要公開入口，會驗證投注請求，執行一段遊戲並回傳該段的結果。
+//
+// 可預期的輸入錯誤回傳 errs.Warn：請求驗證、DTO 解析、被 PRNG 拒絕的外部起始快照、
+// 違反結構不變量的續段請求（ErrSegmentInput）、續段的入口沒有配置在 optimal 設定中
+// （ErrContinuationUnsupported），以及遊戲拒絕請求（ErrGameRejected）。後三者可以
+// errors.Is 判斷。production reseed 失敗回傳 errs.Fatal。其他內部執行故障以 panic 呈現，
+// 由 MachinePool 汰換機台；RNG 恢復失敗後 Machine 不可再用。
 func (m *Machine) Spin(r *dto.SpinRequest) (dto.SpinResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.checkUsable()
+	m.resetSpinRequest()
 
 	// 1. 校驗請求合法性
 	if err := m.valid(r); err != nil {
-		// 實作err代碼
 		return dto.SpinResult{}, err
 	}
-	// 2. parse dto to inner spin request
-	req, err := r.Parse(m.gh.GameSetting.LogicKey)
+	// 2. 解析 DTO，填入 Machine 持有的請求（GameId、GameName 保留機台值）
+	p, err := r.Parse(m.gh.GameSetting.LogicKey)
 	if err != nil {
 		return dto.SpinResult{}, err
 	}
+	m.fillSegment(r.BetMode, r.BetMult, p.Cycle, p.Choice, p.ChooseNext, p.Checkpoint, p.StartSnap)
 
-	isNewCycle := req.StartState == nil || len(req.StartState.StartCoreSnap) == 0
-	if isNewCycle && m.rngMode == rngProduction {
-		if err := m.core.Reseed(); err != nil {
-			return dto.SpinResult{}, errs.NewFatal("reseed PRNG before new game cycle: " + err.Error())
-		}
-	}
-
-	// 2.5. 優化邏輯：如果新局且啟用優化，從 Gacha 中 Pick 並設置 StartCoreSnap
-	if isNewCycle {
-		// 新局，且外部沒有指定 StartCoreSnap
-		if m.optimal != nil {
-			// 有開啟優化
-			betMode := r.BetMode
-			seed, err := m.optimal.PickSeed(betMode, m.core)
-			if err != nil {
-				return dto.SpinResult{}, errs.NewWarn(err.Error())
-			}
-
-			// 設置到 StartState
-			if req.StartState == nil {
-				req.StartState = &buf.StartState{}
-			}
-			// SpinResult 會把起始快照交給外部，因此不能直接暴露共用 bank。
-			req.StartState.StartCoreSnap = append(req.StartState.StartCoreSnap[:0], seed...)
-		}
-	}
-
-	// 3. get start snapshot
-	startsnap, err := m.SnapshotCore()
+	// 3. 執行一段：外部快照（回放）；否則 production 先 reseed，optimal 開啟時抽庫
+	sr, err := m.execSegment(segmentOpts{
+		external:    len(p.StartSnap) != 0,
+		reseed:      m.rngMode == rngProduction,
+		capture:     true,
+		checkOutput: true,
+	})
 	if err != nil {
-		return dto.SpinResult{}, errs.NewFatal("before snapshot error " + err.Error())
-	}
-	rem := startsnap
-	if req.StartState != nil && len(req.StartState.StartCoreSnap) != 0 {
-		startsnap = req.StartState.StartCoreSnap
-		if err := m.RestoreCore(req.StartState.StartCoreSnap); err != nil {
-			return dto.SpinResult{}, errs.NewWarn("restore core err " + err.Error())
-		}
+		return dto.SpinResult{}, spinError(err)
 	}
 
-	// 4. get inner spinResult
-	sr := m.gh.GetResult(req)
-
-	// 5. get after snapshot
-	aftersnap, err := m.SnapshotCore()
+	// 4. 轉成 DTO（複製），補上入口回填的欄位
+	res, err := dto.NewSpinResultDTO(sr)
 	if err != nil {
-		if e := m.RestoreCore(rem); e != nil {
-			return dto.SpinResult{}, errs.NewFatal("fall back err " + e.Error())
-		}
-		return dto.SpinResult{}, errs.NewWarn("after snapshot error " + err.Error())
+		return res, err
 	}
-	state := sr.State
-	state.StartCoreSnap = startsnap
-	state.AfterCoreSnap = aftersnap
-
-	// 6. restore if needed
-	if req.StartState != nil && len(req.StartState.StartCoreSnap) != 0 {
-		if err := m.RestoreCore(rem); err != nil {
-			return dto.SpinResult{}, errs.NewFatal("restore core back err " + err.Error())
-		}
+	res.BetID = p.BetID
+	if p.HasChoice {
+		choice := p.Choice
+		res.Choice = &choice
 	}
-
-	// 7. dto
-	return dto.NewSpinResultDTO(sr)
+	return res, nil
 }
 
-// SpinInternal 直接取得內部 SpinResult；常用於模擬器或測試
-//
-// 請勿在正式環境使用
-//
-// 此行為跳過所有檢查，並只使用預設1單位下注
-// 如果啟用優化，會從 Gacha 中 Pick 種子並先設置 Core 狀態
-func (m *Machine) SpinInternal(betMode int) *buf.SpinResult {
-	// 優化邏輯：如果啟用優化，從 Gacha 中 Pick 並設置 Core
-	if m.optimal != nil {
-		if seed, err := m.optimal.PickSeed(betMode, m.core); err == nil {
-			snap, _ := m.SnapshotCore()
-			defer func() { _ = m.RestoreCore(snap) }()
-			_ = m.RestoreCore(seed)
-		}
+// spinError 把單段執行的錯誤轉成 Spin 的錯誤。既有的錯誤維持原本的訊息與等級；新增的
+// 拒絕以 errs.Warn 承載，Cause 為可以 errors.Is 判斷的 sentinel。
+func spinError(err error) error {
+	var rejected *startRejected
+	switch {
+	case errors.As(err, &rejected):
+		return errs.NewWarn("restore core err " + rejected.err.Error())
+	case errors.Is(err, ErrSegmentInput), errors.Is(err, ErrContinuationUnsupported), errors.Is(err, ErrGameRejected):
+		return &errs.E{ErrLv: errs.Warn, Message: "spin request rejected", Cause: err}
+	default:
+		return err
 	}
-
-	m.SpinRequest.BetMode = betMode
-	m.SpinRequest.BetMult = 1
-	m.SpinRequest.Bet = m.BetUnits[betMode]
-	return m.gh.GetResult(m.SpinRequest)
 }
 
-// UsesOptimal reports the loaded runtime source, not merely a config flag.
+// UsesOptimal reports whether optimal routing is on for this Machine, from the
+// loaded runtime source rather than the config flag. Some segments may still
+// run on the machine RNG when their slot has no gacha.
 func (m *Machine) UsesOptimal() bool { return m.optimal != nil }
 
-// SpinOffline executes a deterministic new spin with a validated wager. It is
-// for sequential offline tools, not production requests or checkpoint recovery.
-// The result and its nested buffers are borrowed until the next Machine call.
-// Callers must not share this Machine or retain/mutate its borrowed result.
-func (m *Machine) SpinOffline(betMode, betMult int) (result *buf.SpinResult, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.rngMode != rngDeterministic {
-		return nil, fmt.Errorf("SpinOffline requires a deterministic machine")
-	}
-	if betMode < 0 || betMode >= len(m.BetUnits) || betMult <= 0 {
-		return nil, fmt.Errorf("invalid offline wager: mode=%d mult=%d", betMode, betMult)
-	}
-	unit := m.BetUnits[betMode]
-	if unit <= 0 || betMult > int(^uint(0)>>1)/unit {
-		return nil, fmt.Errorf("invalid or overflowing offline wager")
-	}
-	m.offlineRequest = buf.SpinRequest{GameId: m.gameId, GameName: m.gameName,
-		BetMode: betMode, BetMult: betMult, Bet: unit * betMult}
-	req := &m.offlineRequest
-	var seed []byte
-	if m.optimal != nil {
-		seed, err = m.optimal.PickSeed(betMode, m.core)
-		if err != nil {
-			return nil, fmt.Errorf("pick optimal seed: %w", err)
-		}
-		m.offlineSeed = append(m.offlineSeed[:0], seed...)
-		seed = m.offlineSeed
-	}
-	start, err := m.SnapshotCore()
+// OmitExtend 回傳此 Machine 的 Extend 省略政策（true 表示結果不含 Extend）。
+func (m *Machine) OmitExtend() bool { return m.gh.OmitExtend() }
+
+// 單段執行的拒絕原因。執行前的拒絕（ErrSegmentInput、ErrStartSnapshotRejected、
+// ErrContinuationUnsupported）不改變 RNG 與 Machine 狀態；ErrGameRejected 發生在遊戲執行
+// 之後，RNG 可能已消耗（指定快照或抽庫時由恢復守衛還原）。
+var (
+	// ErrSegmentInput 表示輸入違反結構不變量：Cycle < 0；Cycle 為 0 卻帶選項或 Choice；
+	// Cycle > 0 卻沒有選項，或 Choice 不在 [0, len(ChooseNext)) 內。
+	ErrSegmentInput = errors.New("invalid segment input")
+	// ErrStartSnapshotRejected 表示指定的起始快照被 PRNG 拒絕，且已還原到執行前。
+	ErrStartSnapshotRejected = errors.New("start snapshot rejected")
+	// ErrContinuationUnsupported 表示機台開啟 optimal、未指定快照而請求續段，但入口
+	// ChooseNext[Choice] 沒有配置在這個 bet mode 的 after 中（含沒有 after 的設定）。
+	ErrContinuationUnsupported = errors.New("continuation is not supported by the optimal setting")
+	// ErrGameRejected 表示遊戲回傳 nil，拒絕了這次請求（例如不合法的入口或 checkpoint）。
+	ErrGameRejected = errors.New("game rejected the request")
+)
+
+// SpinInput 是 SpinUnsafe 的輸入。呼叫端應使用帶欄位名的 literal，之後新增欄位時
+// 不必修改；新增欄位的零值等於新增前的行為。
+type SpinInput struct {
+	BetMode          int  // 必須在 Machine 的 bet mode 範圍內
+	BetMult          int  // 必須 >= 1；零值不合法。下注單位 × BetMult 不得溢位
+	CaptureSnapshots bool // 是否把起始／結束 RNG 快照寫進結果的 State
+
+	Cycle      int    // 第幾段，0 為新局
+	Choice     int    // ChooseNext 的位置索引；Cycle 為 0 時必須為 0
+	ChooseNext []int  // 上一段結果的 ChooseNext；Cycle 為 0 時必須為空。Machine 會複製
+	Checkpoint any    // 上一段結果的 checkpoint；遊戲註冊的型別
+	StartSnap  []byte // 本段的指定起始快照，空表示不指定。Machine 會複製
+}
+
+// SpinUnsafe 是本機執行入口：一次執行一段，回傳借用的結果，到同一台 Machine 的下一次
+// 呼叫為止；需要保留的呼叫端自行複製（轉 DTO 即是複製）。
+//
+// Unsafe 指的是呼叫端責任，不是記憶體安全：
+//   - 跳過對外入口的完整請求驗證。BetMode 在範圍內、BetMult >= 1、投注額乘法不溢位由
+//     呼叫端保證；不合法時行為未定義（例如 bet mode 越界時 panic）。
+//   - 仍維護 Machine 執行所需的前置條件：違反結構不變量、指定的起始快照被拒絕、或目前的
+//     optimal 設定不支援續段時回傳 nil，不執行遊戲、不消耗 RNG。
+//   - 不上鎖。呼叫期間由呼叫端獨占 Machine，不得與 Spin、RestoreCore、SnapshotCore
+//     等任何操作並行；同步完成後交給另一個 goroutine 是允許的。
+//   - 不執行 production reseed，只供呼叫端已掌握 RNG 生命週期的本機執行使用；
+//     正式服務使用 Spin。
+//
+// 起點：StartSnap 非空時從它執行本段（跳過抽庫），回傳後機台恢復到執行前，只作用於
+// 這一次呼叫；否則 optimal 開啟時抽庫並在執行後還原選取狀態，未啟用時從機台目前的 RNG
+// 執行。
+//
+// CaptureSnapshots 為 true 時，把起始快照（指定快照、抽出的 seed，或執行前的機台狀態）
+// 與結束快照寫進結果的 State，快照借用 Machine 的緩衝區；為 false 時不擷取，並清除結果
+// State 中前一次留下的 RNG 快照（不碰遊戲輸出的 Checkpoint）。
+//
+// 遊戲回傳 nil 時原樣回傳，不觸碰 State；RNG 照常還原。nil 一律表示這次呼叫沒有有效結果。
+//
+// 內部執行故障以 panic 呈現。發生任何內部執行 panic 後，該 Machine 必須棄用：
+// SpinUnsafe 不檢查 Machine 是否曾經 RNG 恢復失敗，接住 panic 後繼續使用屬於違反契約。
+func (m *Machine) SpinUnsafe(in SpinInput) *buf.SpinResult {
+	m.fillSegment(in.BetMode, in.BetMult, in.Cycle, in.Choice, in.ChooseNext, in.Checkpoint, in.StartSnap)
+	sr, err := m.execSegment(segmentOpts{external: len(in.StartSnap) != 0, capture: in.CaptureSnapshots})
 	if err != nil {
-		return nil, fmt.Errorf("snapshot before offline spin: %w", err)
+		return nil
 	}
-	// A third-party PRNG may reuse its snapshot buffer on the next call.
-	m.offlineStart = append(m.offlineStart[:0], start...)
-	start = m.offlineStart
-	if m.optimal != nil {
-		selectionState := start
-		defer func() {
-			p := recover()
-			restoreErr := m.RestoreCore(selectionState)
-			if p != nil {
-				if restoreErr != nil {
-					panic(errors.Join(fmt.Errorf("game panic: %v", p), restoreErr))
-				}
-				panic(p)
-			}
-			if restoreErr != nil {
-				err = errors.Join(err, fmt.Errorf("restore selection stream: %w", restoreErr))
-				result = nil
-			}
-		}()
-		if err = m.RestoreCore(seed); err != nil {
-			return nil, fmt.Errorf("restore optimal seed: %w", err)
-		}
-		start = seed
-	}
-	result = m.gh.GetResult(req)
-	if result == nil {
-		return nil, fmt.Errorf("offline game returned nil result")
-	}
-	after, err := m.SnapshotCore()
-	if err != nil {
-		return nil, fmt.Errorf("snapshot after offline spin: %w", err)
-	}
-	if result.State == nil {
-		m.offlineState = buf.SpinState{}
-		result.State = &m.offlineState
-	}
-	m.offlineAfter = append(m.offlineAfter[:0], after...)
-	result.State.StartCoreSnap = start
-	result.State.AfterCoreSnap = m.offlineAfter
-	return result, nil
+	return sr
 }
 
 func (m *Machine) valid(req *dto.SpinRequest) error {
@@ -329,7 +292,7 @@ func (m *Machine) valid(req *dto.SpinRequest) error {
 	if req.BetMode < 0 || req.BetMode >= len(m.BetUnits) {
 		return errs.NewWarn("bet mode out of range")
 	}
-	// 要第一次下注才判斷，第二次以後的選擇請求Bet要帶0
+	// 續段沿用第 0 段的投注；只有第 0 段扣注，由呼叫端負責
 	if req.BetMult*m.BetUnits[req.BetMode] != req.Bet {
 		return errs.NewWarn("error bet value")
 	}

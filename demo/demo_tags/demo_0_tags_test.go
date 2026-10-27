@@ -18,29 +18,38 @@ import (
 	"testing"
 
 	"github.com/zintix-labs/problab/sdk/buf"
-	"github.com/zintix-labs/problab/sdk/tag"
 )
 
 func TestDemo0CollectionTags(t *testing.T) {
-	r, err := tag.NewRegistry(Catalog[0])
+	tagger, err := Catalog.CompileBy(0, "bg", "fg")
 	if err != nil {
 		t.Fatal(err)
 	}
-	bs, err := r.BitSet("bg", "fg")
+	bg, err := tagger.Want("bg")
 	if err != nil {
 		t.Fatal(err)
 	}
+	fg, err := tagger.Want("fg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	none, err := tagger.Want()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := tagger.NewMasks()
 	for _, modes := range []int{1, 2} {
 		for _, freeWin := range []int{0, 150, 179, 180, 181, 300} {
 			sr := &buf.SpinResult{GameModeCount: modes, Bet: 30, TotalWin: freeWin + 90, GameModeList: []*buf.GameModeResult{{TotalWin: 90}}}
-			var want uint64
+			want := none
 			if modes == 1 {
-				want = 1
+				want = bg
 			} else if freeWin >= 180 {
-				want = 2
+				want = fg
 			}
-			if got := bs.Tagging(sr); got != want {
-				t.Fatalf("modes=%d freeWin=%d got=%d want=%d", modes, freeWin, got, want)
+			tagger.Tag(tags, sr)
+			if !tagger.Equal(tags, want) {
+				t.Fatalf("modes=%d freeWin=%d got=%v want=%v", modes, freeWin, tagger.ToNames(tags), tagger.ToNames(want))
 			}
 		}
 	}

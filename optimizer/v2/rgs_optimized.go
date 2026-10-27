@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/tag"
 )
 
 func normalizeRGSProbabilities(samples []MaterializedSample, tolerance float64) ([]float64, error) {
@@ -56,6 +57,12 @@ func optimizedRGSRows(compiled CompiledModel, samples []MaterializedSample, p []
 		classes[c.Name] = i
 	}
 	return func(visit func(rgsSourceRow) error) error {
+		// One working mask per execution of rows: visit and validate run
+		// synchronously within this loop, never shared across executions.
+		var tags tag.BitMasks
+		if tagger != nil {
+			tags = tagger.NewMasks()
+		}
 		for i, s := range samples {
 			ci, ok := classes[s.ClassID]
 			if !ok {
@@ -63,16 +70,15 @@ func optimizedRGSRows(compiled CompiledModel, samples []MaterializedSample, p []
 			}
 			row := rgsSourceRow{row: collectionDescriptorRow{RecordIndex: int64(i), ClassID: int32(ci), ClassName: s.ClassID, Probability: &p[i], WinMultiplier: s.Win}, snapshot: s.Snapshot}
 			row.validate = func(result *buf.SpinResult) error {
-				tags := uint64(0)
 				if tagger != nil {
-					tags = tagger.Tagging(result)
+					tagger.Tag(tags, result)
 				}
 				intent := compiled.Prepared.Plan.Intent.Classes[ci]
 				bucket := 0
 				if compiled.Prepared.Classes[ci].Intent {
 					bucket = atomicBucketIndex(intent.Design.Subjective.Buckets, s.Win)
 				}
-				if !classAccepts(intent, predicates[ci], tags, s.Win) || bucket != s.BucketIndex {
+				if !classAccepts(intent, predicates[ci], tagger, tags, s.Win) || bucket != s.BucketIndex {
 					v := finalizeVerification([]VerificationCheck{textVerificationCheck("rgs.snapshot_runtime_replay", false, fmt.Sprintf("sample[%d] Class/bucket mismatch", i), "replay matches modeled Class and bucket")})
 					return &rgsVerificationError{report: v}
 				}

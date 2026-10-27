@@ -82,6 +82,9 @@ type GameMode struct {
 	// modeId 是此 handler 對應的 mode 索引/識別，用於結果標記與除錯。
 	modeId int
 
+	// omitExtend 是 Extend 省略政策，傳給每一個建立的 GameModeResult（含 pool 擴容）。
+	omitExtend bool
+
 	// pool 是結果物件池：在一次 spin 內可能多次 Yield（例如 base + free + bonus），因此需要多個 result buffer。
 	// 這些 *GameModeResult 會被重複使用（Reset 後再寫入）。
 	pool []*buf.GameModeResult
@@ -94,11 +97,12 @@ type GameMode struct {
 //
 // 注意：不需要由遊戲邏輯實作者直接呼叫，因為上層 GameHandler 會負責建立並持有。
 // 你會在遊戲邏輯裡拿到已經初始化完成的 *GameModeHandler 來使用。
-func newGameMode(core *core.Core, gameModeSetting *spec.GameModeSetting, modeId int) *GameMode {
+func newGameMode(core *core.Core, gameModeSetting *spec.GameModeSetting, modeId int, omitExtend bool) *GameMode {
 	gm := &GameMode{
 		core:            core,
 		GameModeSetting: gameModeSetting,
 		modeId:          modeId,
+		omitExtend:      omitExtend,
 	}
 	gm.init()
 	return gm
@@ -143,7 +147,7 @@ func (gm *GameMode) YieldResult() *buf.GameModeResult {
 		// 懶建立新 result 物件
 		buffer, hitsInit := gm.getInitCap()
 		for i := 0; i < poolSize; i++ {
-			gm.pool = append(gm.pool, buf.NewGameModeResult(gm.modeId, gm.GameModeSetting, buffer, hitsInit))
+			gm.pool = append(gm.pool, buf.NewGameModeResult(gm.modeId, gm.GameModeSetting, buffer, hitsInit, gm.omitExtend))
 		}
 	}
 
@@ -186,7 +190,7 @@ func (gm *GameMode) init() {
 	gm.pool = make([]*buf.GameModeResult, 0, poolSize)
 	buffer, hitsInitSize := gm.getInitCap()
 	for i := 0; i < poolSize; i++ {
-		gm.pool = append(gm.pool, buf.NewGameModeResult(gm.modeId, gm.GameModeSetting, buffer, hitsInitSize))
+		gm.pool = append(gm.pool, buf.NewGameModeResult(gm.modeId, gm.GameModeSetting, buffer, hitsInitSize, gm.omitExtend))
 	}
 	gm.GameModeResult = gm.pool[gm.pid]
 }

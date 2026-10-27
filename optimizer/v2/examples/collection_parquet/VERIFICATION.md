@@ -37,6 +37,9 @@ formats. `TestRGSNativePreChangeBaseline` asserts the model/solution/collection
 hashes and SHA256 of manifest, mode descriptor, gacha, seed, probability and
 alias files. The baseline test passes after implementation.
 
+This was a one-off acceptance check. It was removed after acceptance; the last
+commit containing `rgs_baseline_test.go` is `d798c2c`.
+
 ### Architecture-specific baseline correction
 
 The first Linux/amd64 CI run failed only `TestRGSNativePreChangeBaseline`,

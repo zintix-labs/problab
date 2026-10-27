@@ -124,8 +124,7 @@ func (cw *compressResponseWriter) WriteHeader(code int) {
 	// 動態偵測是否應該取消壓縮 (204/304/1xx)
 	if isNoBodyStatus(code) {
 		cw.disabled = true
-		cw.Header().Del("Content-Encoding")
-		cw.Header().Del("Vary")
+		dropCompressionHeaders(cw.Header())
 	}
 
 	cw.ResponseWriter.WriteHeader(code)
@@ -159,6 +158,34 @@ func (cw *compressResponseWriter) Push(target string, opts *http.PushOptions) er
 	return errors.New("underlying response writer does not support Pusher")
 }
 
+// dropCompressionHeaders 撤回 Compression 對回應標頭的修改：移除 Content-Encoding、
+// 不再對應實際內容的 Content-Length，以及本 middleware 加入的 Vary: Accept-Encoding；
+// 其他 middleware 設定的 Vary 保留。
+func dropCompressionHeaders(h http.Header) {
+	h.Del("Content-Encoding")
+	h.Del("Content-Length")
+	vary := h.Values("Vary")
+	for i := len(vary) - 1; i >= 0; i-- {
+		if vary[i] == "Accept-Encoding" {
+			vary = append(vary[:i:i], vary[i+1:]...)
+			break
+		}
+	}
+	if len(vary) == 0 {
+		h.Del("Vary")
+	} else {
+		h["Vary"] = vary
+	}
+}
+
+// abandonCompression 在 handler 沒有正常返回（panic）時撤回壓縮標頭；呼叫端同時把壓縮器
+// 導向 io.Discard。否則壓縮器 Close 時寫出的結尾會先送出 200，外層 Recoverer 的 500 失效。
+// 只對尚未送出回應的 panic 有效：handler 已送出的標頭與內容無法撤回。不攔截 panic，讓它
+// 帶著原本的 stack 繼續往外傳。
+func abandonCompression(w http.ResponseWriter) {
+	dropCompressionHeaders(w.Header())
+}
+
 // --- Middleware 入口 ---
 
 func Compression(next http.Handler) http.Handler {
@@ -186,14 +213,19 @@ func Compression(next http.Handler) http.Handler {
 			// [關鍵修復] 如果 response 被標記為 disabled，將 Writer 重置到 io.Discard
 			// 這樣 Close() 時產生的 Footer 就會被丟棄，不會污染 204/304 回應
 			cw := &compressResponseWriter{ResponseWriter: w, w: zw}
+			completed := false
 			defer func() {
-				if cw.disabled {
+				if !completed {
+					abandonCompression(w)
+				}
+				if cw.disabled || !completed {
 					zw.Reset(io.Discard)
 				}
 				releaseZstdWriter(zw)
 			}()
 
 			next.ServeHTTP(cw, r)
+			completed = true
 			return
 		}
 
@@ -205,14 +237,19 @@ func Compression(next http.Handler) http.Handler {
 			gw := getGzipWriter(w)
 			// 同上，防止 204/304 寫入 Gzip Footer
 			cw := &compressResponseWriter{ResponseWriter: w, w: gw}
+			completed := false
 			defer func() {
-				if cw.disabled {
+				if !completed {
+					abandonCompression(w)
+				}
+				if cw.disabled || !completed {
 					gw.Reset(io.Discard)
 				}
 				releaseGzipWriter(gw)
 			}()
 
 			next.ServeHTTP(cw, r)
+			completed = true
 			return
 		}
 

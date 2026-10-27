@@ -72,8 +72,8 @@ type CollectedProblem struct {
 }
 
 type classPredicate struct {
-	matchMask    uint64
-	mismatchMask uint64
+	match    tag.BitMasks
+	mismatch tag.BitMasks
 }
 
 type collectionDeficits []uint64
@@ -81,7 +81,7 @@ type collectionDeficits []uint64
 type collectionRuntime struct {
 	betUnit     int
 	snapshotLen int
-	tagger      *tag.BitSet
+	tagger      *tag.Tagger
 	predicates  []classPredicate
 }
 
@@ -105,12 +105,12 @@ func newCollectedProblem(plan ResolvedPlan, betMode, betUnit, snapshotLength int
 // firstAcceptingClass applies the declaration-ordered first-match rule shared
 // by replay and fresh workers. A full Class is skipped before its predicate is
 // evaluated, so deficits can only decrease during a Run.
-func firstAcceptingClass(classes []ClassIntent, predicates []classPredicate, remaining []uint64, tags uint64, win float64) int {
+func firstAcceptingClass(classes []ClassIntent, predicates []classPredicate, remaining []uint64, tagger *tag.Tagger, tags tag.BitMasks, win float64) int {
 	for classIndex, class := range classes {
 		if classIndex >= len(remaining) || remaining[classIndex] == 0 || classIndex >= len(predicates) {
 			continue
 		}
-		if classAccepts(class, predicates[classIndex], tags, win) {
+		if classAccepts(class, predicates[classIndex], tagger, tags, win) {
 			return classIndex
 		}
 	}
@@ -124,7 +124,7 @@ type Collector struct {
 	Lab      *problab.Problab
 	Reporter Reporter
 	// Configure before Collect; do not mutate concurrently with collection.
-	GameTags         map[spec.GID]map[string]tag.IsTag
+	GameTags         tag.GameTagCatalog
 	WorkingDirectory string
 }
 
@@ -137,11 +137,11 @@ func NewCollector(lab *problab.Problab) *Collector {
 
 // newOptimizerMachine creates the deterministic, unoptimized Machine shared by
 // collection and verification. Optimizer tags must receive the complete raw
-// SpinResult, including game-defined ExtendResult snapshots, so isSim is
-// deliberately false. Explicit seed material still keeps the Machine on the
-// deterministic RNG lifecycle; false selects full-result mode only.
+// SpinResult, including game-defined ExtendResult snapshots; a Machine always
+// keeps Extend, and explicit seed material keeps it on the deterministic RNG
+// lifecycle.
 func newOptimizerMachine(lab *problab.Problab, gid spec.GID, seed []byte) (*problab.Machine, error) {
-	return lab.NewUnoptimizedMachineWithSeedBytes(gid, seed, false)
+	return lab.NewMachine(gid, problab.MachineConfig{Seed: problab.SeedBytes(seed), Unoptimized: true})
 }
 
 // Collect first replays configured raw snapshot banks through the current game,
@@ -185,11 +185,14 @@ func (c *Collector) Collect(
 	if err != nil {
 		return CollectedProblem{}, nil, err
 	}
-	registry, err := newCollectionTagRegistry(c.GameTags[plan.Plan.Target.Game])
-	if err != nil {
-		return CollectedProblem{}, nil, fmt.Errorf("register collection tags: %w", err)
+	// Every definition of an injected target game is validated before any
+	// reference is resolved; definition errors stay general errors.
+	if _, injected := c.GameTags[plan.Plan.Target.Game]; injected {
+		if _, err := c.GameTags.Compile(plan.Plan.Target.Game); err != nil {
+			return CollectedProblem{}, nil, fmt.Errorf("register collection tags: %w", err)
+		}
 	}
-	tagger, predicates, err := compileTagPredicates(plan.Intent.Classes, registry)
+	tagger, predicates, err := compileTagPredicates(c.GameTags, plan.Plan.Target.Game, plan.Intent.Classes)
 	if err != nil {
 		return CollectedProblem{}, Diagnostics{configDiagnostic(err.Error())}, nil
 	}
@@ -305,7 +308,7 @@ func (c *Collector) Collect(
 				workerCtx,
 				worker,
 				machines[worker],
-				betMode,
+				segmentInput(plan.Plan.Target, betMode),
 				plan.Intent.Classes,
 				predicates,
 				tagger,
@@ -525,10 +528,10 @@ func collectWorker(
 	ctx context.Context,
 	worker int,
 	machine *problab.Machine,
-	betMode int,
+	input problab.SpinInput,
 	classes []ClassIntent,
 	predicates []classPredicate,
-	tagger *tag.BitSet,
+	tagger *tag.Tagger,
 	quotas []uint64,
 	maxSpins uint64,
 	progressEvery uint64,
@@ -537,6 +540,11 @@ func collectWorker(
 	result := collectionWorkerResult{
 		worker:        worker,
 		classAccepted: make([]uint64, len(classes)),
+	}
+	// Each worker owns its working mask; the Tagger and Class conditions are shared read-only.
+	var tags tag.BitMasks
+	if tagger != nil {
+		tags = tagger.NewMasks()
 	}
 	remaining := uint64(0)
 	remainingByClass := append([]uint64(nil), quotas...)
@@ -564,18 +572,17 @@ func collectWorker(
 			result.err = fmt.Errorf("snapshot raw machine for worker %d before local spin %d: %w", worker, result.spins, err)
 			return result
 		}
-		spin := machine.SpinInternal(betMode)
-		if spin == nil || spin.Bet <= 0 || spin.Bet != machine.BetUnits[betMode] || spin.TotalWin < 0 {
+		spin := machine.SpinUnsafe(input)
+		if spin == nil || spin.Bet <= 0 || spin.Bet != machine.BetUnits[input.BetMode] || spin.TotalWin < 0 {
 			result.err = fmt.Errorf("raw machine for worker %d returned an invalid spin result at local sequence %d", worker, result.spins)
 			return result
 		}
 		win := float64(spin.TotalWin) / float64(spin.Bet)
-		tags := uint64(0)
 		if tagger != nil {
-			tags = tagger.Tagging(spin)
+			tagger.Tag(tags, spin)
 		}
 		result.spins++
-		if classIndex := firstAcceptingClass(classes, predicates, remainingByClass, tags, win); classIndex >= 0 {
+		if classIndex := firstAcceptingClass(classes, predicates, remainingByClass, tagger, tags, win); classIndex >= 0 {
 			class := classes[classIndex]
 			result.samples = append(result.samples, acceptedWorkerSample{
 				classIndex: classIndex,
@@ -751,8 +758,10 @@ func optimizerBetUnit(lab *problab.Problab, gid spec.GID, betMode int) (int, err
 }
 
 // compileTagPredicates constructs one shared tag evaluation order and a pair
-// of masks per Class from an explicitly owned registry, never v1 global state.
-func compileTagPredicates(classes []ClassIntent, registry *tag.Registry) (*tag.BitSet, []classPredicate, error) {
+// of masks per Class from an explicitly owned catalog, never v1 global state.
+// No referenced names yields a nil Tagger. A game missing from the catalog is
+// reported like a missing first name, matching the former empty registry.
+func compileTagPredicates(catalog tag.GameTagCatalog, gid spec.GID, classes []ClassIntent) (*tag.Tagger, []classPredicate, error) {
 	tags := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, class := range classes {
@@ -768,34 +777,38 @@ func compileTagPredicates(classes []ClassIntent, registry *tag.Registry) (*tag.B
 	if len(tags) == 0 {
 		return nil, predicates, nil
 	}
-	tagger, err := registry.BitSet(tags...)
+	tagger, err := catalog.CompileBy(gid, tags...)
 	if err != nil {
+		var ce *tag.CompileError
+		if errors.As(err, &ce) && ce.Kind == tag.GameNotFound {
+			err = &tag.CompileError{Op: tag.OpCompile, Kind: tag.NameNotFound, GID: gid, Name: tags[0], Index: 0}
+		}
 		return nil, nil, fmt.Errorf("compile class tags: %w", err)
 	}
 	for i, class := range classes {
-		match, err := tagger.Mask(class.Collect.Tags.Matches...)
+		match, err := tagger.Want(class.Collect.Tags.Matches...)
 		if err != nil {
 			return nil, nil, err
 		}
-		mismatch, err := tagger.Mask(class.Collect.Tags.Mismatches...)
+		mismatch, err := tagger.Want(class.Collect.Tags.Mismatches...)
 		if err != nil {
 			return nil, nil, err
 		}
-		predicates[i] = classPredicate{matchMask: match, mismatchMask: mismatch}
+		predicates[i] = classPredicate{match: match, mismatch: mismatch}
 	}
 	return tagger, predicates, nil
 }
 
 // classAccepts evaluates the closed payout range, positive tag conjunction,
 // and negative tag conjunction without changing first-match ownership.
-func classAccepts(class ClassIntent, predicate classPredicate, tags uint64, win float64) bool {
+func classAccepts(class ClassIntent, predicate classPredicate, tagger *tag.Tagger, tags tag.BitMasks, win float64) bool {
 	if win < class.Collect.WinRange.Lower() || win > class.Collect.WinRange.Upper() {
 		return false
 	}
-	if tags&predicate.matchMask != predicate.matchMask {
-		return false
+	if tagger == nil {
+		return true // no Class references any tag
 	}
-	return tags&predicate.mismatchMask == 0
+	return tagger.Match(tags, predicate.match) && tagger.None(tags, predicate.mismatch)
 }
 
 // configDiagnostic turns an execution-policy or predicate validation failure

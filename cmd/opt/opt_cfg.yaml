@@ -80,10 +80,19 @@ plans:
 
     # Select one frozen Problab catalog game and exactly one zero-based bet mode.
     # Sibling modes require separate RunPlans so each mode may own an independent
-    # intent, seed, collection budget, solve, and pending-publication transaction.
+    # intent, seed, collection budget, solve, and publication.
     target:
       game: 0
       bet_modes: [0]
+      # Optional: collect the continuation segment entered through
+      # choose_next[choice] instead of the initial segment. The published gacha
+      # belongs to that entry value (7 below) and is listed under
+      # optimal_setting.modes[].after in the game config. Both keys are
+      # required; omit input entirely for the initial segment. RGS outputs are
+      # not supported with an input.
+      # input:
+      #   choose_next: [3, 7]
+      #   choice: 1
 
     # Stable engine routing key. v2 currently accepts only intent_lp_v2.
     engine: intent_lp_v2
@@ -177,8 +186,7 @@ plans:
     # Native formats share the verified AliasTableF64 and seed bank.
     # RGS formats use point probabilities (optimized) or no LP (collected).
     output:
-      # optimal_gacha: legacy gacha_<mode>.json.zst + seed_bank_<mode>.bin.
-      # optimal_artifact_v1: manifest + prob/aliases/seed-bank binary bundle.
+      # optimal_gacha: gacha.json.zst + seed_bank.bin per bet mode.
       # rgs-collected: complete collection catalog + results.jsonl.zst; skips LP.
       # rgs-optimized: LP point distribution.parquet + results.jsonl.zst.
       # Both RGS formats always use ZSTD (internal compression for Parquet).
@@ -188,19 +196,14 @@ plans:
       # The list must be non-empty, contain no duplicates, and use known formats.
       format:
         - optimal_gacha
-        - optimal_artifact_v1
 
-      # Common output root:
-      #   <directory>/gacha/game_<gid>
-      #   <directory>/artifact_v1/game_<gid>
-      #
-      # One successful mode first atomically replaces its mode directory under
-      # game_<gid>.pending. A partial set has no manifest and remains invisible
-      # to runtime consumers. When all runtime modes are present, each writer
-      # assembles a complete bundle, writes the manifest last, validates file
-      # digests/topology and the production loader, then atomically replaces the
-      # visible game directory. Pending state is retained so a later single-mode
-      # rerun can converge with the latest verified sibling modes.
+      # Common output root. Each successful mode is published on its own as
+      #   <directory>/gacha/game_<gid>/mode_<mode>/<id>/gacha.json.zst
+      #   <directory>/gacha/game_<gid>/mode_<mode>/<id>/seed_bank.bin
+      # where <id> comes from the content. The pair is written to a staging
+      # directory, checked with the production loader, and renamed into place;
+      # a published directory is never rewritten, and rerunning with the same
+      # content reuses it. Point the game config's gachas/seed_bank at the pair.
       directory: build/optimizer
 
 # =============================================================================

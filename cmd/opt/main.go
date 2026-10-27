@@ -66,7 +66,7 @@ var (
 	// compacted and written verbatim as one line of results.jsonl.zst, so each
 	// call must return exactly one valid UTF-8 JSON value; a converter error or
 	// invalid JSON stops the Run instead of skipping the record. It cannot
-	// affect the Parquet distribution or the native artifact_v1/gacha output.
+	// affect the Parquet distribution or the native gacha output.
 	//
 	// The default dto.IdentityConverter emits the whole dto.SpinResult, which
 	// carries every record's start/after PRNG snapshots and checkpoint — that

@@ -46,7 +46,6 @@
 // intent. Before publication, every
 // seed-bank snapshot is replayed through raw game logic and semantic constraints
 // are checked from effective alias marginals and replayed payouts. The verified
-// mode is then persisted independently. Only when every mode for the game is
-// present does the publisher create a manifest, load the staged bundle through
-// the production Artifact v1 reader, and atomically expose it to runtime.
+// mode is then published on its own as one gacha pair in an immutable directory,
+// after the pair has been read back through the production loader.
 package v2

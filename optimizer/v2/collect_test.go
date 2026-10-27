@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/sdk/buf"
 	"github.com/zintix-labs/problab/sdk/core"
@@ -68,7 +69,7 @@ func TestCollectRootSeedMatchesLegacyInt64Encoding(t *testing.T) {
 		}
 	}
 
-	workerZero, err := lab.NewUnoptimizedMachineWithSeed(spec.GID(1), seed, true)
+	workerZero, err := lab.NewMachine(spec.GID(1), problab.MachineConfig{Seed: problab.SeedInt64(seed), Unoptimized: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestCollectRootSeedMatchesLegacyInt64Encoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workerOne, err := lab.NewUnoptimizedMachineWithSeedBytes(spec.GID(1), workerOneSeed, true)
+	workerOne, err := lab.NewMachine(spec.GID(1), problab.MachineConfig{Seed: problab.SeedBytes(workerOneSeed), Unoptimized: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +227,7 @@ func TestCollectResolvesGameScopedCustomTag(t *testing.T) {
 		t.Fatalf("spins=%d accepted=%d, want evidence that nonmatching outcomes were rejected", collected.Spins, len(collected.Classes[0].Samples))
 	}
 
-	replay, err := lab.NewUnoptimizedMachineWithSeed(gid, 1, true)
+	replay, err := lab.NewMachine(gid, problab.MachineConfig{Seed: problab.SeedInt64(1), Unoptimized: true})
 	if err != nil {
 		t.Fatalf("construct replay machine: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestCollectResolvesGameScopedCustomTag(t *testing.T) {
 		if err := replay.RestoreCore(sample.Snapshot); err != nil {
 			t.Fatalf("restore accepted sample[%d]: %v", index, err)
 		}
-		result := replay.SpinInternal(0)
+		result := replay.SpinUnsafe(problab.SpinInput{BetMode: 0, BetMult: 1})
 		if result == nil || !isZeroWin(result) {
 			t.Fatalf("accepted sample[%d] does not satisfy custom_tag: %+v", index, result)
 		}
@@ -282,7 +283,7 @@ func TestCollectCustomTagCanInspectExtendResult(t *testing.T) {
 	if err := replay.RestoreCore(collected.Classes[0].Samples[0].Snapshot); err != nil {
 		t.Fatalf("restore accepted sample: %v", err)
 	}
-	if result := replay.SpinInternal(0); result == nil || !hasExtend(result) {
+	if result := replay.SpinUnsafe(problab.SpinInput{BetMode: 0, BetMult: 1}); result == nil || !hasExtend(result) {
 		t.Fatalf("accepted sample does not expose ExtendResult: %+v", result)
 	}
 }

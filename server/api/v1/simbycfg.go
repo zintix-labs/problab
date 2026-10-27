@@ -21,8 +21,10 @@ import (
 	"math/big"
 	"net/http"
 
+	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/server/httperr"
+	"github.com/zintix-labs/problab/spec"
 )
 
 // SimByJson 傳入 JSON設定格式 以及希望模擬的局數
@@ -32,6 +34,7 @@ func (sh *SimHandler) SimByJson(w http.ResponseWriter, r *http.Request) {
 		Rounds      int             `json:"round"`
 		GameSetting json.RawMessage `json:"cfg"`
 		Seed        *int64          `json:"seed,omitempty"`
+		Choose      string          `json:"choose,omitempty"` // 選擇類遊戲的選擇方式：first、last；省略時不指定
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -55,6 +58,11 @@ func (sh *SimHandler) SimByJson(w http.ResponseWriter, r *http.Request) {
 		httperr.Errs(w, errs.NewWarn("bet_mode must be non-negative integer"))
 		return
 	}
+	choose, err := parseChoose(req.Choose)
+	if err != nil {
+		httperr.Errs(w, err)
+		return
+	}
 	if req.Seed == nil {
 		rnd, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 		if err != nil {
@@ -66,8 +74,22 @@ func (sh *SimHandler) SimByJson(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. NewSimulator
-	sim, err := sh.Problab.NewSimulatorByJSON(req.GameSetting, *req.Seed)
+	// 原始設定不帶 game id 以外的路由資訊，先解析一次取得 id，再交由 NewSimulator
+	// 以同一份原始設定建構（解析與驗證仍由 Problab 完成）。
+	gs, err := spec.GetGameSettingByJSON(req.GameSetting)
 	if err != nil {
+		httperr.Errs(w, err)
+		return
+	}
+	sim, err := sh.Problab.NewSimulator(gs.GameID, problab.MachineConfig{
+		Seed:    problab.SeedInt64(*req.Seed),
+		Setting: problab.SettingFromJSON(req.GameSetting),
+	})
+	if err != nil {
+		httperr.Errs(w, err)
+		return
+	}
+	if err := sim.SetCfg(problab.BetConfig{Choose: choose}); err != nil {
 		httperr.Errs(w, err)
 		return
 	}

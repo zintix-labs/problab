@@ -127,11 +127,29 @@ type RunPlan struct {
 // Target identifies a game and exactly one zero-based bet-mode index. The slice
 // shape is retained for configuration compatibility, but validation rejects
 // zero or multiple entries: each mode owns an independent collection, intent,
-// solve, and pending-publication transaction.
+// solve, and publication.
 type Target struct {
 	Game     spec.GID `yaml:"game" json:"game"`
 	BetModes []int    `yaml:"bet_modes" json:"bet_modes"`
+	// Input selects the segment to collect. Nil collects the initial segment
+	// (Cycle 0); omitempty keeps the hash and report of such plans unchanged.
+	Input *TargetInput `yaml:"input,omitempty" json:"input,omitempty"`
 }
+
+// TargetInput selects a continuation segment entered through
+// ChooseNext[Choice]. The resulting gacha belongs to that entry value. The
+// optimizer runs it with an internal Cycle of 1 and no checkpoint; Cycle and
+// checkpoint are not configurable because the real cycle of an entry is not
+// fixed within a game.
+type TargetInput struct {
+	ChooseNext []int `yaml:"choose_next" json:"choose_next"`
+	// Choice is a pointer so that a missing or null choice is rejected instead
+	// of silently selecting position 0.
+	Choice *int `yaml:"choice" json:"choice"`
+}
+
+// Entry returns the entry value ChooseNext[Choice]. The input must be valid.
+func (in *TargetInput) Entry() int { return in.ChooseNext[*in.Choice] }
 
 // CollectionOptions contains execution and reusable-support policy, not
 // Designer mathematical intent. CollectedSeed lists ordered raw snapshot banks
@@ -293,11 +311,8 @@ type CandidateSelectionOptions struct {
 type OutputFormat string
 
 const (
-	// OutputOptimalArtifactV1 preserves the existing global alias table, seed
-	// bank, and problab.optimal/v1 manifest consumed by production runtime.
-	OutputOptimalArtifactV1 OutputFormat = "optimal_artifact_v1"
-	// OutputOptimalGacha emits the legacy per-mode zstd-compressed JSON
-	// AliasTableF64 and raw seed bank consumed through gachas/seed_bank config.
+	// OutputOptimalGacha emits each mode as one gacha pair — zstd-compressed JSON
+	// AliasTableF64 plus raw seed bank — consumed through gachas/seed_bank config.
 	OutputOptimalGacha OutputFormat = "optimal_gacha"
 	// RGS formats always use internal-ZSTD Parquet and streaming JSONL.zst.
 	OutputRGSOptimized OutputFormat = "rgs-optimized"
@@ -545,8 +560,8 @@ func (s Status) Valid() bool {
 }
 
 // Success reports whether the selected mode was solved, materialized, verified,
-// and durably staged. A successful mode can still be waiting for sibling modes
-// before the writer publishes a complete runtime manifest.
+// and published. Each mode is published on its own; sibling modes do not have
+// to exist.
 func (s Status) Success() bool { return s == StatusOptimal || s == StatusExported }
 
 // DiagnosticCode is a stable reason code shared by JSON and terminal reports.
@@ -679,8 +694,7 @@ func (d Diagnostics) StopsRun() bool {
 
 // RunResult is the complete value result of Tuner.Run. Expected infeasibility
 // still returns a populated RunResult and a nil Go error. ArtifactPaths points
-// to verified pending-mode files or, once complete, the published manifest and
-// bundle payloads described by Report.Publication.
+// to the published gacha pair described by Report.Publication.
 type RunResult struct {
 	Status        Status      `json:"status"`
 	Diagnostics   Diagnostics `json:"diagnostics,omitempty"`
@@ -688,8 +702,8 @@ type RunResult struct {
 	ArtifactPaths []string    `json:"artifact_paths,omitempty"`
 }
 
-// Succeeded reports whether r represents a verified, durably staged optimal
-// result for its one selected mode.
+// Succeeded reports whether r represents a verified, published optimal result
+// for its one selected mode.
 func (r RunResult) Succeeded() bool { return r.Status.Success() }
 
 // RunReport captures deterministic inputs, numerical provenance, intent
@@ -733,6 +747,9 @@ type ModeRunReport struct {
 	Distribution BucketDistributionReport `json:"distribution"`
 	ModelHash    string                   `json:"model_hash"`
 	SolutionHash string                   `json:"solution_hash"`
+	// Entry is the entry value whose gacha this mode produced; omitted for the
+	// initial segment.
+	Entry *int `json:"entry,omitempty"`
 }
 
 // BucketDistributionReport exposes the verified runtime probability shape for
@@ -785,36 +802,24 @@ type BucketProbabilityReport struct {
 	DrawsAtCollisionProbability float64 `json:"draws_at_collision_probability,omitempty"`
 }
 
-// PublicationState distinguishes a valid staged mode from newly published
-// all-mode output packages without overloading mathematical Run Status.
+// PublicationState reports what happened to the native output of one Run.
 type PublicationState string
 
 const (
-	// PublicationModeStaged means this mode is durable but at least one sibling
-	// mode is still missing, so no new manifest was exposed.
-	PublicationModeStaged PublicationState = "MODE_STAGED"
-	// PublicationManifestPublished means all staged modes were compatible, the
-	// complete bundle passed production-loader verification, and manifest.json
-	// became visible in one atomic directory replacement.
-	PublicationManifestPublished PublicationState = "MANIFEST_PUBLISHED"
-	// PublicationOutputsPublished is the equivalent terminal state when all
-	// requested formats are complete but none of them has a manifest.
+	// PublicationOutputsPublished means the mode's gacha pair was published in
+	// its immutable directory, or the same content had already been published
+	// there and was reused.
 	PublicationOutputsPublished PublicationState = "OUTPUTS_PUBLISHED"
 )
 
-// PublicationReport makes cross-run assembly explicit in JSON results. Formats
-// preserve config declaration order; Staged and Missing mode lists are ordered
-// numerically. ManifestPath exists only when completed output includes Artifact
-// v1, while ArtifactHash identifies any completed format set.
+// PublicationReport describes the gacha pair published for this Run's mode.
+// Formats preserve config declaration order.
 type PublicationReport struct {
-	State            PublicationState `json:"state"`
-	Formats          []OutputFormat   `json:"formats"`
-	BetMode          int              `json:"bet_mode"`
-	ExpectedModes    int              `json:"expected_modes"`
-	StagedModes      []int            `json:"staged_modes"`
-	MissingModes     []int            `json:"missing_modes,omitempty"`
-	StagingDirectory string           `json:"staging_directory"`
-	ManifestPath     string           `json:"manifest_path,omitempty"`
+	State     PublicationState `json:"state"`
+	Formats   []OutputFormat   `json:"formats"`
+	BetMode   int              `json:"bet_mode"`
+	Directory string           `json:"directory"`
+	Reused    bool             `json:"reused,omitempty"`
 }
 
 // EngineProvenance identifies the selected engine implementation independently

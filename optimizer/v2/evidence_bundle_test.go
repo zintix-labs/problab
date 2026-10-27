@@ -707,7 +707,7 @@ func TestBracketEvidenceBindsStageSemantics(t *testing.T) {
 // records evidence_base and the acceptance rules (review finding).
 func TestFailedRunReportAnchorsEvidence(t *testing.T) {
 	base := runCompleteProductionPipeline(t, Int64Seed(4127483647), "failed-anchor")
-	tuner := rgsTestTuner(t, base, []OutputFormat{OutputOptimalArtifactV1})
+	tuner := rgsTestTuner(t, base, []OutputFormat{OutputOptimalGacha})
 	tuner.engine.solver = falseInfeasibleSolver{}
 	tuner.engine.exactBudget = &exactBudget{maxPivots: 0, maxBits: 1 << 14}
 	result, err := tuner.Run(context.Background(), RunRequest{PlanID: base.Report.Plan.Plan.ID})

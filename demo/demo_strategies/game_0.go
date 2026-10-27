@@ -15,14 +15,14 @@
 package demo_strategies
 
 import (
-	"github.com/zintix-labs/problab/playerexp"
-	"github.com/zintix-labs/problab/playerexp/strategies"
+	"github.com/zintix-labs/problab/sdk/strategy"
+	"github.com/zintix-labs/problab/sdk/strategy/builtin"
 )
 
 // Game 0 uses mode 0. Each factory creates a fresh strategy per player;
 // BetUnits[0] determines actual cost; the strategy does not duplicate the ledger.
 // Other games may reuse Monotone or supply private factories here.
-var game0Strategies = []playerexp.StrategyRegistration{
-	{Name: "monotone", Factory: strategies.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 5000, SatisfiedRatio: 3}},
-	{Name: "higher_bet", Factory: strategies.Monotone{BetMode: 0, BetMult: 2, MaxSpins: 5000, SatisfiedRatio: 3}},
+var game0Strategies = []strategy.Registration{
+	{Name: "monotone", Factory: builtin.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 5000, SatisfiedRatio: 3}},
+	{Name: "higher_bet", Factory: builtin.Monotone{BetMode: 0, BetMult: 2, MaxSpins: 5000, SatisfiedRatio: 3}},
 }

@@ -623,36 +623,43 @@ func TestReportV2OutcomePrintsEveryLocalizedProblem(t *testing.T) {
 	}
 }
 
-// TestReportV2OutcomeDistinguishesStagedModeFromPublishedManifest protects the
-// single-mode workflow: generating one mode is success even while publication
-// correctly waits for missing siblings, and the last mode reports its manifest.
-func TestReportV2OutcomeDistinguishesStagedModeFromPublishedManifest(t *testing.T) {
+// TestReportV2OutcomePrintsPublishedGachaDirectory checks that every generated
+// mode reports the directory of its own gacha pair, and marks reused content.
+func TestReportV2OutcomePrintsPublishedGachaDirectory(t *testing.T) {
+	entry := 7
 	tests := []struct {
 		name        string
 		publication optimizerv2.PublicationReport
+		modes       []optimizerv2.ModeRunReport
 		want        []string
 	}{
 		{
-			name: "mode staged",
-			publication: optimizerv2.PublicationReport{
-				State: optimizerv2.PublicationModeStaged, BetMode: 0, MissingModes: []int{1, 2},
-			},
-			want: []string{"mode 0 generated and staged", "missing mode [1 2]", "output bundle incomplete"},
-		},
-		{
-			name: "manifest published",
-			publication: optimizerv2.PublicationReport{
-				State: optimizerv2.PublicationManifestPublished, BetMode: 2, ManifestPath: "build/game/manifest.json",
-			},
-			want: []string{"mode 2 generated", "all-format output bundles produced", "Artifact v1 manifest", "build/game/manifest.json"},
-		},
-		{
 			name: "gacha published",
 			publication: optimizerv2.PublicationReport{
-				State: optimizerv2.PublicationOutputsPublished, BetMode: 0,
-				Formats: []optimizerv2.OutputFormat{optimizerv2.OutputOptimalGacha},
+				State: optimizerv2.PublicationOutputsPublished, BetMode: 1,
+				Formats:   []optimizerv2.OutputFormat{optimizerv2.OutputOptimalGacha},
+				Directory: "build/optimizer/gacha/game_0/mode_1/0123456789abcdef",
 			},
-			want: []string{"mode 0 generated", "all-format output bundles produced"},
+			want: []string{"mode 1 generated", "gacha published: build/optimizer/gacha/game_0/mode_1/0123456789abcdef"},
+		},
+		{
+			name: "gacha reused",
+			publication: optimizerv2.PublicationReport{
+				State: optimizerv2.PublicationOutputsPublished, BetMode: 0,
+				Formats:   []optimizerv2.OutputFormat{optimizerv2.OutputOptimalGacha},
+				Directory: "build/optimizer/gacha/game_0/mode_0/fedcba9876543210", Reused: true,
+			},
+			want: []string{"mode 0 generated", "fedcba9876543210 (reused)"},
+		},
+		{
+			name: "entry gacha published",
+			publication: optimizerv2.PublicationReport{
+				State: optimizerv2.PublicationOutputsPublished, BetMode: 0,
+				Formats:   []optimizerv2.OutputFormat{optimizerv2.OutputOptimalGacha},
+				Directory: "build/optimizer/gacha/game_3/mode_0/0011223344556677",
+			},
+			modes: []optimizerv2.ModeRunReport{{BetMode: 0, Entry: &entry}},
+			want:  []string{"mode 0 generated (entry 7); gacha published: build/optimizer/gacha/game_3/mode_0/0011223344556677"},
 		},
 	}
 	for _, test := range tests {
@@ -660,7 +667,7 @@ func TestReportV2OutcomeDistinguishesStagedModeFromPublishedManifest(t *testing.
 			var output bytes.Buffer
 			reportV2Outcome(&output, optimizerv2.RunResult{
 				Status: optimizerv2.StatusOptimal,
-				Report: optimizerv2.RunReport{Publication: &test.publication},
+				Report: optimizerv2.RunReport{Publication: &test.publication, Modes: test.modes},
 			})
 			for _, want := range test.want {
 				if !strings.Contains(output.String(), want) {

@@ -25,9 +25,9 @@ type cacheEntry struct {
 
 // Store owns all optimal artifacts for exactly one Problab instance.
 type Store struct {
-	source         artifactSource
-	snapshotFormat string
-	snapshotSize   int
+	source        artifactSource
+	snapshotSize  int
+	checkSnapshot func([]byte) error
 
 	mu        sync.Mutex
 	entries   map[string]*cacheEntry
@@ -38,16 +38,18 @@ type Store struct {
 	loads     atomic.Uint64
 }
 
-func NewStore(source fs.FS, snapshotFormat string, snapshotSize int) *Store {
-	return &Store{source: fsSource{fsys: source}, snapshotFormat: snapshotFormat, snapshotSize: snapshotSize, entries: make(map[string]*cacheEntry)}
+// checkSnapshot 不為 nil 時，載入 gacha 的 seed bank 後以它檢查第一筆快照（例如以 runtime 的 PRNG
+// Restore），提前發現快照格式不符。
+func NewStore(source fs.FS, snapshotSize int, checkSnapshot func([]byte) error) *Store {
+	return &Store{source: fsSource{fsys: source}, snapshotSize: snapshotSize, checkSnapshot: checkSnapshot, entries: make(map[string]*cacheEntry)}
 }
 
-func NewDirStore(root, snapshotFormat string, snapshotSize int) (*Store, error) {
+func NewDirStore(root string, snapshotSize int, checkSnapshot func([]byte) error) (*Store, error) {
 	source, err := newDirSource(root)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{source: source, snapshotFormat: snapshotFormat, snapshotSize: snapshotSize, entries: make(map[string]*cacheEntry)}, nil
+	return &Store{source: source, snapshotSize: snapshotSize, checkSnapshot: checkSnapshot, entries: make(map[string]*cacheEntry)}, nil
 }
 
 // Resolve returns the single immutable Artifact associated with the setting.
@@ -59,7 +61,10 @@ func (s *Store) Resolve(gs *spec.GameSetting) (*Artifact, error) {
 	if !gs.OptimalSetting.UseOptimal {
 		return nil, nil
 	}
-	key := artifactKey(gs)
+	load, key := loadLegacyArtifact, legacyKey(gs.OptimalSetting, gs.BetUnits)
+	if len(gs.OptimalSetting.Modes) > 0 {
+		load, key = loadModesArtifact, modesKey(gs.OptimalSetting.Modes, gs.BetUnits)
+	}
 
 	s.mu.Lock()
 	if s.closed {
@@ -89,13 +94,7 @@ func (s *Store) Resolve(gs *spec.GameSetting) (*Artifact, error) {
 	s.mu.Unlock()
 	defer s.loading.Done()
 
-	var artifact *Artifact
-	var err error
-	if gs.OptimalSetting.Artifact != "" {
-		artifact, err = loadBinaryArtifact(s.source, gs.OptimalSetting.Artifact, s.snapshotFormat, s.snapshotSize, gs)
-	} else {
-		artifact, err = loadLegacyArtifact(s.source, key, s.snapshotSize, gs)
-	}
+	artifact, err := load(s.source, key, s.snapshotSize, s.checkSnapshot, gs)
 	s.loads.Add(1)
 
 	s.mu.Lock()
@@ -135,14 +134,6 @@ func (s *Store) Close() error {
 	return s.closeErr
 }
 
-func artifactKey(gs *spec.GameSetting) string {
-	opt := gs.OptimalSetting
-	if opt.Artifact != "" {
-		return "manifest:" + opt.Artifact
-	}
-	return legacyKey(opt, gs.BetUnits)
-}
-
 func legacyKey(opt spec.OptimalSetting, betUnits []int) string {
 	var b strings.Builder
 	b.WriteString("legacy-v0\x00")
@@ -161,6 +152,39 @@ func legacyKey(opt spec.OptimalSetting, betUnits []int) string {
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return "legacy:" + hex.EncodeToString(sum[:])
+}
+
+// modesKey identifies an optimal_setting.modes setting: every mode's start and
+// entries in ascending order, a seeded slot as its two paths and a slot on the
+// machine RNG as a fixed marker, followed by the bet units.
+func modesKey(modes spec.OptimalModes, betUnits []int) string {
+	var b strings.Builder
+	b.WriteString("modes-v1\x00")
+	slot := func(s *spec.GachaSlot) {
+		if s == nil || !s.Seeded() {
+			b.WriteString("-\x00")
+			return
+		}
+		b.WriteString("+")
+		b.WriteString(s.Dist)
+		b.WriteByte(0)
+		b.WriteString(s.Bank)
+		b.WriteByte(0)
+	}
+	for _, mode := range modes {
+		b.WriteByte(1)
+		slot(mode.Start)
+		for _, entry := range sortedEntries(mode.After) {
+			fmt.Fprintf(&b, "%d\x00", entry)
+			slot(mode.After[entry])
+		}
+	}
+	b.WriteByte(2)
+	for _, betUnit := range betUnits {
+		fmt.Fprintf(&b, "%d\x00", betUnit)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return "modes:" + hex.EncodeToString(sum[:])
 }
 
 // LoadCount is exposed for diagnostics and invariants tests.

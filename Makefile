@@ -42,7 +42,9 @@ SEED_E    := $(if $(s),$(s),$(seed))
 
 
 # combine args
-RUN_ARGS = -game $(GAME_E) -worker $(WORKER_E) -player $(PLAYERS_E) -bets $(BETS_E) -mode $(BETMODE_E) -spins $(ROUNDS_E) -seed $(SEED_E)
+# make targets are not interactive: choice games always pick first.
+# For another choose mode, run the CLI directly: go run ./cmd/run -choose last
+RUN_ARGS = -game $(GAME_E) -worker $(WORKER_E) -player $(PLAYERS_E) -bets $(BETS_E) -mode $(BETMODE_E) -spins $(ROUNDS_E) -seed $(SEED_E) -choose first
 
 # pprof args: Go flag: var ProfileType = flag.String("p", ...))
 PPROF_CPU_ARGS    = -p=cpu    $(RUN_ARGS)
@@ -128,9 +130,9 @@ dev:
 opt:
 	@go run ./cmd/opt
 
-## Finite player experience analysis (embedded cmd/exp/exp_cfg.yaml)
+## Finite player experience analysis (embedded cmd/exp/exp_cfg.yaml, or config=<path>)
 exp:
-	@go run ./cmd/exp
+	@go run ./cmd/exp $(if $(config),-config $(config))
 
 ## clean go cache & build
 clean: 
@@ -260,7 +262,7 @@ help:
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "run" "Run simulation using 'go run'"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "dev" "Open Dev Web Panel at http://localhost:5808/dev"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "opt" "Run optimizer"
-	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "exp" "Analyze finite player experiences (cmd/exp/exp_cfg.yaml)"
+	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "exp" "Analyze finite player experiences (cmd/exp/exp_cfg.yaml, or config=<path>)"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "svr" "Start HTTP server using 'go run ./cmd/svr'"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "bin" "Run compiled binary (faster startup)"
 	@printf "    $(BLUE)%-12s$(RESET)  %s\n" "clean" "Remove build artifacts and cache"

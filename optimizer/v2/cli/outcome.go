@@ -97,29 +97,15 @@ func reportV2Outcome(output io.Writer, result optimizerv2.RunResult) {
 		_, _ = fmt.Fprintln(output, "[Result] Generation succeeded")
 		return
 	}
-	if publication.State == optimizerv2.PublicationManifestPublished {
-		if publication.ManifestPath == "" {
-			_, _ = fmt.Fprintf(output, "[Result] mode %d generated; all-format output bundles produced\n", publication.BetMode)
-			return
-		}
-		_, _ = fmt.Fprintf(
-			output,
-			"[Result] mode %d generated; all-format output bundles produced; Artifact v1 manifest: %s\n",
-			publication.BetMode,
-			publication.ManifestPath,
-		)
-		return
+	reused := ""
+	if publication.Reused {
+		reused = " (reused)"
 	}
-	if publication.State == optimizerv2.PublicationOutputsPublished {
-		_, _ = fmt.Fprintf(output, "[Result] mode %d generated; all-format output bundles produced\n", publication.BetMode)
-		return
+	entry := ""
+	if modes := result.Report.Modes; len(modes) == 1 && modes[0].Entry != nil {
+		entry = fmt.Sprintf(" (entry %d)", *modes[0].Entry)
 	}
-	_, _ = fmt.Fprintf(
-		output,
-		"[Result] mode %d generated and staged; missing mode %v, output bundle incomplete\n",
-		publication.BetMode,
-		publication.MissingModes,
-	)
+	_, _ = fmt.Fprintf(output, "[Result] mode %d generated%s; gacha published: %s%s\n", publication.BetMode, entry, publication.Directory, reused)
 }
 
 // formatDiagnosticBound keeps exact points compact while still distinguishing

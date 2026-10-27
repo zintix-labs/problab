@@ -296,7 +296,7 @@ func TestTunerSavesPartialCollectionBankBeforeCollectionInsufficient(t *testing.
 			Intent: "partial-bank", Seed: Int64Seed(77),
 			Collection:         CollectionOptions{Workers: 1, BatchSize: 1, MaxSpins: 1},
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
-			Output:             OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: outputDirectory},
+			Output:             OutputOptions{Format: []OutputFormat{OutputOptimalGacha}, Directory: outputDirectory},
 		}},
 		Intents: map[string]MathIntent{"partial-bank": {
 			Overall: OverallIntent{CV: NumericRange{Min: 0, Max: 100}},
@@ -355,5 +355,36 @@ func TestTunerSavesPartialCollectionBankBeforeCollectionInsufficient(t *testing.
 	}
 	if bankEvent < 0 || collectFinished < 0 || bankEvent > collectFinished {
 		t.Fatalf("event order does not save before terminal collection diagnostic: %+v", recorder.events)
+	}
+}
+
+// A collection bank of entry segments replays with the plan's target.input:
+// every snapshot is accepted again and no fresh spin is needed.
+func TestCollectionBankReplaysEntrySegments(t *testing.T) {
+	lab := entryLab(t, nil)
+	result := runEntryPipeline(t, lab)
+	if !result.Succeeded() || result.Report.Collection == nil {
+		t.Fatalf("status %s", result.Status)
+	}
+	plan := result.Report.Plan
+	plan.Plan.Collection.CollectedSeed = []string{result.Report.Collection.Bank.Path}
+	collector := NewCollector(lab)
+	collector.WorkingDirectory = t.TempDir()
+	replayed, diagnostics, err := collector.Collect(context.Background(), plan, 0)
+	if err != nil || diagnostics.StopsRun() {
+		t.Fatalf("replay: %v %+v", err, diagnostics)
+	}
+	if replayed.Evidence.FreshSpins != 0 || replayed.Evidence.ReplayAccepted != result.Report.Collection.Accepted {
+		t.Fatalf("entry bank not fully reused: %+v", replayed.Evidence)
+	}
+
+	// Replayed as initial segments, the same snapshots give other outcomes.
+	plan.Plan.Target.Input = nil
+	initial, _, err := collector.Collect(context.Background(), plan, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(initial.Classes, replayed.Classes) {
+		t.Fatal("the replay ignored target.input")
 	}
 }

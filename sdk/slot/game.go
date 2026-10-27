@@ -33,7 +33,7 @@ type Game struct {
 	MaxWinLimit         int
 	GameModeHandlerList []*GameMode
 	SpinResult          *buf.SpinResult // Spin結果緩衝
-	IsSim               bool
+	omitExtend          bool            // Extend 省略政策；由建立者決定，遊戲只能透過 OmitExtend() 讀取
 	logic               GameLogic
 }
 
@@ -41,13 +41,17 @@ type Game struct {
 // ** 創建遊戲實例 **
 // ============================================================
 
-// NewGame 建立 Game，使用呼叫端提供的 GameSetting
-func NewGame(gs *spec.GameSetting, reg *LogicRegistry, core *core.Core, isSim bool) (*Game, error) {
+// NewGame 建立 Game，使用呼叫端提供的 GameSetting。
+//
+// omitExtend 為 true 時（Simulator），引擎在 AddAct 中不呼叫 ExtendResult.Snapshot()，
+// 結果不含 Extend；為 false 時照常產生 Extend。旗標在建出遊戲邏輯之前就已設定，
+// 遊戲在 build 時即可透過 OmitExtend() 讀到。
+func NewGame(gs *spec.GameSetting, reg *LogicRegistry, core *core.Core, omitExtend bool) (*Game, error) {
 	g := &Game{
 		Core:        core,
 		GameName:    gs.GameName,
 		GameSetting: gs,
-		IsSim:       isSim,
+		omitExtend:  omitExtend,
 	}
 	err := g.init(reg)
 	if err != nil {
@@ -61,6 +65,10 @@ func NewGame(gs *spec.GameSetting, reg *LogicRegistry, core *core.Core, isSim bo
 // ============================================================
 
 // GetResult 依照 betMode / betMult 進行一次遊戲流程並回傳結果緩衝。
+// OmitExtend 回傳此遊戲的 Extend 省略政策（true 表示省略）。是否呼叫 Snapshot() 已由
+// 引擎決定，遊戲不需要再自行判斷；此方法供遊戲在需要時省略其他只為 Extend 準備的工作。
+func (gh *Game) OmitExtend() bool { return gh.omitExtend }
+
 func (gh *Game) GetResult(req *buf.SpinRequest) *buf.SpinResult {
 	return gh.logic.GetResult(req, gh)
 }
@@ -103,7 +111,7 @@ func (g *Game) init(reg *LogicRegistry) error {
 	modecount := len(g.GameSetting.GameModeSettings)
 	g.GameModeHandlerList = make([]*GameMode, modecount)
 	for i := 0; i < modecount; i++ {
-		g.GameModeHandlerList[i] = newGameMode(g.Core, &g.GameSetting.GameModeSettings[i], i)
+		g.GameModeHandlerList[i] = newGameMode(g.Core, &g.GameSetting.GameModeSettings[i], i, g.omitExtend)
 	}
 
 	// 建立介面

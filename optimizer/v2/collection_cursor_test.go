@@ -511,7 +511,7 @@ func TestTunerRunStopsBeforePrepareOnDuplicateCollection(t *testing.T) {
 			Engine: EngineIntentLPV2, Intent: "duplicate-gate", Seed: Int64Seed(24680),
 			Collection:         CollectionOptions{Workers: 2, BatchSize: 1, MaxSpins: 2},
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
-			Output:             OutputOptions{Format: []OutputFormat{OutputOptimalArtifactV1}, Directory: output},
+			Output:             OutputOptions{Format: []OutputFormat{OutputOptimalGacha}, Directory: output},
 		}},
 		Intents: map[string]MathIntent{"duplicate-gate": {
 			Overall: OverallIntent{CV: NumericRange{Min: 0, Max: 100}},

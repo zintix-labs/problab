@@ -130,6 +130,80 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 		t.Fatalf("fixture collection=%+v diagnostics=%+v", collected, diagnostics)
 	}
 
+	config := exactPipelineConfig(t, collected, samples, collection, seed, planID, Target{Game: spec.GID(1), BetModes: []int{0}}, bases...)
+
+	tuner, err := NewTuner(config, lab)
+	if err != nil {
+		t.Fatalf("construct Tuner: %v", err)
+	}
+	tuner.collectionDescriptorExporter = exporter
+	result, err := tuner.Run(context.Background(), RunRequest{PlanID: planID})
+	if err != nil {
+		t.Fatalf("Tuner.Run: %v", err)
+	}
+	if !result.Succeeded() || result.Status != StatusOptimal {
+		t.Fatalf("complete run status=%s diagnostics=%+v", result.Status, result.Diagnostics)
+	}
+	if len(result.Report.Modes) != 1 || !result.Report.Modes[0].Verification.Pass || !result.Report.Verification.Pass {
+		t.Fatalf("complete run verification=%+v modes=%+v", result.Report.Verification, result.Report.Modes)
+	}
+	if result.Report.Publication == nil || result.Report.Publication.State != PublicationOutputsPublished || result.Report.Publication.Directory == "" {
+		t.Fatalf("complete run publication=%+v", result.Report.Publication)
+	}
+	if len(result.ArtifactPaths) == 0 || result.Report.ModelHash == "" || result.Report.SolutionHash == "" || result.Report.ArtifactHash == "" {
+		t.Fatalf("complete run did not preserve artifact/hash evidence: paths=%v report=%+v", result.ArtifactPaths, result.Report)
+	}
+	if result.Report.Collection == nil {
+		t.Fatal("complete run did not preserve Collection Bank evidence")
+	}
+	collectionReport := result.Report.Collection
+	collectionBytes, err := os.ReadFile(collectionReport.Bank.Path)
+	if err != nil {
+		t.Fatalf("read Collection Bank: %v", err)
+	}
+	if !filepath.IsAbs(collectionReport.Bank.Path) || collectionReport.Bank.SeedCount != samples || collectionReport.Bank.Bytes != int64(len(collectionBytes)) {
+		t.Fatalf("Collection Bank report=%+v", collectionReport.Bank)
+	}
+	seedBanks := 0
+	for _, path := range result.ArtifactPaths {
+		if filepath.Base(path) != "seed_bank.bin" {
+			continue
+		}
+		seedBanks++
+		artifactBytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read artifact seed bank %q: %v", path, err)
+		}
+		if !bytes.Equal(artifactBytes, collectionBytes) {
+			t.Fatalf("artifact seed bank %q differs from Collection Bank", path)
+		}
+	}
+	if seedBanks != 1 {
+		t.Fatalf("found %d artifact seed banks, want the gacha pair's; paths=%v", seedBanks, result.ArtifactPaths)
+	}
+	wantStages := []OptimizationStageID{
+		StageProveHardFeasibility,
+		StageMinimizeMainProfileDeviation,
+		StageMaximizeOtherBucketVisibility,
+		StageMaximizeMainGroupInternalVisibility,
+		StageSelectCanonicalBucketProbabilities,
+	}
+	if len(result.Report.OptimizationStages) != len(wantStages) {
+		t.Fatalf("optimization stages=%+v", result.Report.OptimizationStages)
+	}
+	for index, want := range wantStages {
+		if got := result.Report.OptimizationStages[index].Stage; got != want {
+			t.Fatalf("optimization stage[%d]=%q want=%q", index, got, want)
+		}
+	}
+	return result
+}
+
+// exactPipelineConfig derives an exactly feasible single-Class intent from one
+// deterministic raw collection and wraps it in a one-plan Config that publishes
+// a gacha pair into a temporary directory.
+func exactPipelineConfig(t *testing.T, collected CollectedProblem, samples uint64, collection CollectionOptions, seed SeedSpec, planID string, target Target, bases ...int) Config {
+	t.Helper()
 	minimum, maximum := math.Inf(1), math.Inf(-1)
 	mean, secondMoment := 0.0, 0.0
 	for _, sample := range collected.Classes[0].Samples {
@@ -180,83 +254,19 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 	config := Config{
 		Version: ConfigVersion,
 		Plans: []RunPlan{{
-			ID: planID, Target: Target{Game: spec.GID(1), BetModes: []int{0}},
+			ID: planID, Target: target,
 			Engine: EngineIntentLPV2, Intent: planID, Seed: seed.clone(),
 			Collection:         collection,
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
 			Output: OutputOptions{
-				Format: []OutputFormat{OutputOptimalGacha, OutputOptimalArtifactV1}, Directory: outputDirectory,
+				Format: []OutputFormat{OutputOptimalGacha}, Directory: outputDirectory,
 			},
 		}},
 		Intents:       map[string]MathIntent{planID: intent},
 		EngineOptions: options,
 	}
 
-	tuner, err := NewTuner(config, lab)
-	if err != nil {
-		t.Fatalf("construct Tuner: %v", err)
-	}
-	tuner.collectionDescriptorExporter = exporter
-	result, err := tuner.Run(context.Background(), RunRequest{PlanID: planID})
-	if err != nil {
-		t.Fatalf("Tuner.Run: %v", err)
-	}
-	if !result.Succeeded() || result.Status != StatusOptimal {
-		t.Fatalf("complete run status=%s diagnostics=%+v", result.Status, result.Diagnostics)
-	}
-	if len(result.Report.Modes) != 1 || !result.Report.Modes[0].Verification.Pass || !result.Report.Verification.Pass {
-		t.Fatalf("complete run verification=%+v modes=%+v", result.Report.Verification, result.Report.Modes)
-	}
-	if result.Report.Publication == nil || result.Report.Publication.State != PublicationManifestPublished {
-		t.Fatalf("complete run publication=%+v", result.Report.Publication)
-	}
-	if len(result.ArtifactPaths) == 0 || result.Report.ModelHash == "" || result.Report.SolutionHash == "" || result.Report.ArtifactHash == "" {
-		t.Fatalf("complete run did not preserve artifact/hash evidence: paths=%v report=%+v", result.ArtifactPaths, result.Report)
-	}
-	if result.Report.Collection == nil {
-		t.Fatal("complete run did not preserve Collection Bank evidence")
-	}
-	collectionReport := result.Report.Collection
-	collectionBytes, err := os.ReadFile(collectionReport.Bank.Path)
-	if err != nil {
-		t.Fatalf("read Collection Bank: %v", err)
-	}
-	if !filepath.IsAbs(collectionReport.Bank.Path) || collectionReport.Bank.SeedCount != samples || collectionReport.Bank.Bytes != int64(len(collectionBytes)) {
-		t.Fatalf("Collection Bank report=%+v", collectionReport.Bank)
-	}
-	seedBanks := 0
-	for _, path := range result.ArtifactPaths {
-		if filepath.Base(path) != "seed_bank_0.bin" {
-			continue
-		}
-		seedBanks++
-		artifactBytes, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read artifact seed bank %q: %v", path, err)
-		}
-		if !bytes.Equal(artifactBytes, collectionBytes) {
-			t.Fatalf("artifact seed bank %q differs from Collection Bank", path)
-		}
-	}
-	if seedBanks != 2 {
-		t.Fatalf("found %d artifact seed banks, want gacha and artifact_v1; paths=%v", seedBanks, result.ArtifactPaths)
-	}
-	wantStages := []OptimizationStageID{
-		StageProveHardFeasibility,
-		StageMinimizeMainProfileDeviation,
-		StageMaximizeOtherBucketVisibility,
-		StageMaximizeMainGroupInternalVisibility,
-		StageSelectCanonicalBucketProbabilities,
-	}
-	if len(result.Report.OptimizationStages) != len(wantStages) {
-		t.Fatalf("optimization stages=%+v", result.Report.OptimizationStages)
-	}
-	for index, want := range wantStages {
-		if got := result.Report.OptimizationStages[index].Stage; got != want {
-			t.Fatalf("optimization stage[%d]=%q want=%q", index, got, want)
-		}
-	}
-	return result
+	return config
 }
 
 func assertReportSeedJSON(t *testing.T, report RunReport, wantFragment string) {

@@ -69,7 +69,7 @@ func TestRGSReorderedParquetPairsByRecordIndex(t *testing.T) {
 
 func TestUnfinishedCollectionIsNotVerified(t *testing.T) {
 	base := runCompleteProductionPipeline(t, Int64Seed(4127483647), "unfinished")
-	tuner := rgsTestTuner(t, base, []OutputFormat{OutputOptimalArtifactV1})
+	tuner := rgsTestTuner(t, base, []OutputFormat{OutputOptimalGacha})
 	tuner.config.Plans[0].Collection.MaxSpins = 1
 	tuner.config.Plans[0].Collection.Workers = 1
 	r, err := tuner.Run(context.Background(), RunRequest{PlanID: base.Report.Plan.Plan.ID})
@@ -136,7 +136,7 @@ func TestRGSOptimizationStateAfterVerifiedPublicationFailure(t *testing.T) {
 
 func TestRGSNativeFilesMatchMixedOutput(t *testing.T) {
 	base := runCompleteProductionPipeline(t, Int64Seed(4127483647), "native-byte-parity")
-	tuner := rgsTestTuner(t, base, []OutputFormat{OutputRGSCollected, OutputRGSOptimized, OutputOptimalGacha, OutputOptimalArtifactV1})
+	tuner := rgsTestTuner(t, base, []OutputFormat{OutputRGSCollected, OutputRGSOptimized, OutputOptimalGacha})
 	r, err := tuner.Run(context.Background(), RunRequest{PlanID: base.Report.Plan.Plan.ID})
 	if err != nil {
 		t.Fatal(err)
