@@ -40,15 +40,15 @@ type SpinRecorder struct {
 
 // BasicRecord 基本遊戲資料紀錄
 type BasicRecord struct {
-	TotalBet      int
-	TotalWin      int
-	BaseWin       int
-	FreeWin       int
-	TotalWinSqSum int // 平方和
-	BaseWinSqSum  int // 平方和
-	FreeWinSqSum  int // 平方和
-	Trigger       int
-	Rounds        int
+	TotalBet int
+	TotalWin int
+	BaseWin  int
+	FreeWin  int
+	Trigger  int
+	Rounds   int
+
+	// 贏倍（贏分 ÷ BetUnit）的 Welford 累加：Total 與 BG 每局更新，FG 只在觸發的局更新。
+	total, base, free welford
 }
 
 // DistRecord 分數區間落點統計
@@ -132,9 +132,10 @@ func MergeSpinRecorder(r []*SpinRecorder) (*SpinRecorder, error) {
 		s.Basic.TotalWin += v.Basic.TotalWin
 		s.Basic.BaseWin += v.Basic.BaseWin
 		s.Basic.FreeWin += v.Basic.FreeWin
-		s.Basic.TotalWinSqSum += v.Basic.TotalWinSqSum
-		s.Basic.BaseWinSqSum += v.Basic.BaseWinSqSum
-		s.Basic.FreeWinSqSum += v.Basic.FreeWinSqSum
+		// 依傳入的順序（worker 索引）合併，同一個種子的結果才可重現。
+		s.Basic.total.merge(v.Basic.total)
+		s.Basic.base.merge(v.Basic.base)
+		s.Basic.free.merge(v.Basic.free)
 		s.Basic.Rounds += v.Basic.Rounds
 		s.Basic.Trigger += v.Basic.Trigger
 
@@ -172,7 +173,6 @@ func (s *SpinRecorder) RecordWithPlayer(sr *buf.SpinResult) bool {
 
 func (s *SpinRecorder) Done() *stats.StatReport {
 	bufloat := float64(s.BetUnit)
-	bb := bufloat * bufloat
 
 	report := &stats.StatReport{
 		Summary: &stats.SummaryReport{
@@ -187,6 +187,9 @@ func (s *SpinRecorder) Done() *stats.StatReport {
 			BaseWin:     s.Basic.BaseWin,
 			FreeWin:     s.Basic.FreeWin,
 			RTP:         s.rtp(),
+			Std:         s.Basic.total.std(),
+			BaseCv:      s.Basic.base.cv(),
+			FreeCv:      s.Basic.free.cv(),
 			Trigger:     s.Basic.Trigger,
 			TriggerRate: float64(s.Basic.Trigger) / float64(s.Basic.Rounds),
 			NoWinRounds: s.Dist.TotalWinCollect[0],
@@ -194,12 +197,9 @@ func (s *SpinRecorder) Done() *stats.StatReport {
 			Rounds:      s.Basic.Rounds,
 		},
 		Mult: &stats.MultReport{
-			TotalWinMult:      float64(s.Basic.TotalWin) / bufloat,
-			BaseWinMult:       float64(s.Basic.BaseWin) / bufloat,
-			FreeWinMult:       float64(s.Basic.FreeWin) / bufloat,
-			TotalWinMultSqSum: float64(s.Basic.TotalWinSqSum) / bb,
-			BaseWinMultSqSum:  float64(s.Basic.BaseWinSqSum) / bb,
-			FreeWinMultSqSum:  float64(s.Basic.FreeWinSqSum) / bb,
+			TotalWinMult: float64(s.Basic.TotalWin) / bufloat,
+			BaseWinMult:  float64(s.Basic.BaseWin) / bufloat,
+			FreeWinMult:  float64(s.Basic.FreeWin) / bufloat,
 		},
 		Dist: &stats.DistReport{
 			WinBucket:       stats.Buckets.WinBucketStr(),
@@ -257,12 +257,13 @@ func (s *SpinRecorder) recordBasic(res *buf.SpinResult) {
 	s.Basic.TotalWin += w
 	s.Basic.BaseWin += bw
 	s.Basic.FreeWin += fw
-	s.Basic.TotalWinSqSum += w * w
-	s.Basic.BaseWinSqSum += bw * bw
-	s.Basic.FreeWinSqSum += fw * fw
+	unit := float64(s.BetUnit)
+	s.Basic.total.add(float64(w) / unit)
+	s.Basic.base.add(float64(bw) / unit)
 
 	if res.GameModeCount > 1 {
 		s.Basic.Trigger++
+		s.Basic.free.add(float64(fw) / unit) // FG 的波動只看觸發的局
 	}
 	s.Basic.Rounds++
 }
