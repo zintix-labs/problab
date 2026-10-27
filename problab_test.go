@@ -482,10 +482,24 @@ func TestOptimalLifecycleClosesPoolsBeforeArtifact(t *testing.T) {
 	}
 }
 
+// manifest 與 gacha 兩種格式：WithOptimalDir 在支援的平台上以 mmap 載入，結果與 WithOptimalFS
+// 相同，同一個 Lab 內只載入一次，Problab.Close 後關閉。
 func TestMMapOptimalMatchesMemoryAndIsShared(t *testing.T) {
-	source := testManifestFS(t, false)
+	for _, fx := range []struct {
+		name           string
+		source, config fs.FS
+	}{
+		{"manifest", testManifestFS(t, false), testManifestConfigFS(t)},
+		{"gacha", testOptimalFS(t), testLegacyConfigFS(t)},
+	} {
+		t.Run(fx.name, func(t *testing.T) {
+			testMMapOptimalMatchesMemory(t, fx.source, fx.config)
+		})
+	}
+}
+
+func testMMapOptimalMatchesMemory(t *testing.T, source, config fs.FS) {
 	dir := materializeTestFS(t, source)
-	config := testManifestConfigFS(t)
 
 	memoryLab, err := NewAuto(
 		core.Default(), Configs(config), Logics(demo_logic.Logics), WithOptimalFS(source),
@@ -542,6 +556,30 @@ func TestMMapOptimalMatchesMemoryAndIsShared(t *testing.T) {
 	}
 	if !mmapMachine1.optimal.Closed() {
 		t.Fatal("mmap artifact was not closed")
+	}
+}
+
+// seed bank 的快照長度相符、格式卻不屬於 runtime 的 PRNG 時，建構 Lab 就以首筆檢查失敗。
+func TestOptimalRejectsForeignSnapshotFormat(t *testing.T) {
+	rng, err := core.PCG64().New(core.EncodeInt64Seed(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := rng.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := testOptimalFS(t).(fstest.MapFS)
+	bank := source["seed_bank_0.bin"].Data
+	seedLen := len(bank) / 2
+	if len(foreign) > seedLen {
+		t.Fatalf("PCG snapshot (%d bytes) is longer than the default one (%d)", len(foreign), seedLen)
+	}
+	padded := append(append([]byte(nil), foreign...), make([]byte, seedLen-len(foreign))...)
+	source["seed_bank_0.bin"] = &fstest.MapFile{Data: append(padded, bank[seedLen:]...)}
+	_, err = NewAuto(core.Default(), Configs(testLegacyConfigFS(t)), Logics(demo_logic.Logics), WithOptimalFS(source))
+	if err == nil || !strings.Contains(err.Error(), "first snapshot") {
+		t.Fatalf("NewAuto error %v, want the first-snapshot check", err)
 	}
 }
 

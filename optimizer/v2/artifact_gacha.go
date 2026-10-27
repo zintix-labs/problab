@@ -372,7 +372,7 @@ func verifyLegacyPackageWithProductionLoader(directory string, metadata modeStag
 	if err := verifyArtifactFileSet(directory, expectedFiles); err != nil {
 		return err
 	}
-	store, err := optimalrt.NewDirStore(directory, metadata.SnapshotFormat, seedLen)
+	store, err := optimalrt.NewDirStore(directory, metadata.SnapshotFormat, seedLen, nil)
 	if err != nil {
 		return err
 	}
@@ -391,7 +391,7 @@ func verifyLegacyPackageWithProductionLoader(directory string, metadata modeStag
 	if err != nil {
 		return err
 	}
-	if artifact == nil || artifact.ModeCount() != len(metadata.BetUnits) || artifact.Backend() != "legacy-memory" {
+	if artifact == nil || artifact.ModeCount() != len(metadata.BetUnits) || (artifact.Backend() != "mmap" && artifact.Backend() != "memory") {
 		return fmt.Errorf("legacy runtime package mismatch")
 	}
 	return nil

@@ -99,10 +99,3 @@ func readVerifiedFile(source artifactSource, manifestPath string, ref FileRef) (
 	}
 	return data, closeFn, backend, nil
 }
-
-func mergeBackend(current, next string) string {
-	if current == "" || current == next {
-		return next
-	}
-	return "mixed"
-}

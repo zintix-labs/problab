@@ -537,7 +537,7 @@ func verifyArtifactWithProductionLoader(staging string, manifest optimalrt.Manif
 	for i := range manifest.Modes {
 		betUnits[i] = manifest.Modes[i].BetUnit
 	}
-	store, err := optimalrt.NewDirStore(staging, manifest.SnapshotFormat, manifest.Modes[0].SeedLen)
+	store, err := optimalrt.NewDirStore(staging, manifest.SnapshotFormat, manifest.Modes[0].SeedLen, nil)
 	if err != nil {
 		return fmt.Errorf("open production artifact store: %w", err)
 	}
