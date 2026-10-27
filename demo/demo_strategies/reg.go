@@ -25,4 +25,6 @@ import (
 // There is no init-time registration or automatic cross-game fallback.
 var Catalog = strategy.Catalog{
 	0: game0Strategies,
+	2: game2Strategies,
+	3: game3Strategies,
 }

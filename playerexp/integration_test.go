@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -255,5 +256,107 @@ func TestMonotoneBeyondTheSpinLimitIsCapped(t *testing.T) {
 	g := r.Groups[0]
 	if g.CompleteSpins != playerexp.MaxSpinsPerPlayer || g.MaxSpinReached != 1 {
 		t.Fatalf("spins %d capped %d", g.CompleteSpins, g.MaxSpinReached)
+	}
+}
+
+// observingFactory wraps a factory and records what its strategies see at game
+// ends and choice points.
+type observingFactory struct {
+	inner strategy.Factory
+	obs   *choiceObservations
+}
+
+type choiceObservations struct {
+	games, choicePoints, repeated int
+	totalWin                      int
+	err                           string
+}
+
+func (f observingFactory) NewStrategy(initial int) strategy.Strategy {
+	return &observingStrategy{inner: f.inner.NewStrategy(initial), obs: f.obs}
+}
+
+type observingStrategy struct {
+	inner strategy.Strategy
+	obs   *choiceObservations
+	last  strategy.PlayerState
+}
+
+func (s *observingStrategy) FirstSpin(p strategy.PlayerState) strategy.Decision {
+	s.last = p
+	return s.inner.FirstSpin(p)
+}
+
+func (s *observingStrategy) Next(p strategy.PlayerState, r *buf.SpinResult) strategy.Decision {
+	o := s.obs
+	if !r.IsGameEnd {
+		o.choicePoints++
+		// Paid but not settled: the wager is taken, the game is not counted yet.
+		if p.Spins != s.last.Spins || p.TotalWin != s.last.TotalWin || p.TotalBet <= s.last.TotalBet {
+			o.err = fmt.Sprintf("choice point ledger %+v after %+v", p, s.last)
+		}
+		return s.inner.Next(p, r)
+	}
+	o.games++
+	o.totalWin += r.TotalWin
+	if p.Spins != s.last.Spins+1 || p.TotalWin != s.last.TotalWin+r.TotalWin {
+		o.err = fmt.Sprintf("settled ledger %+v after %+v win %d", p, s.last, r.TotalWin)
+	}
+	if repeatedMode(r) {
+		o.repeated++
+	}
+	s.last = p
+	return s.inner.Next(p, r)
+}
+
+func repeatedMode(r *buf.SpinResult) bool {
+	seen := map[int]bool{}
+	for _, g := range r.GameModeList {
+		if seen[g.GameModeId] {
+			return true
+		}
+		seen[g.GameModeId] = true
+	}
+	return false
+}
+
+// Choice games run to the end of every game with the built-in choices: demo_2
+// carries a checkpoint between segments, demo_3 retriggers A→B→A. Every game is
+// settled once, and the event tag is evaluated once on the whole game, also when
+// a game mode repeats inside it.
+func TestChoiceGamesWithBuiltinChoices(t *testing.T) {
+	lab, e := demo.NewProbLab()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { _ = lab.Close() }()
+	for _, gid := range []spec.GID{2, 3} {
+		for _, choose := range []builtin.Choose{builtin.ChooseFirst, builtin.ChooseLast, builtin.ChooseIter} {
+			obs := &choiceObservations{}
+			reg := strategy.NewRegistry()
+			f := builtin.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 3000, SatisfiedRatio: 50, Choose: choose}
+			if e := reg.Register(gid, "m", observingFactory{f, obs}); e != nil {
+				t.Fatal(e)
+			}
+			calls := 0
+			tags := tag.GameTagCatalog{gid: {"repeat": func(r *buf.SpinResult) bool { calls++; return repeatedMode(r) }}}
+			c := playerexp.Config{GameID: gid, Seed: playerexp.Int64Seed(5), Analysis: []playerexp.GroupConfig{{Name: "m",
+				Player: playerexp.PlayerConfig{Players: 3, InitBet: 1000, Strategy: "m"}, WinBuckets: []float64{0},
+				Events: []playerexp.EventConfig{{Name: "repeat", WinRange: playerexp.WinRange{Min: 0}, Tags: []string{"repeat"}}}}}}
+			r, e := playerexp.Run(context.Background(), c, playerexp.Options{Lab: lab, Strategies: reg, Tags: tags})
+			if e != nil {
+				t.Fatalf("game %d choose %d: %v", gid, choose, e)
+			}
+			g := r.Groups[0]
+			if obs.err != "" || obs.choicePoints == 0 || uint64(obs.games) != g.CompleteSpins || g.TotalWin != uint64(obs.totalWin) || g.TotalBet != g.CompleteSpins*40 {
+				t.Fatalf("game %d choose %d: %+v group spins %d bet %d win %d", gid, choose, *obs, g.CompleteSpins, g.TotalBet, g.TotalWin)
+			}
+			if uint64(calls) != g.CompleteSpins || g.Events[0].Hits != uint64(obs.repeated) {
+				t.Fatalf("game %d choose %d: tag calls %d games %d hits %d repeated %d", gid, choose, calls, g.CompleteSpins, g.Events[0].Hits, obs.repeated)
+			}
+			if gid == 3 && choose == builtin.ChooseIter && obs.repeated == 0 {
+				t.Fatal("no game repeated a mode; the multi-segment tag case was not exercised")
+			}
+		}
 	}
 }

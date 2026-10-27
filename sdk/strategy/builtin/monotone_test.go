@@ -18,6 +18,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/zintix-labs/problab/sdk/buf"
+
 	"github.com/zintix-labs/problab/sdk/strategy"
 	"github.com/zintix-labs/problab/sdk/strategy/builtin"
 )
@@ -77,6 +79,7 @@ func TestMonotoneRejectsInvalidSettings(t *testing.T) {
 		{"zero mult", func(m *builtin.Monotone) { m.BetMult = 0 }, 100},
 		{"negative mult", func(m *builtin.Monotone) { m.BetMult = -1 }, 100},
 		{"zero spins", func(m *builtin.Monotone) { m.MaxSpins = 0 }, 100},
+		{"unknown choose", func(m *builtin.Monotone) { m.Choose = builtin.ChooseIter + 1 }, 100},
 		{"zero ratio", func(m *builtin.Monotone) { m.SatisfiedRatio = 0 }, 100},
 		{"unit ratio", func(m *builtin.Monotone) { m.SatisfiedRatio = 1 }, 100},
 		{"zero balance", func(*builtin.Monotone) {}, 0},
@@ -99,5 +102,32 @@ func TestMonotoneRejectsInvalidSettings(t *testing.T) {
 	s := valid.NewStrategy(math.MaxInt / 2)
 	if s.FirstSpin(strategy.PlayerState{Balance: math.MaxInt / 2}).KeepPlay != true {
 		t.Fatal("valid boundary rejected")
+	}
+}
+
+// At a choice point Monotone only chooses, by its Choose; unset makes no
+// choice. Each player starts its own iteration.
+func TestMonotoneChoices(t *testing.T) {
+	segment := &buf.SpinResult{ChooseNext: []int{3, 7}}
+	state := strategy.PlayerState{Balance: 100}
+	for mode, want := range map[builtin.Choose][]int{builtin.ChooseFirst: {0, 0, 0}, builtin.ChooseLast: {1, 1, 1}, builtin.ChooseIter: {0, 1, 0}} {
+		f := builtin.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 10, SatisfiedRatio: 2, Choose: mode}
+		a, b := f.NewStrategy(100), f.NewStrategy(100)
+		for i, w := range want {
+			d := a.Next(state, segment)
+			if d.Choice == nil || *d.Choice != w || d.KeepPlay || d.Bet != (strategy.Bet{}) {
+				t.Fatalf("mode %d choice %d: %+v", mode, i, d)
+			}
+		}
+		if d := b.Next(state, segment); *d.Choice != want[0] {
+			t.Fatalf("mode %d: the second player did not start its own iteration", mode)
+		}
+	}
+	unset := builtin.Monotone{BetMode: 0, BetMult: 1, MaxSpins: 10, SatisfiedRatio: 2}.NewStrategy(100)
+	if d := unset.Next(state, segment); d != (strategy.Decision{}) {
+		t.Fatalf("unset Choose made a decision %+v", d)
+	}
+	if d := unset.Next(state, &buf.SpinResult{IsGameEnd: true}); !d.KeepPlay || d.Choice != nil {
+		t.Fatalf("a finished game did not decide the next wager: %+v", d)
 	}
 }

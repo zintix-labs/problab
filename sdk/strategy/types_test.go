@@ -18,6 +18,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/zintix-labs/problab/sdk/strategy"
 )
 
 // A strategy author depends only on this contract: the strategy packages must
@@ -34,5 +36,15 @@ func TestStrategyPackagesDoNotDependOnTheExecutor(t *testing.T) {
 		if dep == "github.com/zintix-labs/problab" || strings.HasPrefix(dep, "github.com/zintix-labs/problab/playerexp") {
 			t.Errorf("sdk/strategy depends on %s", dep)
 		}
+	}
+}
+
+func TestChoiceAt(t *testing.T) {
+	d := strategy.ChoiceAt(2)
+	if d.Choice == nil || *d.Choice != 2 || d.KeepPlay || d.Bet != (strategy.Bet{}) || d.EndType != strategy.Other {
+		t.Fatalf("decision %+v", d)
+	}
+	if strategy.ChoiceAt(2).Choice == d.Choice {
+		t.Fatal("decisions share a choice")
 	}
 }

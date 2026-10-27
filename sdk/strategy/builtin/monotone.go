@@ -27,11 +27,14 @@ import (
 // Monotone repeatedly requests the same wager. Reaching initial balance times
 // SatisfiedRatio ends Satisfied; reaching MaxSpins first ends Dissatisfied.
 // The executor alone determines Bust when the next legal wager is unaffordable.
+// Choose selects a position at choice points; when it is unset, Monotone makes
+// no choice and the executor reports an error at the first choice point.
 type Monotone struct {
 	BetMode        int
 	BetMult        int
 	MaxSpins       int
 	SatisfiedRatio int
+	Choose         Choose
 }
 
 // NewStrategy creates independent player state from an already converted,
@@ -41,8 +44,8 @@ type Monotone struct {
 // upper bound, the actual wager cost and the executor's own spin limit remain
 // executor checks: a MaxSpins above that limit is cut short by the executor.
 func (m Monotone) NewStrategy(initialBalance int) strategy.Strategy {
-	if m.BetMode < 0 || m.BetMult <= 0 || m.MaxSpins < 1 || m.SatisfiedRatio <= 1 {
-		panic(fmt.Errorf("Monotone: invalid configuration (mode=%d mult=%d max_spins=%d satisfied_ratio=%d)", m.BetMode, m.BetMult, m.MaxSpins, m.SatisfiedRatio))
+	if m.BetMode < 0 || m.BetMult <= 0 || m.MaxSpins < 1 || m.SatisfiedRatio <= 1 || !m.Choose.valid() {
+		panic(fmt.Errorf("Monotone: invalid configuration (mode=%d mult=%d max_spins=%d satisfied_ratio=%d choose=%d)", m.BetMode, m.BetMult, m.MaxSpins, m.SatisfiedRatio, m.Choose))
 	}
 	if initialBalance <= 0 || initialBalance > math.MaxInt/m.SatisfiedRatio {
 		panic(fmt.Errorf("Monotone: invalid or overflowing target balance (initial=%d ratio=%d)", initialBalance, m.SatisfiedRatio))
@@ -50,6 +53,7 @@ func (m Monotone) NewStrategy(initialBalance int) strategy.Strategy {
 	return &monotone{
 		BetMode: m.BetMode, BetMult: m.BetMult, MaxSpins: m.MaxSpins,
 		Satisfied: initialBalance * m.SatisfiedRatio,
+		choose:    Selector{Mode: m.Choose},
 	}
 }
 
@@ -57,13 +61,20 @@ type monotone struct {
 	BetMode   int
 	BetMult   int
 	MaxSpins  int
-	Satisfied int // Actual target balance, not a ratio.
+	Satisfied int      // Actual target balance, not a ratio.
+	choose    Selector // per player: ChooseIter keeps a counter
 }
 
 func (m *monotone) FirstSpin(state strategy.PlayerState) strategy.Decision {
 	return m.decide(state)
 }
-func (m *monotone) Next(state strategy.PlayerState, _ *buf.SpinResult) strategy.Decision {
+func (m *monotone) Next(state strategy.PlayerState, result *buf.SpinResult) strategy.Decision {
+	if result != nil && !result.IsGameEnd {
+		if i, ok := m.choose.Pick(result.ChooseNext); ok {
+			return strategy.ChoiceAt(i)
+		}
+		return strategy.Decision{} // Choose is unset: no choice, reported by the executor
+	}
 	return m.decide(state)
 }
 func (m *monotone) decide(state strategy.PlayerState) strategy.Decision {

@@ -13,16 +13,24 @@
 // limitations under the License.
 
 // Package playerexp analyzes finite player experiences on a sequential,
-// deterministic, complete-result game. It does not support checkpoint recovery.
+// deterministic game. Each game runs to its end through a BetRunner; at choice
+// points the player's strategy chooses. It does not save or resume a player's
+// session across processes.
 package playerexp
 
 import (
+	"errors"
 	"reflect"
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/sdk/strategy"
 	"github.com/zintix-labs/problab/sdk/tag"
 )
+
+// ErrInvalidDecision reports a strategy decision that does not fit the moment
+// it was returned at: a choice outside a choice point, or anything but a valid
+// Choice at one. A Choice out of range wraps problab.ErrChoiceOutOfRange instead.
+var ErrInvalidDecision = errors.New("invalid strategy decision")
 
 // MaxSpinsPerPlayer bounds the experience window, not engine performance.
 // Longer sessions saturate encounter counts and belong in Simulator. Changing

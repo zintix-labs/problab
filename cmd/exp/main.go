@@ -18,6 +18,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -68,8 +69,18 @@ func main() {
 	}
 }
 func run(args []string, output io.Writer) (code int, err error) {
-	if len(args) != 0 {
-		return 1, fmt.Errorf("cmd/exp does not accept arguments; edit embedded exp_cfg.yaml")
+	flags := flag.NewFlagSet("cmd/exp", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	path := flags.String("config", "", "analysis YAML; the embedded exp_cfg.yaml when empty")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return 1, fmt.Errorf("cmd/exp accepts only -config <path> (for example cmd/exp/examples/game_3.yaml); without it the embedded exp_cfg.yaml is used")
+	}
+	raw, source := config, `embedded "exp_cfg.yaml"`
+	if *path != "" {
+		if raw, err = os.ReadFile(*path); err != nil {
+			return 1, err
+		}
+		source = fmt.Sprintf("%q", *path)
 	}
 	lab, err := pLab()
 	if err != nil {
@@ -87,5 +98,5 @@ func run(args []string, output io.Writer) (code int, err error) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return expcli.Run(ctx, expcli.Options{Config: config, ConfigSource: `embedded "exp_cfg.yaml"`, Lab: lab, Strategies: strategies, Tags: gameTags, Output: output})
+	return expcli.Run(ctx, expcli.Options{Config: raw, ConfigSource: source, Lab: lab, Strategies: strategies, Tags: gameTags, Output: output})
 }
