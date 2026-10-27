@@ -61,7 +61,10 @@ func (s *Store) Resolve(gs *spec.GameSetting) (*Artifact, error) {
 	if !gs.OptimalSetting.UseOptimal {
 		return nil, nil
 	}
-	key := legacyKey(gs.OptimalSetting, gs.BetUnits)
+	load, key := loadLegacyArtifact, legacyKey(gs.OptimalSetting, gs.BetUnits)
+	if len(gs.OptimalSetting.Modes) > 0 {
+		load, key = loadModesArtifact, modesKey(gs.OptimalSetting.Modes, gs.BetUnits)
+	}
 
 	s.mu.Lock()
 	if s.closed {
@@ -91,7 +94,7 @@ func (s *Store) Resolve(gs *spec.GameSetting) (*Artifact, error) {
 	s.mu.Unlock()
 	defer s.loading.Done()
 
-	artifact, err := loadLegacyArtifact(s.source, key, s.snapshotSize, s.checkSnapshot, gs)
+	artifact, err := load(s.source, key, s.snapshotSize, s.checkSnapshot, gs)
 	s.loads.Add(1)
 
 	s.mu.Lock()
@@ -149,6 +152,39 @@ func legacyKey(opt spec.OptimalSetting, betUnits []int) string {
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return "legacy:" + hex.EncodeToString(sum[:])
+}
+
+// modesKey identifies an optimal_setting.modes setting: every mode's start and
+// entries in ascending order, a seeded slot as its two paths and a slot on the
+// machine RNG as a fixed marker, followed by the bet units.
+func modesKey(modes spec.OptimalModes, betUnits []int) string {
+	var b strings.Builder
+	b.WriteString("modes-v1\x00")
+	slot := func(s *spec.GachaSlot) {
+		if s == nil || !s.Seeded() {
+			b.WriteString("-\x00")
+			return
+		}
+		b.WriteString("+")
+		b.WriteString(s.Dist)
+		b.WriteByte(0)
+		b.WriteString(s.Bank)
+		b.WriteByte(0)
+	}
+	for _, mode := range modes {
+		b.WriteByte(1)
+		slot(mode.Start)
+		for _, entry := range sortedEntries(mode.After) {
+			fmt.Fprintf(&b, "%d\x00", entry)
+			slot(mode.After[entry])
+		}
+	}
+	b.WriteByte(2)
+	for _, betUnit := range betUnits {
+		fmt.Fprintf(&b, "%d\x00", betUnit)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return "modes:" + hex.EncodeToString(sum[:])
 }
 
 // LoadCount is exposed for diagnostics and invariants tests.

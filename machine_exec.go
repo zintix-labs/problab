@@ -114,8 +114,9 @@ func (e *startRejected) Unwrap() error        { return e.err }
 // fillSegment 寫入本段輸入。
 //
 // 結構不變量與起點路由都在 production reseed、抽庫之前判斷，拒絕時不改變 RNG。
-// 遊戲回傳 nil 時回傳 ErrGameRejected，恢復守衛照常收尾。結果違反輸出契約、或由抽庫
-// 決定起點的結果未結束時 panic（內部故障）。
+// optimal 開啟時，依這個 bet mode 的設定決定本段抽庫或照常使用機台的 RNG；續段的入口
+// 沒有配置時回傳 ErrContinuationUnsupported。遊戲回傳 nil 時回傳 ErrGameRejected，恢復
+// 守衛照常收尾。結果違反輸出契約，或 optimal 開啟時交付了無法接續的段，panic（內部故障）。
 func (m *Machine) execSegment(o segmentOpts) (*buf.SpinResult, error) {
 	q := &m.spinRequest
 	if !validSegment(q) {
@@ -126,18 +127,22 @@ func (m *Machine) execSegment(o segmentOpts) (*buf.SpinResult, error) {
 	switch {
 	case o.external:
 		kind, start = startExternal, m.reqSnap
-	case m.optimal != nil && q.Cycle > 0:
-		// 目前的 optimal 設定只有 start 庫，沒有續段可抽的庫。
-		return nil, ErrContinuationUnsupported
 	default:
+		seeded := false
+		if m.optimal != nil {
+			var configured bool
+			if seeded, configured = m.route(q); !configured {
+				return nil, ErrContinuationUnsupported
+			}
+		}
 		if o.reseed {
 			if err := m.core.Reseed(); err != nil {
 				return nil, errs.NewFatal("reseed PRNG before new game cycle: " + err.Error())
 			}
 		}
-		if m.optimal != nil {
+		if seeded {
 			kind = startSeed
-			start = m.pickSeed(q.BetMode, &m.seedBuf)
+			start = m.pickSeed(q, &m.seedBuf)
 		} else if o.capture {
 			startSnap = m.snapshotInto(&m.startBuf, "start state")
 		}
@@ -169,8 +174,12 @@ func (m *Machine) finishSegment(sr *buf.SpinResult, o segmentOpts, kind startKin
 	if o.checkOutput && sr.IsGameEnd != (len(sr.ChooseNext) == 0) {
 		panic(fmt.Errorf("game returned an inconsistent segment: IsGameEnd=%v, len(ChooseNext)=%d", sr.IsGameEnd, len(sr.ChooseNext)))
 	}
-	if kind == startSeed && !sr.IsGameEnd {
-		panic(errors.New("optimal seed produced an unfinished segment: the optimal setting has no continuation source"))
+	if m.optimal != nil && kind != startExternal && !sr.IsGameEnd && !m.optimal.Offers(m.spinRequest.BetMode, sr.ChooseNext) {
+		// 不放在 checkOutput 之下：SpinUnsafe 也不得交付下一段無法接續的結果。
+		if len(sr.ChooseNext) == 0 {
+			panic(fmt.Errorf("optimal bet mode %d: the game returned an unfinished segment without ChooseNext", m.spinRequest.BetMode))
+		}
+		panic(fmt.Errorf("optimal bet mode %d: ChooseNext %v has an entry without an after slot", m.spinRequest.BetMode, sr.ChooseNext))
 	}
 	sr.Cycle = m.spinRequest.Cycle // 段號由引擎填入，遊戲寫入的值不保留
 	if !o.capture {
@@ -203,9 +212,24 @@ func (m *Machine) spin() *buf.SpinResult {
 	return m.gh.GetResult(&m.spinRequest)
 }
 
-// pickSeed 從 artifact 抽 seed 並複製到 Machine 的緩衝區 dst。失敗屬於內部執行故障。
-func (m *Machine) pickSeed(betMode int, dst *[]byte) []byte {
-	seed, err := m.optimal.PickSeed(betMode, m.core)
+// route 回報 optimal 開啟時本段是否抽庫，以及續段的入口是否配置：Cycle 0 看 start，
+// 續段看 after[ChooseNext[Choice]]。
+func (m *Machine) route(q *buf.SpinRequest) (seeded, configured bool) {
+	if q.Cycle == 0 {
+		return m.optimal.StartSeeded(q.BetMode), true
+	}
+	return m.optimal.Entry(q.BetMode, q.ChooseNext[q.Choice])
+}
+
+// pickSeed 從本段的庫抽 seed 並複製到 Machine 的緩衝區 dst。失敗屬於內部執行故障。
+func (m *Machine) pickSeed(q *buf.SpinRequest, dst *[]byte) []byte {
+	var seed []byte
+	var err error
+	if q.Cycle == 0 {
+		seed, err = m.optimal.PickStart(q.BetMode, m.core)
+	} else {
+		seed, err = m.optimal.PickEntry(q.BetMode, q.ChooseNext[q.Choice], m.core)
+	}
 	if err != nil {
 		panic(fmt.Errorf("pick optimal seed: %w", err))
 	}

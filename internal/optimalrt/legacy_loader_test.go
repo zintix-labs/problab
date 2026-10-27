@@ -105,7 +105,7 @@ func pickAll(t *testing.T, a *Artifact, betMode int) [][]byte {
 	c := core.New(rng)
 	var out [][]byte
 	for range 200 {
-		seed, err := a.PickSeed(betMode, c)
+		seed, err := a.PickStart(betMode, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -224,4 +224,87 @@ func TestLegacyArtifactChecksFirstSnapshot(t *testing.T) {
 	if source.opens != 2 || source.closes != 2 {
 		t.Fatalf("opens %d closes %d, want 2 and 2", source.opens, source.closes)
 	}
+}
+
+// modesSetting 回傳一個 bet mode 的 modes 設定：start 抽 a、入口 3 抽 b、入口 7 照常使用 RNG。
+func modesSetting() (*spec.GameSetting, fstest.MapFS) {
+	gs := &spec.GameSetting{BetUnits: []int{10}, OptimalSetting: spec.OptimalSetting{UseOptimal: true, Modes: spec.OptimalModes{{
+		Start: &spec.GachaSlot{Dist: "a/gacha.json.zst", Bank: "a/seed_bank.bin"},
+		After: map[int]*spec.GachaSlot{3: {Dist: "b/gacha.json.zst", Bank: "b/seed_bank.bin"}, 7: {}},
+	}}}}
+	return gs, fstest.MapFS{}
+}
+
+func addPair(t *testing.T, files fstest.MapFS, dir string, n int) {
+	t.Helper()
+	gacha, bank := testPair(t, n)
+	files[dir+"/gacha.json.zst"] = &fstest.MapFile{Data: gacha}
+	files[dir+"/seed_bank.bin"] = &fstest.MapFile{Data: bank}
+}
+
+// 抽庫的位置各載入一份並經過首筆檢查；照常使用 RNG 的位置不開檔。
+func TestModesArtifactLoadsSeededSlots(t *testing.T) {
+	gs, files := modesSetting()
+	addPair(t, files, "a", 3)
+	addPair(t, files, "b", 5)
+	source := &countingSource{artifactSource: fsSource{fsys: files}}
+	checks := 0
+	a, err := loadModesArtifact(source, "k", testSeedLen, func([]byte) error { checks++; return nil }, gs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.opens != 2 || checks != 2 || a.Backend() != "memory" {
+		t.Fatalf("opens %d checks %d backend %s", source.opens, checks, a.Backend())
+	}
+	if !a.StartSeeded(0) {
+		t.Fatal("start is not seeded")
+	}
+	if seeded, ok := a.Entry(0, 3); !seeded || !ok {
+		t.Fatal("entry 3")
+	}
+	if seeded, ok := a.Entry(0, 7); seeded || !ok {
+		t.Fatal("entry 7")
+	}
+	if _, ok := a.Entry(0, 0); ok {
+		t.Fatal("entry 0 is configured")
+	}
+	if err := a.Close(); err != nil || source.closes != 2 {
+		t.Fatalf("close %v closes %d", err, source.closes)
+	}
+}
+
+// 載入 after 中途失敗時，以相反順序釋放已載入的 start。
+func TestModesArtifactReleasesOnFailure(t *testing.T) {
+	gs, files := modesSetting()
+	addPair(t, files, "a", 3)
+	addPair(t, files, "b", 5)
+	files["b/seed_bank.bin"].Data = files["b/seed_bank.bin"].Data[1:]
+	source := &countingSource{artifactSource: fsSource{fsys: files}}
+	_, err := loadModesArtifact(source, "k", testSeedLen, nil, gs)
+	if err == nil || !strings.Contains(err.Error(), "bet mode 0 after[3]") {
+		t.Fatalf("error %v", err)
+	}
+	if source.opens != 1 || source.closes != 1 {
+		t.Fatalf("opens %d closes %d", source.opens, source.closes)
+	}
+}
+
+// 所有位置都照常使用 RNG 時不開任何檔案，Artifact 仍然存在，backend 為 none。
+func TestModesArtifactWithoutGachas(t *testing.T) {
+	gs := &spec.GameSetting{BetUnits: []int{10, 20}, OptimalSetting: spec.OptimalSetting{UseOptimal: true, Modes: spec.OptimalModes{
+		{Start: &spec.GachaSlot{}, After: map[int]*spec.GachaSlot{1: {}}},
+		{Start: &spec.GachaSlot{}},
+	}}}
+	source := &countingSource{artifactSource: fsSource{fsys: fstest.MapFS{}}}
+	a, err := loadModesArtifact(source, "k", testSeedLen, nil, gs)
+	if err != nil || a == nil || a.Backend() != "none" || a.ModeCount() != 2 || source.opens != 0 {
+		t.Fatalf("artifact %v backend %q err %v opens %d", a, a.Backend(), err, source.opens)
+	}
+	if a.StartSeeded(0) || !a.Offers(0, []int{1}) || a.Offers(1, []int{1}) {
+		t.Fatal("routes")
+	}
+}
+
+func modesNaturalSetting() *spec.GameSetting {
+	return &spec.GameSetting{BetUnits: []int{10}, OptimalSetting: spec.OptimalSetting{UseOptimal: true, Modes: spec.OptimalModes{{Start: &spec.GachaSlot{}}}}}
 }

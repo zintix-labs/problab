@@ -146,7 +146,7 @@ func faultLab(t testing.TB, factory core.PRNGFactory, optimal bool, opts ...Prob
 func pickedRecoveryPoint(t testing.TB) []byte {
 	t.Helper()
 	control := faultMachine(t, true)
-	if _, err := control.optimal.PickSeed(0, control.core); err != nil {
+	if _, err := control.optimal.PickStart(0, control.core); err != nil {
 		t.Fatal(err)
 	}
 	return coreState(t, control)
@@ -952,5 +952,158 @@ func TestFillSegmentWritesEveryField(t *testing.T) {
 	got.ChooseNext = nil
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("fillSegment left stale fields:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 入口庫的起點路由
+// ---------------------------------------------------------------------------
+
+func entrySpin(cycle, choice int, next ...int) SpinInput {
+	return SpinInput{BetMode: 0, BetMult: 1, Cycle: cycle, Choice: choice, ChooseNext: next, CaptureSnapshots: true}
+}
+
+// 每個位置依設定抽庫或照常使用 RNG；沒有配置的入口在執行前拒絕，不消耗 RNG。
+func TestOptimalEntryRouting(t *testing.T) {
+	libs := newEntryLibs(t)
+	m, err := libs.lab(t, libs.setting("start", "a", ""), nil).NewMachine(demoEntryID, MachineConfig{Seed: SeedInt64(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.UsesOptimal() {
+		t.Fatal("optimal routing is off")
+	}
+	from := func(in SpinInput) []byte {
+		t.Helper()
+		sr := m.SpinUnsafe(in)
+		if sr == nil {
+			t.Fatalf("%+v was rejected", in)
+		}
+		return append([]byte(nil), sr.State.StartCoreSnap...)
+	}
+	for range 20 {
+		if start := from(entrySpin(0, 0)); !libs.seeds["start"][string(start)] {
+			t.Fatal("the initial segment did not draw from start")
+		}
+		if start := from(entrySpin(1, 0, 3, 7)); !libs.seeds["a"][string(start)] {
+			t.Fatal("entry 3 did not draw from its gacha")
+		}
+		before := append([]byte(nil), coreState(t, m)...)
+		if start := from(entrySpin(4, 1, 3, 7)); !bytes.Equal(start, before) {
+			t.Fatal("entry 7 did not run on the machine RNG")
+		}
+	}
+
+	// 照常執行的段回傳機台的快照，可以用 StartSnap 重播。
+	before := append([]byte(nil), coreState(t, m)...)
+	want, err := json.Marshal(m.SpinUnsafe(entrySpin(1, 1, 3, 7)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := entrySpin(1, 1, 3, 7)
+	replay.StartSnap = before
+	if got, err := json.Marshal(m.SpinUnsafe(replay)); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("replay of a segment on the machine RNG differs: %v", err)
+	}
+
+	// 沒有配置的入口：SpinUnsafe 回傳 nil、Spin 回傳可判斷的 Warn，RNG 都不變。
+	before = append([]byte(nil), coreState(t, m)...)
+	if m.SpinUnsafe(entrySpin(1, 0, 5)) != nil || !bytes.Equal(coreState(t, m), before) {
+		t.Fatal("SpinUnsafe ran an entry without a slot")
+	}
+	zero := 0
+	_, err = m.Spin(&dto.SpinRequest{GameName: m.gameName, GameId: m.gameId, Bet: m.BetUnits[0], BetMode: 0, BetMult: 1,
+		Cycle: 1, Choice: &zero, ChooseNext: []int{5}})
+	var e *errs.E
+	if !errors.Is(err, ErrContinuationUnsupported) || !errors.As(err, &e) || e.ErrLv != errs.Warn || !bytes.Equal(coreState(t, m), before) {
+		t.Fatalf("Spin: %v", err)
+	}
+}
+
+// 入口 0 是一般的入口，不代表初始段。
+func TestOptimalEntryZeroIsNotStart(t *testing.T) {
+	libs := newEntryLibs(t)
+	block := fmt.Sprintf("optimal_setting:\n  use_optimal: true\n  modes:\n    - start: %s\n      after:\n        0: %s\n", libs.slot("start"), libs.slot("a"))
+	m, err := libs.lab(t, block, nil).NewMachine(demoEntryID, MachineConfig{Seed: SeedInt64(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		if sr := m.SpinUnsafe(entrySpin(0, 0)); !libs.seeds["start"][string(sr.State.StartCoreSnap)] {
+			t.Fatal("the initial segment did not draw from start")
+		}
+	}
+}
+
+// 交付前的檢查：段未結束時，ChooseNext 必須非空且每個入口都已配置。抽庫與照常執行的段、
+// 三個執行入口都檢查；指定起始快照的回放不檢查。
+func TestOptimalDeliveryCheck(t *testing.T) {
+	libs := newEntryLibs(t)
+	for _, start := range []string{"start", ""} {
+		for name, next := range map[string][]int{"entry without slot": {3, 5}, "no options": nil} {
+			wrap := func(inner slot.GameLogic) slot.GameLogic { return &unfinishedLogic{inner: inner, next: next} }
+			lab := libs.lab(t, libs.setting(start, "a", ""), wrap)
+			// 發生內部故障後機台必須棄用，所以每一項都用新的機台。
+			machine := func() *Machine {
+				m, err := lab.NewMachine(demoEntryID, MachineConfig{Seed: SeedInt64(5)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return m
+			}
+			label := fmt.Sprintf("start %q, %s", start, name)
+			m := machine()
+			if catchPanic(func() { m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}) }) == nil {
+				t.Errorf("%s: SpinUnsafe delivered", label)
+			}
+			m = machine()
+			replay := SpinInput{BetMode: 0, BetMult: 1, StartSnap: append([]byte(nil), coreState(t, m)...)}
+			if p := catchPanic(func() { m.SpinUnsafe(replay) }); p != nil {
+				t.Errorf("%s: a replay from a given snapshot was checked: %v", label, p)
+			}
+			r, err := NewBetRunner(machine())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if catchPanic(func() { _, _ = r.Bet(SpinInput{BetMode: 0, BetMult: 1}, ChoosePlayer) }) == nil {
+				t.Errorf("%s: BetRunner delivered", label)
+			}
+			m = machine()
+			req := &dto.SpinRequest{GameName: m.gameName, GameId: m.gameId, Bet: m.BetUnits[0], BetMode: 0, BetMult: 1}
+			if catchPanic(func() { _, _ = m.Spin(req) }) == nil {
+				t.Errorf("%s: Spin delivered", label)
+			}
+		}
+	}
+}
+
+// 所有位置都照常使用 RNG：路由仍然啟用，入口與交付前的檢查照常執行。
+func TestOptimalRoutingWithoutGachas(t *testing.T) {
+	libs := newEntryLibs(t)
+	lab := libs.lab(t, libs.setting("", "", ""), nil)
+	m, err := lab.NewMachine(demoEntryID, MachineConfig{Seed: SeedInt64(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.UsesOptimal() || m.SpinUnsafe(entrySpin(1, 0, 5)) != nil || m.SpinUnsafe(entrySpin(1, 0, 3)) == nil {
+		t.Fatal("routing without gachas")
+	}
+	wrap := func(inner slot.GameLogic) slot.GameLogic { return &unfinishedLogic{inner: inner, next: []int{5}} }
+	m, err = libs.lab(t, libs.setting("", "", ""), wrap).NewMachine(demoEntryID, MachineConfig{Seed: SeedInt64(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catchPanic(func() { m.SpinUnsafe(SpinInput{BetMode: 0, BetMult: 1}) }) == nil {
+		t.Fatal("an entry without a slot was delivered")
+	}
+}
+
+// use_optimal 為 false 時不讀取 modes 的任何庫。
+func TestOptimalModesIgnoredWhenOff(t *testing.T) {
+	libs := &entryLibs{root: t.TempDir()}
+	block := "optimal_setting:\n  use_optimal: false\n  modes:\n    - start: {dist: missing.zst, bank: missing.bin}\n"
+	m, err := libs.lab(t, block, nil).NewMachine(demoEntryID, MachineConfig{Seed: SeedInt64(5)})
+	if err != nil || m.UsesOptimal() {
+		t.Fatalf("machine optimal=%v: %v", err == nil && m.UsesOptimal(), err)
 	}
 }
