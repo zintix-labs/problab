@@ -259,6 +259,11 @@ func VerifyRuntimeMaterialized(
 	if !runtimeCheck.Pass {
 		return finalizeVerification(checks), nil
 	}
+	if compiled.Prepared.Plan.Plan.Target.Input != nil {
+		checks = append(checks, textVerificationCheck(
+			entryContractCheck, true, fmt.Sprintf("contrasted_outcomes=%d", len(replayed.Samples)), entryContractRequired,
+		))
+	}
 	semantic := VerifyMaterialized(compiled, solution, replayed)
 	checks = append(checks, semantic.Checks...)
 	return finalizeVerification(checks), nil
@@ -302,6 +307,7 @@ func replayMaterializedSnapshots(
 	if tagger != nil {
 		tags = tagger.NewMasks()
 	}
+	target := compiled.Prepared.Plan.Plan.Target
 
 	classByID := make(map[string]int, len(compiled.Prepared.Classes))
 	for classIndex, class := range compiled.Prepared.Classes {
@@ -322,7 +328,7 @@ func replayMaterializedSnapshots(
 				"every seed-bank entry restores and reproduces its modeled payout, Class predicate, and atomic bucket",
 			), nil
 		}
-		result := machine.SpinUnsafe(problab.SpinInput{BetMode: mode.BetMode, BetMult: 1})
+		result := machine.SpinUnsafe(segmentInput(target, mode.BetMode))
 		actualBet := 0
 		if result != nil {
 			actualBet = result.Bet
@@ -333,6 +339,14 @@ func replayMaterializedSnapshots(
 				fmt.Sprintf("sample[%d] replay returned invalid bet: result_nil=%t bet=%d want=%d", sampleIndex, result == nil, actualBet, mode.BetUnit),
 				"every seed-bank entry restores and reproduces its modeled payout, Class predicate, and atomic bucket",
 			), nil
+		}
+		var base entrySample
+		if target.Input != nil {
+			// Taken before anything else runs on the machine: the result and the
+			// snapshot both borrow buffers that the next run may overwrite.
+			if base, err = captureEntrySample(machine, result); err != nil {
+				return MaterializedMode{}, VerificationCheck{}, err
+			}
 		}
 		win := float64(result.TotalWin) / float64(actualBet)
 		if !isFinite(win) || win < 0 {
@@ -383,6 +397,12 @@ func replayMaterializedSnapshots(
 				fmt.Sprintf("sample[%d] replay bucket=%d differs from modeled bucket=%d", sampleIndex, bucketIndex, sample.BucketIndex),
 				"every seed-bank entry restores and reproduces its modeled payout, Class predicate, and atomic bucket",
 			), nil
+		}
+		if target.Input != nil {
+			check, err := checkEntryContract(machine, target, mode.BetMode, seed, sampleIndex, base)
+			if err != nil || !check.Pass {
+				return MaterializedMode{}, check, err
+			}
 		}
 		replayed.Samples[sampleIndex].Win = win
 		replayed.Samples[sampleIndex].BucketIndex = bucketIndex

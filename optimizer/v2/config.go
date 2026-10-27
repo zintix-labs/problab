@@ -104,7 +104,11 @@ func LoadConfig(r io.Reader) (Config, error) {
 		return Config{}, errors.New("optimizer v2 config: nil reader")
 	}
 
-	decoder := yaml.NewDecoder(r)
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return Config{}, fmt.Errorf("read optimizer v2 config: %w", err)
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 
 	var config Config
@@ -119,11 +123,81 @@ func LoadConfig(r io.Reader) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("decode trailing optimizer v2 YAML: %w", err)
 	}
+	if err := checkTargetInputNodes(raw); err != nil {
+		return Config{}, err
+	}
 
 	if err := config.Validate(); err != nil {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+// checkTargetInputNodes checks what the strict decode cannot see in
+// plans[].target.input: a null input decodes exactly like an omitted one, and
+// yaml.v3 truncates a float such as 3.7 into an int without an error. Either
+// would silently collect the wrong segment. It runs on the raw document so the
+// strict decode above keeps rejecting unknown keys.
+func checkTargetInputNodes(raw []byte) error {
+	var document yaml.Node
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("decode optimizer v2 config: %w", err)
+	}
+	if len(document.Content) == 0 {
+		return nil
+	}
+	plans := yamlMappingValue(document.Content[0], "plans")
+	if plans == nil || plans.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for i, plan := range plans.Content {
+		input := yamlMappingValue(yamlMappingValue(plan, "target"), "input")
+		if input == nil {
+			continue
+		}
+		path := fmt.Sprintf("plans[%d].target.input", i)
+		if input.ShortTag() == "!!null" {
+			return invalid(path, "must not be null; omit target.input to collect the initial segment")
+		}
+		if next := yamlMappingValue(input, "choose_next"); next != nil && next.Kind == yaml.SequenceNode {
+			for j, value := range next.Content {
+				if !yamlInt(value) {
+					return invalid(fmt.Sprintf("%s.choose_next[%d]", path, j), "must be an integer YAML scalar")
+				}
+			}
+		}
+		if choice := yamlMappingValue(input, "choice"); choice != nil && choice.ShortTag() != "!!null" && !yamlInt(choice) {
+			return invalid(path+".choice", "must be an integer YAML scalar")
+		}
+	}
+	return nil
+}
+
+// yamlMappingValue returns the value node of key in a mapping node, following
+// aliases; nil when node is not a mapping or has no such key.
+func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
+	node = yamlResolve(node)
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return yamlResolve(node.Content[i+1])
+		}
+	}
+	return nil
+}
+
+func yamlResolve(node *yaml.Node) *yaml.Node {
+	for node != nil && node.Kind == yaml.AliasNode {
+		node = node.Alias
+	}
+	return node
+}
+
+func yamlInt(node *yaml.Node) bool {
+	node = yamlResolve(node)
+	return node != nil && node.Kind == yaml.ScalarNode && node.ShortTag() == "!!int"
 }
 
 // Validate checks every schema-independent invariant that can be proved before
@@ -288,6 +362,17 @@ func validateRunPlan(path string, plan RunPlan, intents map[string]MathIntent) e
 	if plan.Target.BetModes[0] < 0 {
 		return invalid(path+".target.bet_modes[0]", "must be non-negative")
 	}
+	if input := plan.Target.Input; input != nil {
+		if len(input.ChooseNext) == 0 {
+			return invalid(path+".target.input.choose_next", "must list at least one entry value; omit target.input to collect the initial segment")
+		}
+		if input.Choice == nil {
+			return invalid(path+".target.input.choice", "is required; write 0 for the first position")
+		}
+		if *input.Choice < 0 || *input.Choice >= len(input.ChooseNext) {
+			return invalid(path+".target.input.choice", "must be in [0, %d), got %d", len(input.ChooseNext), *input.Choice)
+		}
+	}
 	if plan.Engine != EngineIntentLPV2 {
 		return invalid(path+".engine", "must be %q, got %q", EngineIntentLPV2, plan.Engine)
 	}
@@ -339,6 +424,10 @@ func validateRunPlan(path string, plan RunPlan, intents map[string]MathIntent) e
 				OutputRGSCollected,
 				format,
 			)
+		}
+		if plan.Target.Input != nil && (format == OutputRGSOptimized || format == OutputRGSCollected) {
+			// RGS delivers every result as a whole game, and an entry segment often ends the game.
+			return invalid(fmt.Sprintf("%s.output.format[%d]", path, i), "%s is not supported when target.input is set", format)
 		}
 		if _, duplicate := seenOutputFormats[format]; duplicate {
 			return invalid(fmt.Sprintf("%s.output.format[%d]", path, i), "duplicates output format %q", format)
@@ -729,6 +818,14 @@ func cloneRunPlan(plan RunPlan) RunPlan {
 	cloned := plan
 	cloned.Seed = plan.Seed.clone()
 	cloned.Target.BetModes = slices.Clone(plan.Target.BetModes)
+	if plan.Target.Input != nil {
+		input := TargetInput{ChooseNext: slices.Clone(plan.Target.Input.ChooseNext)}
+		if plan.Target.Input.Choice != nil {
+			choice := *plan.Target.Input.Choice
+			input.Choice = &choice
+		}
+		cloned.Target.Input = &input
+	}
 	cloned.Collection.CollectedSeed = slices.Clone(plan.Collection.CollectedSeed)
 	cloned.Output.Format = slices.Clone(plan.Output.Format)
 	return cloned

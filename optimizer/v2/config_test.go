@@ -15,6 +15,7 @@
 package v2
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -669,4 +670,77 @@ func updateClass(config *Config, index int, update func(*ClassIntent)) {
 	intent := config.Intents["high-win-v2"]
 	update(&intent.Classes[index])
 	config.Intents["high-win-v2"] = intent
+}
+
+// withTargetInput inserts raw YAML under plans[0].target of validConfigYAML.
+func withTargetInput(raw string) string {
+	return strings.Replace(validConfigYAML, "      bet_modes: [0]\n", "      bet_modes: [0]\n"+raw, 1)
+}
+
+func TestLoadConfigAcceptsTargetInput(t *testing.T) {
+	config, err := ParseConfig([]byte(withTargetInput("      input:\n        choose_next: [3, 7]\n        choice: 0\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := config.Plans[0].Target.Input
+	if input == nil || !slices.Equal(input.ChooseNext, []int{3, 7}) || input.Choice == nil || *input.Choice != 0 || input.Entry() != 3 {
+		t.Fatalf("input %+v", input)
+	}
+	resolved, err := config.ResolvePlan("demo-high-win-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.ChooseNext[0], *input.Choice = 99, 1
+	if got := resolved.Plan.Target.Input; got.ChooseNext[0] != 3 || *got.Choice != 0 {
+		t.Fatalf("ResolvePlan aliased target.input: %+v", got)
+	}
+	raw, err := json.Marshal(resolved.Plan.Target)
+	if err != nil || !strings.Contains(string(raw), `"input":{"choose_next":[3,7],"choice":0}`) {
+		t.Fatalf("target JSON %s: %v", raw, err)
+	}
+}
+
+// Without target.input the target JSON, and so the config hash, has no input key.
+func TestTargetWithoutInputOmitsItFromJSON(t *testing.T) {
+	config, err := ParseConfig([]byte(validConfigYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(config.Plans[0].Target)
+	if err != nil || strings.Contains(string(raw), "input") {
+		t.Fatalf("target JSON %s: %v", raw, err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidTargetInput(t *testing.T) {
+	for name, c := range map[string]struct{ raw, want string }{
+		"empty value":      {"      input:\n", "target.input: must not be null"},
+		"tilde":            {"      input: ~\n", "target.input: must not be null"},
+		"null":             {"      input: null\n", "target.input: must not be null"},
+		"empty mapping":    {"      input: {}\n", "target.input.choose_next: must list"},
+		"missing choice":   {"      input: {choose_next: [3]}\n", "target.input.choice: is required"},
+		"null choice":      {"      input: {choose_next: [3], choice: null}\n", "target.input.choice: is required"},
+		"choice too large": {"      input: {choose_next: [3, 7], choice: 2}\n", "must be in [0, 2), got 2"},
+		"negative choice":  {"      input: {choose_next: [3, 7], choice: -1}\n", "must be in [0, 2), got -1"},
+		"unknown cycle":    {"      input: {choose_next: [3], choice: 0, cycle: 1}\n", "field cycle not found"},
+		"unknown cp":       {"      input: {choose_next: [3], choice: 0, checkpoint: x}\n", "field checkpoint not found"},
+		"float entry":      {"      input: {choose_next: [3.7, 7], choice: 0}\n", "choose_next[0]: must be an integer"},
+		"float choice":     {"      input: {choose_next: [3, 7], choice: 0.9}\n", "choice: must be an integer"},
+		"whole float":      {"      input: {choose_next: [3, 7], choice: 1.0}\n", "choice: must be an integer"},
+		"string choice":    {"      input: {choose_next: [3, 7], choice: '1'}\n", "cannot unmarshal"},
+	} {
+		if _, err := ParseConfig([]byte(withTargetInput(c.raw))); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error %v, want %q", name, err, c.want)
+		}
+	}
+}
+
+func TestLoadConfigRejectsRGSOutputWithTargetInput(t *testing.T) {
+	for _, format := range []string{"rgs-optimized", "rgs-collected"} {
+		raw := strings.Replace(withTargetInput("      input: {choose_next: [3], choice: 0}\n"),
+			"format: [optimal_gacha]", "format: [optimal_gacha, "+format+"]", 1)
+		if _, err := ParseConfig([]byte(raw)); err == nil || !strings.Contains(err.Error(), "not supported when target.input is set") {
+			t.Errorf("%s: error %v", format, err)
+		}
+	}
 }

@@ -531,7 +531,7 @@ func replayCollectionBanks(
 					reportReplayProgress(collector.Reporter, plan, betMode, sourceIndex, report, *collected)
 					return replayRecordContinue, &replaySourceIncompatibleError{record: recordIndex, cause: fmt.Errorf("restore Core snapshot: %w", restoreErr)}
 				}
-				spin := currentMachine.SpinUnsafe(problab.SpinInput{BetMode: betMode, BetMult: 1})
+				spin := currentMachine.SpinUnsafe(segmentInput(plan.Plan.Target, betMode))
 				if spin == nil || spin.Bet <= 0 || spin.Bet != runtime.betUnit || spin.TotalWin < 0 {
 					report.Rejected++
 					reportReplayProgress(collector.Reporter, plan, betMode, sourceIndex, report, *collected)

@@ -101,7 +101,11 @@ func reportV2Outcome(output io.Writer, result optimizerv2.RunResult) {
 	if publication.Reused {
 		reused = " (reused)"
 	}
-	_, _ = fmt.Fprintf(output, "[Result] mode %d generated; gacha published: %s%s\n", publication.BetMode, publication.Directory, reused)
+	entry := ""
+	if modes := result.Report.Modes; len(modes) == 1 && modes[0].Entry != nil {
+		entry = fmt.Sprintf(" (entry %d)", *modes[0].Entry)
+	}
+	_, _ = fmt.Fprintf(output, "[Result] mode %d generated%s; gacha published: %s%s\n", publication.BetMode, entry, publication.Directory, reused)
 }
 
 // formatDiagnosticBound keeps exact points compact while still distinguishing

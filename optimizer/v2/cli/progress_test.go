@@ -626,9 +626,11 @@ func TestReportV2OutcomePrintsEveryLocalizedProblem(t *testing.T) {
 // TestReportV2OutcomePrintsPublishedGachaDirectory checks that every generated
 // mode reports the directory of its own gacha pair, and marks reused content.
 func TestReportV2OutcomePrintsPublishedGachaDirectory(t *testing.T) {
+	entry := 7
 	tests := []struct {
 		name        string
 		publication optimizerv2.PublicationReport
+		modes       []optimizerv2.ModeRunReport
 		want        []string
 	}{
 		{
@@ -649,13 +651,23 @@ func TestReportV2OutcomePrintsPublishedGachaDirectory(t *testing.T) {
 			},
 			want: []string{"mode 0 generated", "fedcba9876543210 (reused)"},
 		},
+		{
+			name: "entry gacha published",
+			publication: optimizerv2.PublicationReport{
+				State: optimizerv2.PublicationOutputsPublished, BetMode: 0,
+				Formats:   []optimizerv2.OutputFormat{optimizerv2.OutputOptimalGacha},
+				Directory: "build/optimizer/gacha/game_3/mode_0/0011223344556677",
+			},
+			modes: []optimizerv2.ModeRunReport{{BetMode: 0, Entry: &entry}},
+			want:  []string{"mode 0 generated (entry 7); gacha published: build/optimizer/gacha/game_3/mode_0/0011223344556677"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
 			reportV2Outcome(&output, optimizerv2.RunResult{
 				Status: optimizerv2.StatusOptimal,
-				Report: optimizerv2.RunReport{Publication: &test.publication},
+				Report: optimizerv2.RunReport{Publication: &test.publication, Modes: test.modes},
 			})
 			for _, want := range test.want {
 				if !strings.Contains(output.String(), want) {
