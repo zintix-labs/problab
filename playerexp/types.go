@@ -13,100 +13,30 @@
 // limitations under the License.
 
 // Package playerexp analyzes finite player experiences on a sequential,
-// deterministic, complete-result game. It does not support checkpoint recovery.
+// deterministic game. Each game runs to its end through a BetRunner; at choice
+// points the player's strategy chooses. It does not save or resume a player's
+// session across processes.
 package playerexp
 
 import (
-	"fmt"
+	"errors"
 	"reflect"
-	"strings"
 
 	"github.com/zintix-labs/problab"
-	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/strategy"
 	"github.com/zintix-labs/problab/sdk/tag"
-	"github.com/zintix-labs/problab/spec"
 )
+
+// ErrInvalidDecision reports a strategy decision that does not fit the moment
+// it was returned at: a choice outside a choice point, or anything but a valid
+// Choice at one. A Choice out of range wraps problab.ErrChoiceOutOfRange instead.
+var ErrInvalidDecision = errors.New("invalid strategy decision")
 
 // MaxSpinsPerPlayer bounds the experience window, not engine performance.
 // Longer sessions saturate encounter counts and belong in Simulator. Changing
 // this product boundary changes report comparability; it is not configurable.
 const MaxSpinsPerPlayer = 20_000
 
-// PlayerState is a value snapshot of the executor's authoritative ledger.
-// Next receives the settled current spin, not the pre-wager balance.
-type PlayerState struct{ Balance, Spins, TotalBet, TotalWin int }
-
-// Bet selects a game-specific mode and a strictly positive multiplier.
-type Bet struct{ BetMode, BetMult int }
-
-// EndType is a mutually exclusive player outcome. Bust is executor-owned.
-type EndType uint8
-
-const (
-	Other EndType = iota
-	Bust
-	Satisfied
-	Dissatisfied
-)
-
-// Decision uses Bet only while KeepPlay; otherwise only EndType is used.
-// Its zero value leaves as Other without making a wager.
-type Decision struct {
-	KeepPlay bool
-	Bet
-	EndType
-}
-
-// StrategyFactory creates independent player memory. Configure factories before
-// registration; they and their closure dependencies must not change during Run.
-type StrategyFactory interface {
-	NewStrategy(initialBalance int) Strategy
-}
-
-// Strategy reads authoritative state and borrowed, read-only results. Copy only
-// needed values for history; dto.NewSpinResultDTO is an optional full-result
-// copy (Extend independence still depends on the game's Snapshot contract).
-// A blocked callback cannot be preempted by context cancellation.
-type Strategy interface {
-	FirstSpin(PlayerState) Decision
-	Next(PlayerState, *buf.SpinResult) Decision
-}
-
-// StrategyRegistry is game-scoped. Its zero value works; registration and Run
-// must not overlap. Factories themselves are borrowed, not cloned.
-type StrategyRegistry struct {
-	factories map[spec.GID]map[string]StrategyFactory
-}
-
-// NewStrategyRegistry creates an empty game-scoped registry.
-func NewStrategyRegistry() *StrategyRegistry { return &StrategyRegistry{} }
-
-// Register binds an exact name; duplicates and nil/typed-nil factories fail.
-func (r *StrategyRegistry) Register(gid spec.GID, name string, f StrategyFactory) error {
-	if r == nil || strings.TrimSpace(name) == "" || nilLike(f) {
-		return fmt.Errorf("invalid strategy registration %q", name)
-	}
-	if _, ok := r.Get(gid, name); ok {
-		return fmt.Errorf("duplicate strategy %q for game %d", name, gid)
-	}
-	if r.factories == nil {
-		r.factories = make(map[spec.GID]map[string]StrategyFactory)
-	}
-	if r.factories[gid] == nil {
-		r.factories[gid] = make(map[string]StrategyFactory)
-	}
-	r.factories[gid][name] = f
-	return nil
-}
-
-// Get resolves only the requested game's namespace; nil registries are empty.
-func (r *StrategyRegistry) Get(gid spec.GID, name string) (StrategyFactory, bool) {
-	if r == nil {
-		return nil, false
-	}
-	f, ok := r.factories[gid][name]
-	return f, ok
-}
 func nilLike(v any) bool {
 	if v == nil {
 		return true
@@ -123,7 +53,7 @@ func nilLike(v any) bool {
 // game, with no built-in names. Callbacks are synchronous and read-only.
 type Options struct {
 	Lab        *problab.Problab
-	Strategies *StrategyRegistry
+	Strategies *strategy.Registry
 	Tags       tag.GameTagCatalog
 	Reporter   Reporter
 }

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zintix-labs/problab"
 	"gopkg.in/yaml.v3"
 )
 
@@ -146,5 +147,36 @@ func TestBucketsAndRanges(t *testing.T) {
 	}
 	if bucketIndex([]float64{0, 1.0 / 3}, float64(1)/3) != 2 {
 		t.Fatal("fraction boundary")
+	}
+}
+
+// max_segments is an optional integer; unset stays zero (the default is applied
+// when the group runs) and is absent from the report's JSON.
+func TestMaxSegmentsConfig(t *testing.T) {
+	set := func(v string) string {
+		return strings.Replace(validYAML, "strategy: s}", "strategy: s, max_segments: "+v+"}", 1)
+	}
+	for _, v := range []string{"2.0", "'3'", "null", "-1"} {
+		if _, e := ParseConfig([]byte(set(v))); e == nil {
+			t.Errorf("accepted max_segments: %s", v)
+		}
+	}
+	unset, e := ParseConfig([]byte(validYAML))
+	if e != nil || unset.Analysis[0].Player.MaxSegments != 0 {
+		t.Fatal(unset.Analysis[0].Player, e)
+	}
+	raw, _ := json.Marshal(unset)
+	if strings.Contains(string(raw), "MaxSegments") {
+		t.Fatalf("unset max_segments reached the JSON: %s", raw)
+	}
+	given, e := ParseConfig([]byte(set("4")))
+	if e != nil || given.Analysis[0].Player.MaxSegments != 4 {
+		t.Fatal(given.Analysis[0].Player, e)
+	}
+	if raw, _ := json.Marshal(given); !strings.Contains(string(raw), `"MaxSegments":4`) {
+		t.Fatalf("set max_segments missing from the JSON: %s", raw)
+	}
+	if got := maxSegments(unset.Analysis[0].Player); got != problab.DefaultMaxSegments {
+		t.Fatalf("default %d", got)
 	}
 }

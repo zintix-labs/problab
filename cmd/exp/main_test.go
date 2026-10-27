@@ -14,12 +14,15 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/playerexp"
+	"github.com/zintix-labs/problab/sdk/strategy"
 )
 
 func TestEmbeddedConfigAndArguments(t *testing.T) {
@@ -41,8 +44,48 @@ func TestApplicationInjectionPoints(t *testing.T) {
 		t.Fatal(code, err)
 	}
 	pLab = oldLab
-	strategyCatalog = playerexp.StrategyCatalog{77: {{Name: "private", Factory: nil}}}
+	strategyCatalog = strategy.Catalog{77: {{Name: "private", Factory: nil}}}
 	if code, err := run(nil, nil); code != 1 || err == nil || !strings.Contains(err.Error(), "game 77") {
 		t.Fatal("catalog injection was bypassed", code, err)
+	}
+}
+
+// -config selects another YAML: a missing file fails before the Lab is built,
+// and the choice-game examples run with the demo strategies.
+func TestConfigFlagAndChoiceExamples(t *testing.T) {
+	if code, err := run([]string{"-config", "examples/missing.yaml"}, nil); code != 1 || err == nil || !strings.Contains(err.Error(), "missing.yaml") {
+		t.Fatal(code, err)
+	}
+	if code, err := run([]string{"-config"}, nil); code != 1 || err == nil {
+		t.Fatal("a flag without a value was accepted", code, err)
+	}
+	if code, err := run([]string{"extra"}, nil); code != 1 || err == nil {
+		t.Fatal("a positional argument was accepted", code, err)
+	}
+	lab, err := pLab()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lab.Close() }()
+	reg, err := strategyCatalog.BuildRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"examples/game_2.yaml", "examples/game_3.yaml"} {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := playerexp.ParseConfig(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for i := range c.Analysis {
+			c.Analysis[i].Player.Players = 5 // keep the test short
+		}
+		r, err := playerexp.Run(context.Background(), c, playerexp.Options{Lab: lab, Strategies: reg, Tags: gameTags})
+		if err != nil || r.Groups[0].Completed != 5 {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }

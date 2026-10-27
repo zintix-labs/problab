@@ -4,23 +4,23 @@
 
 ## 執行
 
-編輯 `cmd/exp/exp_cfg.yaml` 後執行 `make exp`。指令不接受參數；預設產物在 `build/exp/run-<唯一識別>/`。終端機顯示原地更新的完成玩家數，檔案／管線輸出使用 10% 里程碑；不會為跳過的門檻捏造進度。
+編輯 `cmd/exp/exp_cfg.yaml` 後執行 `make exp`；也可以指定其他設定檔：`make exp config=cmd/exp/examples/game_3.yaml`（等同 `go run ./cmd/exp -config <path>`）。`examples/` 有選擇類遊戲（game 2、3）的範例。除了 `-config`，指令不接受其他參數；預設產物在 `build/exp/run-<唯一識別>/`。終端機顯示原地更新的完成玩家數，檔案／管線輸出使用 10% 里程碑；不會為跳過的門檻捏造進度。
 
 Go 呼叫端可使用 `ParseConfig` → `Run(ctx, config, Options)` → `WriteCSV`；也可用 `playerexp/cli.Run` 組合執行、進度與 CSV。`Output=nil` 只關閉文字；`OutputDir` 可改發布目錄。CLI 回傳 0 表示成功，錯誤或取消回傳 1 與 error。Lab 由呼叫端建立、關閉；分析不接管其生命週期。
 
-策略註冊為 `GameID → 名稱 → StrategyFactory`。同名可以分別註冊給不同遊戲；沒有自動跳過或自動註冊的策略。參考 `demo/demo_strategies`：Factory 保存遊戲設定，每位玩家建立獨立 Strategy。自訂策略若需要近期歷史，只複製需要的數值，不保留機台重用的結果指標。Tags 由 `Options.Tags` 注入，也依遊戲隔離；沒有內建 bg／fg。
+策略的契約（`Strategy`、`Factory`、`PlayerState`、`Decision`、`Registry`、`Catalog`）定義在 `sdk/strategy`，策略作者只需要依賴它與 `sdk/buf`，不必依賴本套件。策略註冊為 `GameID → 名稱 → Factory`。同名可以分別註冊給不同遊戲；沒有自動跳過或自動註冊的策略。參考 `demo/demo_strategies`：Factory 保存遊戲設定，每位玩家建立獨立 Strategy。自訂策略若需要近期歷史，只複製需要的數值，不保留機台重用的結果指標。Tags 由 `Options.Tags` 注入，也依遊戲隔離；沒有內建 bg／fg。
 
-宣告式組裝使用 `StrategyCatalog map[spec.GID][]StrategyRegistration`，每筆為 Name／Factory；
+宣告式組裝使用 `strategy.Catalog`（`map[spec.GID][]strategy.Registration`），每筆為 Name／Factory；
 `BuildRegistry()` 沿用 Registry 的驗證，按 GID 排序、按清單順序處理，失敗不回傳部分 Registry。
-官方可選策略放在 `playerexp/strategies`；Demo 的 `game_0.go` 選用策略與參數，`reg.go` 集中遊戲對應；
+官方可選策略放在 `sdk/strategy/builtin`；Demo 的 `game_0.go` 選用策略與參數，`reg.go` 集中遊戲對應；
 新增遊戲清單後，在 reg.go 加一行即可。不使用全域 init 自動註冊。
 `cmd/exp/main.go` 頂部集中 `strategyCatalog`、`gameTags`、`pLab` 三個注入點；
 私有專案替換這些來源與 YAML，不必修改下方執行流程。Catalog map／slice 不與建出的 Registry 共用，
 但 Factory 本體仍是借用，執行期間不可修改。
 
-官方 `strategies.Monotone` 固定 BetMode／BetMult，餘額達初始本金的 SatisfiedRatio 倍即滿意離場；
+官方 `builtin.Monotone` 固定 BetMode／BetMult，餘額達初始本金的 SatisfiedRatio 倍即滿意離場；
 未達標而完成 MaxSpins 則不滿意離場，同時達成時滿意優先。無法負擔下一注仍由執行器記 Bust。
-MaxSpins 必須在 1…20,000，SatisfiedRatio 為大於 1 的整數。Factory 收到的是已換算的實際本金，
+MaxSpins 至少為 1，SatisfiedRatio 為大於 1 的整數。MaxSpins 超過執行器的 20,000 局上限時，由執行器在第 20,000 局後以 Other（capped）結束；策略在此之前已決定離場的，照原本的判定順序。Factory 收到的是已換算的實際本金，
 不需要 BetUnits；非法設定／目標金額溢位會 panic，由 Run 的 factory 邊界轉成 error，不計為正常離場。
 私有策略可放在應用的 `internal/selfstrategies`，實作相同介面後加入遊戲清單；不注入遊戲算分邏輯，
 也不由核心自動註冊。`Monotone` 不需要保存逐局歷史；其他策略需要時應只複製所需欄位。
@@ -33,13 +33,17 @@ MaxSpins 必須在 1…20,000，SatisfiedRatio 為大於 1 的整數。Factory �
 - `*buf.SpinResult` 與巢狀緩衝是唯讀借用，到下一次 Machine 操作便可能失效。保存必要欄位請複製；需要整局時可自行用 `dto.NewSpinResultDTO`，Extend 的獨立性仍取決於遊戲 Snapshot 契約，執行器不自動轉 DTO。
 - Registry、Factory、tag closure 及設定不得在 Run 中被外部修改。策略／tag 不應修改結果或引擎 RNG。額外使用時間、網路或其他 RNG 的策略須自行控制，否則不保證重跑一致。
 
-## 第一階段邊界
+## 執行邊界
 
-一次 Run 使用一台 deterministic、保留 Extend 的機台（`NewMachine`），依序處理組別與玩家，亂數流連續前進。尊重 Lab 的 native／optimal 選擇，報告逐 mode 記來源。沒有暖機、平行玩家、跨組重播、checkpoint 或 Choice。完整 FG／連消可以包含在同一次 Spin 裡；每次結果必須 IsGameEnd 且沒有 checkpoint。
+一次 Run 使用一台 deterministic、保留 Extend 的機台（`NewMachine`），依序處理組別與玩家，亂數流連續前進。尊重 Lab 的 native／optimal 選擇，報告逐 mode 記來源。沒有暖機、平行玩家或跨組重播。
+
+每一局由 `BetRunner` 執行到結束。選擇類遊戲停在選擇點時，同一個策略的 `Next` 會收到**本段**（`IsGameEnd` 為 false），回傳 `strategy.ChoiceAt(i)` 選擇 `ChooseNext` 的第 i 個位置；局結束時 `Next` 收到**完整局**。所以不要把每次收到的 `TotalWin` 加總。選擇點的決策只能有 `Choice`，其他欄位必須是零值；局結束後的決策不能有 `Choice`；不合法時回報策略錯誤（`ErrInvalidDecision`，位置超出範圍為 `problab.ErrChoiceOutOfRange`），不算玩家離場。內建的 `builtin.Monotone` 以 `Choose`（first、last、iter）選擇；未設定時遇到選擇點就報錯，不會默默選第一個。
+
+帳本在開局時扣投注（`Balance`、`TotalBet`），局結束時才結算贏分並把 `Spins` 加一；選擇點看到的是「已付投注、尚未結算」。局中不判定破產：已付費的局一定跑完，`Bust` 只在付不起下一注時判定。checkpoint 由 `BetRunner` 在同一局的段與段之間傳遞，不代表可以跨程序保存或恢復玩家。一局的段數上限是 `player.max_segments`（含第 0 段，未設定時為 10），超過時回報 `problab.ErrSegmentLimit`；它和每位玩家的 20,000 局上限是兩回事。win bucket、tag 與事件都只在完整局上判定一次。
 
 每位玩家最多 **20,000 個完整 Spin**。這是有限體驗視窗的產品邊界，不是統計定理或效能限制；更長期的分布估計請用 Simulator。第 20,000 局照常結算並呼叫 Next，策略離場優先；仍想繼續則 Others／max_spin_reached，不執行下一注。
 
-取消、非法結果或 callback／遊戲 panic 會停止整次 Run，丟棄當前玩家全部暫存統計。先前完成玩家保留，後組 NOT_STARTED。Run 同時回 partial Report 與 error，CLI 仍嘗試發布 CSV，發布失敗會合併原錯誤。同步 callback 無法被 context 強制中斷；需等其返回才能觀察取消。
+取消、非法結果或 callback／遊戲 panic 會停止整次 Run，丟棄當前玩家全部暫存統計。先前完成玩家保留，後組 NOT_STARTED。Run 同時回 partial Report 與 error，CLI 仍嘗試發布 CSV，發布失敗會合併原錯誤。取消在每一段與每次策略回呼的邊界檢查；同步 callback 與正在執行的遊戲無法被 context 強制中斷，需等其返回才能觀察取消。
 
 ## 桶、事件與統計
 

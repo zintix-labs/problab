@@ -48,6 +48,11 @@ type PlayerConfig struct {
 	Players  int    `yaml:"players"`
 	InitBet  int    `yaml:"init_bet"`
 	Strategy string `yaml:"strategy"`
+	// MaxSegments bounds the segments of one game, the first included; it is
+	// separate from MaxSpinsPerPlayer. Zero (unset) uses problab.DefaultMaxSegments
+	// when the group runs; the default is not written back, so the reports of a
+	// configuration that omits it are unchanged.
+	MaxSegments int `yaml:"max_segments,omitempty" json:",omitempty"`
 }
 
 // EventConfig selects a contiguous bucket range and AND-ed tag predicates.
@@ -130,7 +135,7 @@ func validateNodes(n *yaml.Node, key string) error {
 	if n.Kind == yaml.AliasNode {
 		return fmt.Errorf("YAML aliases are not supported")
 	}
-	if key == "players" || key == "init_bet" || key == "game_id" {
+	if key == "players" || key == "init_bet" || key == "game_id" || key == "max_segments" {
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!int" {
 			return fmt.Errorf("%s must be an integer", key)
 		}
@@ -184,6 +189,9 @@ func normalizeConfig(c Config) (Config, error) {
 		}
 		if g.Player.Players <= 0 || g.Player.InitBet <= 0 || strings.TrimSpace(g.Player.Strategy) == "" {
 			return c, fmt.Errorf("group %q: invalid player settings", g.Name)
+		}
+		if g.Player.MaxSegments < 0 {
+			return c, fmt.Errorf("group %q: max_segments must not be negative", g.Name)
 		}
 		g.WinBuckets = append([]float64(nil), g.WinBuckets...)
 		if len(g.WinBuckets) == 0 || g.WinBuckets[0] != 0 {

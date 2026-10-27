@@ -12,16 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package playerexp
+package strategy
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/zintix-labs/problab/sdk/buf"
 )
 
-func TestStrategyCatalogBuildRegistry(t *testing.T) {
+type factoryFunc func(int) Strategy
+
+func (f factoryFunc) NewStrategy(n int) Strategy { return f(n) }
+
+type idle struct{}
+
+func (idle) FirstSpin(PlayerState) Decision             { return Decision{} }
+func (idle) Next(PlayerState, *buf.SpinResult) Decision { return Decision{} }
+
+func fixedFactory(int) factoryFunc { return func(int) Strategy { return idle{} } }
+
+func TestCatalogBuildRegistry(t *testing.T) {
 	f := fixedFactory(1)
-	c := StrategyCatalog{1: {{Name: "same", Factory: f}}, 0: {{Name: "same", Factory: f}}}
+	c := Catalog{1: {{Name: "same", Factory: f}}, 0: {{Name: "same", Factory: f}}}
 	a, err := c.BuildRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -53,21 +66,21 @@ func TestStrategyCatalogBuildRegistry(t *testing.T) {
 	if _, ok := b.Get(0, "extra"); ok {
 		t.Fatal("registry maps shared")
 	}
-	var empty StrategyCatalog
+	var empty Catalog
 	if r, err := empty.BuildRegistry(); err != nil || r == nil {
 		t.Fatal(r, err)
 	}
 }
 
-func TestStrategyCatalogValidationOrder(t *testing.T) {
+func TestCatalogValidationOrder(t *testing.T) {
 	var typedNil factoryFunc
-	for _, entries := range [][]StrategyRegistration{
+	for _, entries := range [][]Registration{
 		{{Name: " ", Factory: fixedFactory(1)}},
 		{{Name: "nil"}},
 		{{Name: "typed", Factory: typedNil}},
 		{{Name: "repeat", Factory: fixedFactory(1)}, {Name: "repeat", Factory: fixedFactory(1)}},
 	} {
-		c := StrategyCatalog{9: {{Name: "later"}}, 2: entries}
+		c := Catalog{9: {{Name: "later"}}, 2: entries}
 		for i := 0; i < 50; i++ {
 			r, err := c.BuildRegistry()
 			if r != nil || err == nil || !strings.Contains(err.Error(), "game 2 strategy[") {

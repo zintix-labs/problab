@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package playerexp
+package strategy
 
 import (
 	"fmt"
@@ -21,29 +21,29 @@ import (
 	"github.com/zintix-labs/problab/spec"
 )
 
-// StrategyRegistration binds a configuration name to a factory, not a shared
+// Registration binds a configuration name to a factory, not a shared
 // player Strategy. The factory must create independent memory for each player.
-type StrategyRegistration struct {
+type Registration struct {
 	Name    string
-	Factory StrategyFactory
+	Factory Factory
 }
 
-// StrategyCatalog is application-owned declarative registration data.
+// Catalog is application-owned declarative registration data.
 // Configure it before BuildRegistry; neither it nor factories may be mutated
 // concurrently with building. Factories remain borrowed during Run.
-type StrategyCatalog map[spec.GID][]StrategyRegistration
+type Catalog map[spec.GID][]Registration
 
 // BuildRegistry validates entries using Register and returns a fresh registry.
 // GIDs are sorted and each game's slice order is preserved, making validation
 // errors deterministic. On failure no partial registry is returned.
 // Map/slice entries are copied into the registry; factories are not deep-copied.
-func (c StrategyCatalog) BuildRegistry() (*StrategyRegistry, error) {
+func (c Catalog) BuildRegistry() (*Registry, error) {
 	gids := make([]spec.GID, 0, len(c))
 	for gid := range c {
 		gids = append(gids, gid)
 	}
 	slices.Sort(gids)
-	r := NewStrategyRegistry()
+	r := NewRegistry()
 	for _, gid := range gids {
 		for i, entry := range c[gid] {
 			if err := r.Register(gid, entry.Name, entry.Factory); err != nil {

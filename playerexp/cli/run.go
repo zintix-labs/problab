@@ -26,6 +26,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/playerexp"
+	"github.com/zintix-labs/problab/sdk/strategy"
 	"github.com/zintix-labs/problab/sdk/tag"
 )
 
@@ -35,7 +36,7 @@ type Options struct {
 	Config       []byte
 	ConfigSource string
 	Lab          *problab.Problab
-	Strategies   *playerexp.StrategyRegistry
+	Strategies   *strategy.Registry
 	Tags         tag.GameTagCatalog
 	Output       io.Writer
 	OutputDir    string

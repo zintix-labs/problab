@@ -13,14 +13,18 @@
 // limitations under the License.
 
 // Package demo_strategies assembles explicitly selected factories for demo
-// games. Reusable official implementations live in playerexp/strategies.
+// games. Reusable official implementations live in sdk/strategy/builtin.
 package demo_strategies
 
-import "github.com/zintix-labs/problab/playerexp"
+import (
+	"github.com/zintix-labs/problab/sdk/strategy"
+)
 
 // Catalog is the application's explicit game-to-strategy injection catalog.
 // Add a game's configured factory list in game_<gid>.go, then add one line here.
 // There is no init-time registration or automatic cross-game fallback.
-var Catalog = playerexp.StrategyCatalog{
+var Catalog = strategy.Catalog{
 	0: game0Strategies,
+	2: game2Strategies,
+	3: game3Strategies,
 }

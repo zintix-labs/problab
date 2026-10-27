@@ -19,34 +19,62 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"reflect"
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/sdk/buf"
+	"github.com/zintix-labs/problab/sdk/strategy"
 	"github.com/zintix-labs/problab/sdk/tag"
 )
 
 type machine interface {
-	SpinUnsafe(problab.SpinInput) *buf.SpinResult
 	UsesOptimal() bool
+	// newRunner returns the runner that plays one game at a time for a group;
+	// maxSegments already has the default applied.
+	newRunner(maxSegments int) (gameRunner, error)
 }
+
+// gameRunner plays one game in segments. *problab.BetRunner is the real one;
+// tests substitute their own.
+type gameRunner interface {
+	Bet(in problab.SpinInput, mode problab.ChooseMode) (*buf.SpinResult, error)
+	Next(choice int) (*buf.SpinResult, error)
+	Reset()
+}
+
+// labMachine plays a group's games through a BetRunner on the Lab's Machine.
+type labMachine struct{ *problab.Machine }
+
+func (m labMachine) newRunner(maxSegments int) (gameRunner, error) {
+	return problab.NewBetRunner(m.Machine, problab.WithMaxSegments(maxSegments))
+}
+
+// maxSegments resolves a group's segment limit without writing the default back
+// into the configuration, so reports of configurations that omit it are
+// unchanged.
+func maxSegments(p PlayerConfig) int {
+	if p.MaxSegments == 0 {
+		return problab.DefaultMaxSegments
+	}
+	return p.MaxSegments
+}
+
 type compiledEvent struct {
 	lo, hi int
 	want   tag.BitMasks // read-only condition; zero when the event has no tags
 }
 type compiledGroup struct {
-	factory StrategyFactory
+	factory strategy.Factory
 	initial int
 	events  []compiledEvent
 	tagger  *tag.Tagger // nil when no event of the group references a tag
 }
 type session struct {
 	tags      tag.BitMasks // working mask owned by this player
-	state     PlayerState
+	state     strategy.PlayerState
 	buckets   []BucketStat
 	hits      []uint64
 	unmatched uint64
-	end       EndType
+	end       strategy.EndType
 	capped    bool
 }
 
@@ -73,7 +101,7 @@ func Run(ctx context.Context, c Config, o Options) (Report, error) {
 	if err != nil {
 		return initialReport(c, Failed, err), err
 	}
-	return runMachine(ctx, c, o, m, append([]int(nil), m.BetUnits...))
+	return runMachine(ctx, c, o, labMachine{m}, append([]int(nil), m.BetUnits...))
 }
 
 // Construction happens before any player starts. Game builders and third-party
@@ -184,9 +212,6 @@ func runMachine(ctx context.Context, c Config, o Options, m machine, units []int
 	for i, cg := range groups {
 		r.Groups[i].InitialBalance = cg.initial
 	}
-	// One assembler for the machine; every player resets it, so no player
-	// starts with another player's unfinished game.
-	asm := buf.NewSpinAssembler()
 	for i, cg := range groups {
 		g := &r.Groups[i]
 		g.InitialBalance = cg.initial
@@ -196,14 +221,20 @@ func runMachine(ctx context.Context, c Config, o Options, m machine, units []int
 			return r, err
 		}
 		g.Status = Running
-		err = emit(o.Reporter, ProgressEvent{"start", i, g.Config.Name, 0, g.Config.Player.Players})
+		var runner gameRunner
+		if runner, err = m.newRunner(maxSegments(g.Config.Player)); err != nil {
+			err = fmt.Errorf("group %q: %w", g.Config.Name, err)
+		}
+		if err == nil {
+			err = emit(o.Reporter, ProgressEvent{"start", i, g.Config.Name, 0, g.Config.Player.Players})
+		}
 		for p := 0; err == nil && p < g.Config.Player.Players; p++ {
 			if err = ctx.Err(); err != nil {
 				break
 			}
 			g.Started++
 			var s session
-			s, err = play(ctx, m, asm, units, cg, g.Config, p)
+			s, err = play(ctx, runner, units, cg, g.Config, p)
 			if err != nil {
 				break
 			}
@@ -258,7 +289,7 @@ func emit(r Reporter, e ProgressEvent) (err error) {
 	r.Report(e)
 	return nil
 }
-func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, cg compiledGroup, g GroupConfig, player int) (s session, err error) {
+func play(ctx context.Context, runner gameRunner, units []int, cg compiledGroup, g GroupConfig, player int) (s session, err error) {
 	op := "factory"
 	defer func() {
 		if p := recover(); p != nil {
@@ -272,37 +303,41 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 			err = fmt.Errorf("group %q player %d spin %d %s: %w", g.Name, player, s.state.Spins, op, err)
 		}
 	}()
-	s = session{state: PlayerState{Balance: cg.initial}, buckets: bucketStats(g.WinBuckets), hits: make([]uint64, len(cg.events))}
-	asm.Reset()
+	s = session{state: strategy.PlayerState{Balance: cg.initial}, buckets: bucketStats(g.WinBuckets), hits: make([]uint64, len(cg.events))}
+	// A new player never inherits an unfinished game from the previous one.
+	runner.Reset()
 	if cg.tagger != nil {
 		s.tags = cg.tagger.NewMasks()
 	}
 	if err = ctx.Err(); err != nil {
 		return s, err
 	}
-	strategy := cg.factory.NewStrategy(cg.initial)
-	if nilLike(strategy) {
+	st := cg.factory.NewStrategy(cg.initial)
+	if nilLike(st) {
 		return s, fmt.Errorf("factory returned nil strategy")
 	}
 	if err = ctx.Err(); err != nil {
 		return s, err
 	}
 	op = "FirstSpin"
-	decision := strategy.FirstSpin(s.state)
+	decision := st.FirstSpin(s.state)
 	for {
 		if err = ctx.Err(); err != nil {
 			return s, err
 		}
 		op = "decision"
+		if decision.Choice != nil {
+			return s, fmt.Errorf("choice outside a choice point: %w", ErrInvalidDecision)
+		}
 		if !decision.KeepPlay {
-			if decision.EndType != Other && decision.EndType != Satisfied && decision.EndType != Dissatisfied {
+			if decision.EndType != strategy.Other && decision.EndType != strategy.Satisfied && decision.EndType != strategy.Dissatisfied {
 				return s, fmt.Errorf("invalid strategy exit %d", decision.EndType)
 			}
 			s.end = decision.EndType
 			return s, nil
 		}
 		if s.state.Spins == MaxSpinsPerPlayer {
-			s.end = Other
+			s.end = strategy.Other
 			s.capped = true
 			return s, nil
 		}
@@ -315,40 +350,50 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 			return s, e
 		}
 		if s.state.Balance < cost {
-			s.end = Bust
+			s.end = strategy.Bust
 			return s, nil
 		}
-		op = "SpinUnsafe"
-		if err = ctx.Err(); err != nil {
-			return s, err
-		}
-		result := m.SpinUnsafe(problab.SpinInput{BetMode: b.BetMode, BetMult: b.BetMult, CaptureSnapshots: true})
-		if err = ctx.Err(); err != nil {
-			return s, err
-		}
-		if result == nil {
-			return s, fmt.Errorf("requires complete spin result")
-		}
-		full, e := asm.Add(result)
+		// The wager is paid when the game starts; the win is settled when it ends.
+		op = "wager"
+		tb, e := add(s.state.TotalBet, cost)
 		if e != nil {
 			return s, e
 		}
-		if full == nil { // no continuation input yet: an unfinished game cannot go on
-			return s, fmt.Errorf("requires complete spin result")
+		s.state.Balance, s.state.TotalBet = s.state.Balance-cost, tb
+		op = "Bet"
+		if err = ctx.Err(); err != nil {
+			return s, err
 		}
-		result = full
-		if result.State != nil && !emptyCheckpoint(result.State.Checkpoint) {
-			return s, fmt.Errorf("checkpoint games are not supported")
+		result, e := runner.Bet(problab.SpinInput{BetMode: b.BetMode, BetMult: b.BetMult, CaptureSnapshots: true}, problab.ChoosePlayer)
+		// At a choice point the strategy chooses; the game continues until it ends.
+		for e == nil && !result.IsGameEnd {
+			cycle := result.Cycle
+			if err = ctx.Err(); err != nil {
+				return s, err
+			}
+			op = fmt.Sprintf("cycle %d Next", cycle)
+			d := st.Next(s.state, result)
+			if err = ctx.Err(); err != nil {
+				return s, err
+			}
+			choice, ce := choiceOf(d, len(result.ChooseNext))
+			if ce != nil {
+				return s, ce
+			}
+			op = fmt.Sprintf("cycle %d Choose", cycle+1)
+			result, e = runner.Next(choice)
+		}
+		if e != nil {
+			return s, e
+		}
+		if err = ctx.Err(); err != nil {
+			return s, err
 		}
 		if result.TotalWin < 0 || result.Bet != cost || result.BetMode != b.BetMode || result.BetMult != b.BetMult {
 			return s, fmt.Errorf("invalid result accounting")
 		}
 		op = "settlement"
-		balance, e := add(s.state.Balance-cost, result.TotalWin)
-		if e != nil {
-			return s, e
-		}
-		tb, e := add(s.state.TotalBet, cost)
+		balance, e := add(s.state.Balance, result.TotalWin)
 		if e != nil {
 			return s, e
 		}
@@ -356,7 +401,7 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 		if e != nil {
 			return s, e
 		}
-		s.state = PlayerState{balance, s.state.Spins + 1, tb, tw}
+		s.state = strategy.PlayerState{Balance: balance, Spins: s.state.Spins + 1, TotalBet: s.state.TotalBet, TotalWin: tw}
 		x := float64(result.TotalWin) / float64(cost)
 		bi := bucketIndex(g.WinBuckets, x)
 		s.buckets[bi].Count++
@@ -392,11 +437,23 @@ func play(ctx context.Context, m machine, asm *buf.SpinAssembler, units []int, c
 			return s, err
 		}
 		op = "Next"
-		decision = strategy.Next(s.state, result)
+		decision = st.Next(s.state, result)
 	}
 }
-func emptyCheckpoint(v any) bool {
-	return v == nil || (reflect.ValueOf(v).Kind() == reflect.Pointer && reflect.ValueOf(v).IsNil())
+
+// choiceOf validates a decision made at a choice point with n options: only
+// Choice may be set, and it must be a position among the options.
+func choiceOf(d strategy.Decision, n int) (int, error) {
+	if d.Choice == nil {
+		return 0, fmt.Errorf("choice required at a choice point: %w", ErrInvalidDecision)
+	}
+	if d.KeepPlay || d.Bet != (strategy.Bet{}) || d.EndType != strategy.Other {
+		return 0, fmt.Errorf("only Choice may be set at a choice point: %w", ErrInvalidDecision)
+	}
+	if c := *d.Choice; c < 0 || c >= n {
+		return 0, fmt.Errorf("choice %d not in [0, %d): %w", c, n, problab.ErrChoiceOutOfRange)
+	}
+	return *d.Choice, nil
 }
 func multiply(a, b int) (int, error) {
 	if a <= 0 || b <= 0 || a > int(^uint(0)>>1)/b {
@@ -411,13 +468,13 @@ func add(a, b int) (int, error) {
 	return a + b, nil
 }
 func fits(a, b uint64) bool { return a <= math.MaxUint64-b }
-func exitIndex(e EndType) int {
+func exitIndex(e strategy.EndType) int {
 	switch e {
-	case Bust:
+	case strategy.Bust:
 		return 0
-	case Satisfied:
+	case strategy.Satisfied:
 		return 1
-	case Dissatisfied:
+	case strategy.Dissatisfied:
 		return 2
 	default:
 		return 3

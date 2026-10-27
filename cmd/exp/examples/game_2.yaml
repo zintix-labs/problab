@@ -1,0 +1,29 @@
+# Choice game example: run with `make exp config=cmd/exp/examples/game_2.yaml`.
+# Strategies come from demo/demo_strategies/game_2.go; at choice points they pick
+# a position with builtin.Monotone's Choose (first, last or iter).
+game_id: 2
+seed: 77
+analysis:
+  - name: iter
+    player:
+      players: 1000
+      init_bet: 300 # Initial balance = this value * game BetUnits[0].
+      strategy: iter # Fixed wager; positions taken in turn at choice points.
+      # max_segments: 10 # Optional: segments per game, the first included (default 10).
+    win_buckets: [0, 0.5, 1, 2, 5, 10, 50]
+    events:
+      - event: zero_win
+        win_range: [0, 0]
+      - event: big_win
+        win_range: [50, null]
+  - name: first
+    player:
+      players: 1000
+      init_bet: 300
+      strategy: first # Always the first position.
+    win_buckets: [0, 0.5, 1, 2, 5, 10, 50]
+    events:
+      - event: zero_win
+        win_range: [0, 0]
+      - event: big_win
+        win_range: [50, null]
