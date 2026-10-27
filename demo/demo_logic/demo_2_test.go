@@ -15,6 +15,7 @@
 package demo_logic_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -80,7 +81,7 @@ func TestDemoChoiceEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 		seg0 := startTriggered(t, r)
-		if !reflect.DeepEqual(seg0.ChooseNext, []int{demo_logic.EntryFGA, demo_logic.EntryFGB}) {
+		if !reflect.DeepEqual(seg0.ChooseNext, []int{demo_logic.Demo0002EntryFGA, demo_logic.Demo0002EntryFGB}) {
 			t.Fatalf("choose next %v", seg0.ChooseNext)
 		}
 		raw, err := dto.EncodeCheckpoint(seg0.Logic, seg0.State.Checkpoint)
@@ -121,14 +122,34 @@ func TestDemoChoiceRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	cp := startTriggered(t, r).State.Checkpoint
+	tooFewScatters, err := dto.DecodeCheckpoint(spec.LogicKey("demo_choice"), []byte(`{"scatters":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, in := range map[string]problab.SpinInput{
-		"unknown entry":    {Cycle: 1, ChooseNext: []int{9}, Checkpoint: cp},
-		"wrong checkpoint": {Cycle: 1, ChooseNext: []int{demo_logic.EntryFGA}, Checkpoint: "x"},
-		"no checkpoint":    {Cycle: 1, ChooseNext: []int{demo_logic.EntryFGA}},
+		"unknown entry":        {Cycle: 1, ChooseNext: []int{9}, Checkpoint: cp},
+		"FGA wrong checkpoint": {Cycle: 1, ChooseNext: []int{demo_logic.Demo0002EntryFGA}, Checkpoint: "x"},
+		"FGA no checkpoint":    {Cycle: 1, ChooseNext: []int{demo_logic.Demo0002EntryFGA}},
+		"FGA too few scatters": {Cycle: 1, ChooseNext: []int{demo_logic.Demo0002EntryFGA}, Checkpoint: tooFewScatters},
+		"FGB wrong checkpoint": {Cycle: 1, ChooseNext: []int{demo_logic.Demo0002EntryFGB}, Checkpoint: "x"},
+		"FGB no checkpoint":    {Cycle: 1, ChooseNext: []int{demo_logic.Demo0002EntryFGB}},
+		"FGB too few scatters": {Cycle: 1, ChooseNext: []int{demo_logic.Demo0002EntryFGB}, Checkpoint: tooFewScatters},
 	} {
 		in.BetMode, in.BetMult = 0, 1
+		before, err := m.SnapshotCore()
+		if err != nil {
+			t.Fatal(err)
+		}
+		before = append([]byte(nil), before...)
 		if m.SpinUnsafe(in) != nil {
 			t.Errorf("%s was accepted", name)
+		}
+		after, err := m.SnapshotCore()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Errorf("%s consumed RNG", name)
 		}
 	}
 }

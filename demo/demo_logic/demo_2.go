@@ -46,8 +46,8 @@ func init() {
 
 // 入口值（ChooseNext 的內容）。刻意不等於位置索引：續段以 ChooseNext[Choice] 取得入口。
 const (
-	EntryFGA = 1 // 較多轉
-	EntryFGB = 2 // 較少轉、贏分加倍
+	Demo0002EntryFGA = 1 // 較多轉
+	Demo0002EntryFGB = 2 // 較少轉、贏分加倍
 )
 
 // ============================================================
@@ -121,36 +121,33 @@ type check0002 struct {
 // GetResult 第 0 段執行 BG；觸發時停在選擇點。續段先驗證入口與 checkpoint（不合法時回傳
 // nil，不消耗 RNG），再執行所選的 FG。
 func (g *game0002) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult {
+	sr := gh.StartNewSpin(r)
 	if r.Cycle == 0 {
-		sr := gh.StartNewSpin(r)
-		base, scatters := g.getBaseResult(r.BetMult, gh)
+		base, scatters := g.getBaseResult(r, gh)
 		sr.AppendModeResult(base)
-		if base.Trigger == 0 {
+		if base.Trigger > 0 {
+			sr.ChooseNext = append(sr.ChooseNext, Demo0002EntryFGA, Demo0002EntryFGB)
+			sr.State.Checkpoint = &check0002{Scatters: scatters}
+		} else {
 			sr.End()
-			return sr
 		}
-		sr.ChooseNext = append(sr.ChooseNext, EntryFGA, EntryFGB)
-		sr.State.Checkpoint = &check0002{Scatters: scatters}
 		return sr
 	}
 
-	cp, ok := r.Checkpoint.(*check0002)
-	if !ok || cp.Scatters < 3 {
-		return nil
-	}
-	var mode, rounds, mult int
+	var fg *buf.GameModeResult
 	switch r.ChooseNext[r.Choice] {
-	case EntryFGA:
-		mode, rounds, mult = 1, g.fixed.FreeRoundA, 1
-	case EntryFGB:
-		mode, rounds, mult = 2, g.fixed.FreeRoundB, g.fixed.MultiplierB
+	case Demo0002EntryFGA:
+		fg = g.getFreeAResult(r, gh)
+	case Demo0002EntryFGB:
+		fg = g.getFreeBResult(r, gh)
 	default:
 		return nil
 	}
-	rounds += cp.Scatters - 3 // Scatter 每多一個，多一轉
+	if fg == nil {
+		return nil
+	}
 
-	sr := gh.StartNewSpin(r)
-	sr.AppendModeResult(g.getFreeResult(mode, rounds, r.BetMult*mult, gh))
+	sr.AppendModeResult(fg)
 	sr.End()
 	return sr
 }
@@ -159,7 +156,7 @@ func (g *game0002) GetResult(r *buf.SpinRequest, gh *slot.Game) *buf.SpinResult 
 // ** 遊戲中各模式內部邏輯實作 **
 // ============================================================
 
-func (g *game0002) getBaseResult(betMult int, gh *slot.Game) (*buf.GameModeResult, int) {
+func (g *game0002) getBaseResult(r *buf.SpinRequest, gh *slot.Game) (*buf.GameModeResult, int) {
 	mode := gh.GameModeHandlerList[0]
 	gmr := mode.GameModeResult
 	ext := g.ext
@@ -168,7 +165,7 @@ func (g *game0002) getBaseResult(betMult int, gh *slot.Game) (*buf.GameModeResul
 	screen := mode.ScreenGenerator.GenScreen()
 	gmr.AddAct(buf.FinishAct, "screen", screen, nil)
 
-	mode.ScreenCalculator.CalcScreen(betMult, screen, gmr)
+	mode.ScreenCalculator.CalcScreen(r.BetMult, screen, gmr)
 	if gmr.GetTmpWin() > 0 {
 		gmr.AddAct(buf.FinishAct, "win", nil, nil)
 	}
@@ -181,6 +178,34 @@ func (g *game0002) getBaseResult(betMult int, gh *slot.Game) (*buf.GameModeResul
 	}
 	gmr.FinishRound()
 	return mode.YieldResult(), scatters
+}
+
+func (g *game0002) getFreeAResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameModeResult {
+	cp, ok := g.parseCheckpoint(r)
+	if !ok {
+		return nil
+	}
+	rounds := g.fixed.FreeRoundA + cp.Scatters - 3 // Scatter 每多一個，多一轉
+	return g.getFreeResult(1, rounds, r.BetMult, gh)
+}
+
+func (g *game0002) getFreeBResult(r *buf.SpinRequest, gh *slot.Game) *buf.GameModeResult {
+	cp, ok := g.parseCheckpoint(r)
+	if !ok {
+		return nil
+	}
+	rounds := g.fixed.FreeRoundB + cp.Scatters - 3
+	betMult := r.BetMult * g.fixed.MultiplierB
+	return g.getFreeResult(2, rounds, betMult, gh)
+}
+
+// parseCheckpoint 在產生盤面前驗證續段的進入狀態。
+func (g *game0002) parseCheckpoint(r *buf.SpinRequest) (*check0002, bool) {
+	cp, ok := r.Checkpoint.(*check0002)
+	if !ok || cp.Scatters < 3 {
+		return nil, false
+	}
+	return cp, true
 }
 
 func (g *game0002) getFreeResult(modeIndex, rounds, betMult int, gh *slot.Game) *buf.GameModeResult {
