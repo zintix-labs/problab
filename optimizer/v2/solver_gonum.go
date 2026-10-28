@@ -136,7 +136,7 @@ func (s *GonumSolver) Solve(
 		}
 	}
 	if len(raw) < form.semanticColumns {
-		return SolveResult{}, fmt.Errorf("Gonum returned %d columns, need %d", len(raw), form.semanticColumns)
+		return SolveResult{}, fmt.Errorf("Gonum returned %d columns, need %d", len(raw), form.semanticColumns) //nolint:staticcheck // ST1005: Gonum is a proper name; preserve the diagnostic.
 	}
 	values := make([]float64, form.semanticColumns)
 	for i := range values {

@@ -148,14 +148,16 @@ func TestReporterConcurrentAndNonTTY(t *testing.T) {
 		if newCLIProgressReporter(f).interactive {
 			t.Fatal("non-terminal considered TTY")
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rd, wr, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rd.Close()
-	defer wr.Close()
+	defer func() { _ = rd.Close() }()
+	defer func() { _ = wr.Close() }()
 	if newCLIProgressReporter(wr).interactive {
 		t.Fatal("pipe considered TTY")
 	}
@@ -169,7 +171,7 @@ func TestReporterRealTTY(t *testing.T) {
 		}
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if !newCLIProgressReporter(f).interactive {
 		t.Fatal("controlling terminal not recognized")
 	}

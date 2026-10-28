@@ -232,7 +232,7 @@ func (prepared PreparedProblem) ExpectedRTP() float64 {
 // total is variable.
 func BuildMainProfileDeviationProblem(compiled CompiledModel, delta float64) (LinearProblem, error) {
 	if !isFinite(delta) || delta < 0 || delta > 2 {
-		return LinearProblem{}, fmt.Errorf("Main profile deviation delta must be in [0,2]")
+		return LinearProblem{}, fmt.Errorf("Main profile deviation delta must be in [0,2]") //nolint:staticcheck // ST1005: Main is the established domain label; preserve the diagnostic.
 	}
 	problem := cloneLinearProblem(compiled.Hard)
 	for classIndex, class := range compiled.Prepared.Classes {
@@ -294,7 +294,7 @@ func BuildPhaseAProblem(compiled CompiledModel, delta float64) (LinearProblem, e
 // target without a scale bias.
 func AddOtherBucketVisibilityRows(base LinearProblem, compiled CompiledModel, rho float64) (LinearProblem, error) {
 	if !isFinite(rho) || rho < 0 || rho > 1 {
-		return LinearProblem{}, fmt.Errorf("Other bucket visibility rho must be in [0,1]")
+		return LinearProblem{}, fmt.Errorf("Other bucket visibility rho must be in [0,1]") //nolint:staticcheck // ST1005: Other is the established domain label; preserve the diagnostic.
 	}
 	problem := cloneLinearProblem(base)
 	for classIndex, class := range compiled.Prepared.Classes {
@@ -348,7 +348,7 @@ func supportedMainBucketIndexes(class PreparedClass, group PreparedGroup) ([]int
 // refinement of the supplied problem and never participates in the hard model.
 func AddMainGroupInternalVisibilityRows(base LinearProblem, compiled CompiledModel, rho float64) (LinearProblem, error) {
 	if !isFinite(rho) || rho < 0 || rho > 1 {
-		return LinearProblem{}, fmt.Errorf("Main Group internal visibility rho must be in [0,1]")
+		return LinearProblem{}, fmt.Errorf("Main Group internal visibility rho must be in [0,1]") //nolint:staticcheck // ST1005: Main Group is the established domain label; preserve the diagnostic.
 	}
 	problem := cloneLinearProblem(base)
 	for classIndex, class := range compiled.Prepared.Classes {

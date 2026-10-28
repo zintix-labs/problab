@@ -226,7 +226,7 @@ func VerifyInfeasibilityEvidence(bundle InfeasibilityBundle) error {
 			return err
 		}
 		if check := verifyFarkas(model, y); !check.valid {
-			return fmt.Errorf("Farkas certificate rejected: %s", check.reason)
+			return fmt.Errorf("Farkas certificate rejected: %s", check.reason) //nolint:staticcheck // ST1005: Farkas is a proper name; preserve the diagnostic.
 		}
 		return nil
 	case evidenceKindEmptyBox:
@@ -478,7 +478,7 @@ func verifyCVDisjoint(problem LinearProblem, rule acceptanceRule, bundle Infeasi
 	total := new(big.Rat)
 	for i, bound := range bundle.Bounds {
 		if bound.Class != i+1 || bound.Direction != direction {
-			return fmt.Errorf("Class bound %d is %d/%s, want %d/%s", i, bound.Class, bound.Direction, i+1, direction)
+			return fmt.Errorf("Class bound %d is %d/%s, want %d/%s", i, bound.Class, bound.Direction, i+1, direction) //nolint:staticcheck // ST1005: Class is the established domain label; preserve the diagnostic.
 		}
 		sub := subs[i].problem
 		var terms []LinearTerm
@@ -489,15 +489,15 @@ func verifyCVDisjoint(problem LinearProblem, rule acceptanceRule, bundle Infeasi
 		}
 		value, err := verifyBound(sub, rule, terms, direction, bound.Multipliers, bound.Value)
 		if err != nil {
-			return fmt.Errorf("Class %d: %w", bound.Class, err)
+			return fmt.Errorf("Class %d: %w", bound.Class, err) //nolint:staticcheck // ST1005: Class is the established domain label; preserve the diagnostic.
 		}
 		total = ratAdd(total, value)
 	}
 	if direction == "lower" && total.Cmp(relaxed) <= 0 {
-		return fmt.Errorf("Σ lower bounds %s does not exceed the relaxed CV maximum %s", total.RatString(), relaxed.RatString())
+		return fmt.Errorf("Σ lower bounds %s does not exceed the relaxed CV maximum %s", total.RatString(), relaxed.RatString()) //nolint:staticcheck // ST1005: preserve the mathematical summation notation and diagnostic.
 	}
 	if direction == "upper" && total.Cmp(relaxed) >= 0 {
-		return fmt.Errorf("Σ upper bounds %s is not below the relaxed CV minimum %s", total.RatString(), relaxed.RatString())
+		return fmt.Errorf("Σ upper bounds %s is not below the relaxed CV minimum %s", total.RatString(), relaxed.RatString()) //nolint:staticcheck // ST1005: preserve the mathematical summation notation and diagnostic.
 	}
 	return nil
 }

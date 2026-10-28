@@ -55,7 +55,7 @@ func testGacha(t *testing.T, table *sampler.AliasTableF64, seedLen int) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer enc.Close()
+	defer func() { _ = enc.Close() }()
 	return enc.EncodeAll(raw, nil)
 }
 

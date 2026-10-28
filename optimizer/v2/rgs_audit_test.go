@@ -296,7 +296,11 @@ func TestRGSReplayErrorsPreserveOperationalCause(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer lab.Close()
+			t.Cleanup(func() {
+				if err := lab.Close(); err != nil {
+					t.Errorf("close lab: %v", err)
+				}
+			})
 			tuner := rgsTestTuner(t, base, []OutputFormat{OutputRGSOptimized}, WithReporter(auditReporterFunc(func(event StageEvent) {
 				if event.Stage == "rgs-optimized" && event.State == "started" {
 					factory.fault = kind

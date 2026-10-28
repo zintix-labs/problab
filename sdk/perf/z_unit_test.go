@@ -15,9 +15,39 @@
 package perf
 
 import (
+	"bytes"
+	"log"
 	"os"
+	"strings"
 	"testing"
 )
+
+func TestCloseProfileReportsErrorWithoutReplacingPanic(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "closed-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	sentinel := &struct{ message string }{"workload failed"}
+	var caught any
+	func() {
+		defer func() { caught = recover() }()
+		defer closeProfile(f)
+		panic(sentinel)
+	}()
+	if caught != sentinel {
+		t.Fatalf("close replaced workload panic: %v", caught)
+	}
+	if !strings.Contains(output.String(), "failed to close profile "+f.Name()) {
+		t.Fatalf("missing close diagnostic: %q", output.String())
+	}
+}
 
 func TestRunPProfModes(t *testing.T) {
 	exe := func() {}

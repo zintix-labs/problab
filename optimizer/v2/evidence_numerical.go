@@ -359,7 +359,7 @@ func verifyMinimumCVEvidence(file NumericalEvidence, rule acceptanceRule) error 
 		total := new(big.Rat)
 		for i, bound := range cv.LowerBounds {
 			if bound.Class != i+1 || bound.Direction != "lower" {
-				return fmt.Errorf("Class bound %d is %d/%s", i, bound.Class, bound.Direction)
+				return fmt.Errorf("Class bound %d is %d/%s", i, bound.Class, bound.Direction) //nolint:staticcheck // ST1005: Class is the established domain label; preserve the diagnostic.
 			}
 			var classTerms []LinearTerm
 			for _, v := range subs[i].problem.Variables {
@@ -369,7 +369,7 @@ func verifyMinimumCVEvidence(file NumericalEvidence, rule acceptanceRule) error 
 			}
 			value, err := verifyBound(subs[i].problem, rule, classTerms, "lower", bound.Multipliers, bound.Value)
 			if err != nil {
-				return fmt.Errorf("Class %d: %w", bound.Class, err)
+				return fmt.Errorf("Class %d: %w", bound.Class, err) //nolint:staticcheck // ST1005: Class is the established domain label; preserve the diagnostic.
 			}
 			total = ratAdd(total, value)
 		}

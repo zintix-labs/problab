@@ -111,14 +111,14 @@ func executeSimulator() { // 取得spin數
 
 	if cfg.player == 1 { // 純機台模擬
 		if cfg.worker == 1 { // 單線程
-			p.Printf("%s[GAME:%s] [PLAYMODE:%d] [SPINS:%d]%s%s\n", green, cfg.name, cfg.betMode, cfg.spins, choose, reset)
+			_, _ = p.Printf("%s[GAME:%s] [PLAYMODE:%d] [SPINS:%d]%s%s\n", green, cfg.name, cfg.betMode, cfg.spins, choose, reset)
 			st, used, err := s.Sim(cfg.betMode, cfg.spins, true)
 			if err != nil {
 				log.Fatal(err)
 			}
 			st.StdOut(used)
 		} else {
-			p.Printf("%s[WORKERS:%d] [GAME:%s] [PLAYMODE:%d] [SPINS:%d]%s%s\n", green, cfg.worker, cfg.name, cfg.betMode, cfg.worker*cfg.spins, choose, reset)
+			_, _ = p.Printf("%s[WORKERS:%d] [GAME:%s] [PLAYMODE:%d] [SPINS:%d]%s%s\n", green, cfg.worker, cfg.name, cfg.betMode, cfg.worker*cfg.spins, choose, reset)
 			st, used, err := s.SimMP(cfg.betMode, cfg.spins, cfg.worker, true) // 併發
 			if err != nil {
 				log.Fatal(err)
@@ -126,7 +126,7 @@ func executeSimulator() { // 取得spin數
 			st.StdOut(used)
 		}
 	} else { // 模擬多玩家體驗
-		p.Printf("%s[WORKERS:%d] [GAME:%s] [PLAYERS:%d BALANCE:%d PLAYMODE:%d SPINS:%d]%s%s\n", green, cfg.worker, cfg.name, cfg.player, cfg.bets, cfg.betMode, cfg.spins, choose, reset)
+		_, _ = p.Printf("%s[WORKERS:%d] [GAME:%s] [PLAYERS:%d BALANCE:%d PLAYMODE:%d SPINS:%d]%s%s\n", green, cfg.worker, cfg.name, cfg.player, cfg.bets, cfg.betMode, cfg.spins, choose, reset)
 		st, est, used, err := s.SimPlayers(cfg.worker, cfg.player, cfg.bets, cfg.betMode, cfg.spins, true)
 		if err != nil {
 			log.Fatal(err)
@@ -151,7 +151,7 @@ func (cfg *config) valid() {
 	}
 	// 玩家數量太多 resize
 	if cfg.player > 100000 {
-		p.Printf("too much players: %d resized to 100k players\n", cfg.player)
+		_, _ = p.Printf("too much players: %d resized to 100k players\n", cfg.player)
 		cfg.player = 100000
 	}
 
@@ -175,7 +175,7 @@ func (cfg *config) valid() {
 	// 模擬玩家的時候，每個玩家最高不超過15000轉(無意義)
 	// 對一個玩家來說 15000轉 應該超過10HRs 體驗已經轉為長期，直接模擬長局數機台即可
 	if cfg.player > 1 && cfg.spins > 15000 {
-		p.Printf("too much spins for each players : %d resized to 15k spins for each player\n", cfg.spins)
+		_, _ = p.Printf("too much spins for each players : %d resized to 15k spins for each player\n", cfg.spins)
 		cfg.spins = 15000
 	}
 }

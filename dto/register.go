@@ -37,7 +37,7 @@ var extendRenders = map[spec.LogicKey]extrender{}
 // - This registry is DTO-boundary only (type assertion for JSON output).
 func RegisterExtendRender[T any](lkey spec.LogicKey) error {
 	rt := reflect.TypeOf((*T)(nil)).Elem()
-	if rt.Kind() == reflect.Ptr {
+	if rt.Kind() == reflect.Pointer {
 		return errs.NewFatal("RegisterExtendRender: T must be a non-pointer struct type")
 	}
 	if rt.Kind() != reflect.Struct {
@@ -100,7 +100,7 @@ func RegisterCheckpoint[T any](lkey spec.LogicKey) error {
 	// Registration-time validation only (NOT on the hot path).
 	// If user accidentally passes a pointer type, reject it to keep allocation fast.
 	rt := reflect.TypeOf((*T)(nil)).Elem()
-	if rt.Kind() == reflect.Ptr {
+	if rt.Kind() == reflect.Pointer {
 		return errs.NewFatal("register failed: T must be a non-pointer struct type")
 	}
 	if rt.Kind() != reflect.Struct {

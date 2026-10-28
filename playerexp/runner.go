@@ -91,7 +91,7 @@ func Run(ctx context.Context, c Config, o Options) (Report, error) {
 		return initialReport(c, Failed, err), err
 	}
 	if o.Lab == nil {
-		err = fmt.Errorf("Lab is required")
+		err = fmt.Errorf("Lab is required") //nolint:staticcheck // ST1005: preserve the existing public validation message.
 		return initialReport(c, Failed, err), err
 	}
 	if err = ctx.Err(); err != nil {
