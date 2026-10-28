@@ -74,7 +74,11 @@ func TestTunerClassWeightBasePreservesProportionalDistribution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lab.Close()
+	t.Cleanup(func() {
+		if err := lab.Close(); err != nil {
+			t.Errorf("close lab: %v", err)
+		}
+	})
 	plan := legacy.Report.Plan
 	base := ClassWeightDenominator(MaxClassWeightBase)
 	plan.Intent = cloneMathIntent(plan.Intent)

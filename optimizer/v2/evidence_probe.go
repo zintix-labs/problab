@@ -270,7 +270,7 @@ func verifyStageProblem(base *ProbeBase, stage, label string, problem LinearProb
 				return err
 			}
 		} else if stage == string(StageMaximizeOtherBucketVisibility) || base.Locks.OtherRho != "" {
-			return errors.New("Other visibility does not apply to this structure")
+			return errors.New("Other visibility does not apply to this structure") //nolint:staticcheck // ST1005: Other is the established domain label; preserve the diagnostic.
 		}
 	}
 	if stage != string(StageMinimizeMainProfileDeviation) && stage != string(StageMaximizeOtherBucketVisibility) {
@@ -283,7 +283,7 @@ func verifyStageProblem(base *ProbeBase, stage, label string, problem LinearProb
 				return err
 			}
 		} else if stage == string(StageMaximizeMainGroupInternalVisibility) || base.Locks.MainRho != "" {
-			return errors.New("Main Group visibility does not apply to this structure")
+			return errors.New("Main Group visibility does not apply to this structure") //nolint:staticcheck // ST1005: Main Group is the established domain label; preserve the diagnostic.
 		}
 	}
 	want, err := SnapshotProblem(rebuilt).SHA256()

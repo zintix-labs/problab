@@ -15,12 +15,20 @@
 package perf
 
 import (
+	"log"
 	"os"
 	"runtime"
 	"runtime/pprof"
 )
 
 const pprofDir = "build/profiling" // pprof檔案寫入路徑
+
+// closeProfile reports a failed final close without replacing a workload panic.
+func closeProfile(f *os.File) {
+	if err := f.Close(); err != nil {
+		log.Printf("failed to close profile %s: %v", f.Name(), err)
+	}
+}
 
 // Run 根據 cfg.ProfileType 決定執行哪種 Profiling
 func RunPProf(exe func(), mode string) {
@@ -60,7 +68,7 @@ func PProfCPU(exe func()) {
 	if err != nil {
 		panic("failed to create cpu.pprof : " + err.Error())
 	}
-	defer f.Close()
+	defer closeProfile(f)
 	if err := pprof.StartCPUProfile(f); err != nil {
 		panic("failed to start pprof : " + err.Error())
 	}
@@ -87,7 +95,7 @@ func PProfHeap(exe func()) {
 	if err != nil {
 		panic("failed to create heap.pprof : " + err.Error())
 	}
-	defer f.Close()
+	defer closeProfile(f)
 
 	if err := pprof.WriteHeapProfile(f); err != nil {
 		panic("failed to write heap profile : " + err.Error())
@@ -108,7 +116,7 @@ func PProfAllocs(exe func()) {
 	if err != nil {
 		panic("failed to create allocs.pprof : " + err.Error())
 	}
-	defer f.Close()
+	defer closeProfile(f)
 
 	if prof := pprof.Lookup("allocs"); prof != nil {
 		if err := prof.WriteTo(f, 0); err != nil {

@@ -63,7 +63,7 @@ func (yr *YAMLEstimatorRender) Write(w io.Writer, e *EstimatorPlayers) error {
 }
 
 // YAML 內層方法
-func forceReadableList[T any](w io.Writer, t *T) error {
+func forceReadableList[T any](w io.Writer, t *T) (err error) {
 	var node yaml.Node
 	if err := node.Encode(t); err != nil {
 		return err
@@ -75,7 +75,12 @@ func forceReadableList[T any](w io.Writer, t *T) error {
 	styleReadableSequences(&node)
 
 	enc := yaml.NewEncoder(w)
-	defer enc.Close()
+	defer func() {
+		// Keep the encoding error if both encoding and finalization fail.
+		if closeErr := enc.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 	return enc.Encode(&node)
 }
 

@@ -65,7 +65,7 @@ func TestRGSIdentityPipelineMemoryProfile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 			decoder, err := zstd.NewReader(file)
 			if err != nil {
 				t.Fatal(err)

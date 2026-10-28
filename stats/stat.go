@@ -186,6 +186,7 @@ func (s *StatReport) StdOut(ut time.Duration) {
 // ============================================================
 
 func formatDuration(d time.Duration, spins int) {
+	// Timing output is best-effort; terminal errors do not invalidate a report.
 	p := message.NewPrinter(lang)
 	if d < 0 {
 		d = -d
@@ -196,7 +197,7 @@ func formatDuration(d time.Duration, spins int) {
 	}
 	sps := int(float64(spins) / sec)
 	if sec < 60.0 {
-		p.Printf("used: %.2f seconds\nsps : %d spins/sec\n", sec, sps)
+		_, _ = p.Printf("used: %.2f seconds\nsps : %d spins/sec\n", sec, sps)
 		return
 	}
 	s := int(d.Seconds()) % 60
@@ -204,10 +205,10 @@ func formatDuration(d time.Duration, spins int) {
 	h := int(d.Hours())
 	if h == 0 {
 		s = s % 60
-		p.Printf("used: %dm %ds\nsps : %d spins/sec\n", m, s, sps)
+		_, _ = p.Printf("used: %dm %ds\nsps : %d spins/sec\n", m, s, sps)
 		return
 	}
-	p.Printf("used: %dh:%dm:%ds\nsps : %d spins/sec\n", h, m, s, sps)
+	_, _ = p.Printf("used: %dh:%dm:%ds\nsps : %d spins/sec\n", h, m, s, sps)
 }
 
 // StdOut

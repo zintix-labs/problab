@@ -77,7 +77,11 @@ func TestPublicRunConverterAndDirectCoreParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lab.Close()
+	t.Cleanup(func() {
+		if err := lab.Close(); err != nil {
+			t.Errorf("close lab: %v", err)
+		}
+	})
 	var original []byte
 	for _, tc := range []struct {
 		name    string
@@ -102,7 +106,7 @@ func TestPublicRunConverterAndDirectCoreParity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 				z, err := zstd.NewReader(f)
 				if err != nil {
 					t.Fatal(err)
@@ -155,7 +159,11 @@ func TestPublicRunMissingTagsStopsBeforeCollection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lab.Close()
+	t.Cleanup(func() {
+		if err := lab.Close(); err != nil {
+			t.Errorf("close lab: %v", err)
+		}
+	})
 	dir := t.TempDir()
 	raw := strings.Replace(string(config(dir)), "collect: {samples: 64, win_range: [0, 1000000000]}", "collect: {samples: 64, win_range: [0, 1000000000], tags: {matches: [bg]}}", 1)
 	var out bytes.Buffer
@@ -179,7 +187,11 @@ func TestAllPlansTagPreflightAndCoreValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lab.Close()
+	t.Cleanup(func() {
+		if err := lab.Close(); err != nil {
+			t.Errorf("close lab: %v", err)
+		}
+	})
 	for _, mismatch := range []bool{false, true} {
 		for _, tc := range []struct {
 			name      string
@@ -243,7 +255,11 @@ func TestPublicRunCancellationDuringExport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lab.Close()
+	t.Cleanup(func() {
+		if err := lab.Close(); err != nil {
+			t.Errorf("close lab: %v", err)
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
@@ -263,7 +279,11 @@ func TestPublicNativeAndOptimizedParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lab.Close()
+	t.Cleanup(func() {
+		if err := lab.Close(); err != nil {
+			t.Errorf("close lab: %v", err)
+		}
+	})
 	cfg, err := v2.ParseConfig(config(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
@@ -361,7 +381,11 @@ func TestPublicRunLifecycleAndInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lab.Close()
+	t.Cleanup(func() {
+		if err := lab.Close(); err != nil {
+			t.Errorf("close lab: %v", err)
+		}
+	})
 	var out bytes.Buffer
 	opts := optimizercli.Options{Lab: lab, Output: &out, Config: config(t.TempDir())}
 	if _, err := v2.ParseConfig(opts.Config); err != nil {

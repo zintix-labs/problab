@@ -343,7 +343,7 @@ func (t *Tuner) exportRGS(ctx context.Context, plan ResolvedPlan, bet int, root 
 			}
 		}
 		if err = table.Close(); err != nil {
-			return fmt.Errorf("Parquet footer: %w", err)
+			return fmt.Errorf("Parquet footer: %w", err) //nolint:staticcheck // ST1005: Parquet is a proper name; preserve the diagnostic.
 		}
 		if err = parquetFile.Sync(); err != nil {
 			return err

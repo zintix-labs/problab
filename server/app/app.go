@@ -88,7 +88,8 @@ func (a *App) gracefulShutdown(td time.Duration) {
 	for _, c := range a.comps {
 		err := c.Shutdown(ctx)
 		if err != nil {
-			fmt.Fprintf(os.Stdout, "shutdown err: %v\n", err)
+			// Reporting failure must not prevent the remaining components shutting down.
+			_, _ = fmt.Fprintf(os.Stdout, "shutdown err: %v\n", err)
 		}
 	}
 }

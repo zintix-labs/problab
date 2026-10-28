@@ -1,4 +1,4 @@
-# Copyright 2025 Zintix Labs
+# Copyright 2026 Zintix Labs
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 # ==========
 # Stage 1: Build
 # ==========
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27.3-alpine AS builder
 WORKDIR /app
 
 COPY go.mod go.sum ./

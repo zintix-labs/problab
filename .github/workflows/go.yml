@@ -34,13 +34,10 @@ jobs:
           cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          # IMPORTANT:
-          # Use goinstall so golangci-lint is built with the same Go version
-          # as this project (Go 1.25.x), avoiding toolchain mismatch.
-          install-mode: goinstall
-          version: latest
+          # Match the locally verified release and use its official binary.
+          version: v2.15.0
           args: --timeout=5m
 
   # 2) Test & Build (correctness + race safety)
