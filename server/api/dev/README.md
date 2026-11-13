@@ -8,7 +8,10 @@
 
 ```sh
 make dev   # 等於 go run ./cmd/dev，自動開啟 http://localhost:5808/dev
+go run ./cmd/dev -addr :5810 -open=false   # 換埠號、不開瀏覽器（例如同時開兩個）
 ```
+
+Ctrl+C 結束；仍有連線時最多等 5 秒。
 
 `make dev` 以 `svrcfg.ModePanel` 啟動：只掛首頁與 `/dev`，沒有 `/v1`，也不建立機台池；engine 以 `problab.New` 加 `RegisterAll`、`Freeze` 組裝，所以每台的 optimal 資料在第一次 Spin 才載入，不會在啟動時一次載入全部。要同時使用 `/v1/*`，請用 `make svr`（`ModeDev`）。
 
@@ -114,13 +117,27 @@ DEV.register(2, {
 
 ### 在自己的專案啟動 ProbLab Dev
 
-`cmd/dev/dev.go` 是官方的入口範例，與 `cmd/exp`、`cmd/opt` 相同：檔案最上方的 `var` 是注入點，複製到自己的專案後只改這兩個變數，下方的 server 組裝與流程一行不改。
+server 的組裝、啟動與關閉都在門面 `server/api/dev/cli` 的 `Run(ctx, Options)`，與 `playerexp/cli`、`optimizer/v2/cli` 相同的契約：Lab 由呼叫端建立與關閉，信號由入口處理。
+
+`cmd/dev/dev.go` 是官方的入口範例，與 `cmd/exp`、`cmd/opt` 相同：檔案最上方的 `var` 是注入點，複製到自己的專案後只改這兩個變數，下方的流程一行不改。
 
 ```go
 var (
 	pLab     func() (*problab.Problab, error) = engine.NewForDev // 自己的 engine 接線
 	devGames fs.FS                            = devgames.FS      // 自己的外掛目錄，根目錄放 <gid>.js
 )
+```
+
+不想複製入口時，也可以直接呼叫門面：
+
+```go
+code, err := devcli.Run(ctx, devcli.Options{
+	Lab:         lab,         // 必填；呼叫端關閉
+	DevGames:    devGames,    // nil 時只顯示公版
+	Addr:        ":5808",     // 空字串為 devcli.DefaultAddr
+	OpenBrowser: true,
+	Output:      os.Stdout,   // nil 時不印網址
+})
 ```
 
 `pLab` 用與正式環境相同的 PRNG、設定、邏輯與 optimal 設定，但以 `problab.New` 加 `RegisterAll`、`Freeze` 組裝（參考 `demo.NewProbLabForDev`）：
@@ -140,7 +157,7 @@ func NewForDev() (*problab.Problab, error) {
 }
 ```
 
-入口以 `svrcfg.ModePanel` 啟動，只掛 `/dev`，不建立機台池。
+門面以 `svrcfg.ModePanel` 啟動，只掛 `/dev`，不建立機台池。
 
 - **用 `New` 加 `RegisterAll`、`Freeze`，不要用 `NewAuto`**：`NewAuto` 會在啟動時預先載入所有機台的 optimal 資料；dev 入口只看一兩台時不必等。正式 server 則建議維持 `NewAuto`，啟動時就能發現設定或檔案的錯誤，第一個請求也不必等載入。
 - **`ModePanel` 不建立機台池**：`ModeDev` 會為 `/v1/spin` 建立每台的機台池，啟動時一樣會載入全部 optimal。

@@ -15,10 +15,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
+
+	"github.com/zintix-labs/problab"
 )
 
 // 預設的注入點：pLab 建出 demo 的機台，devGames 為每一台提供 <gid>.js。
@@ -39,6 +42,23 @@ func TestDefaultInjectionPoints(t *testing.T) {
 		}
 		if !strings.Contains(string(raw), fmt.Sprintf("DEV.register(%d,", gid)) {
 			t.Fatalf("%d.js does not register game %d", gid, gid)
+		}
+	}
+}
+
+// 注入點的錯誤會回報；不認得的參數在建立 Lab 之前就拒絕。
+func TestInjectionAndArguments(t *testing.T) {
+	old := pLab
+	t.Cleanup(func() { pLab = old })
+	sentinel := errors.New("private lab failure")
+	pLab = func() (*problab.Problab, error) { return nil, sentinel }
+	if code, err := run(nil, nil); code != 1 || !errors.Is(err, sentinel) {
+		t.Fatal(code, err)
+	}
+	pLab = func() (*problab.Problab, error) { t.Fatal("Lab built before arguments were checked"); return nil, nil }
+	for _, args := range [][]string{{"-config", "x"}, {"extra"}} {
+		if code, err := run(args, nil); code != 1 || err == nil {
+			t.Fatal(args, code, err)
 		}
 	}
 }

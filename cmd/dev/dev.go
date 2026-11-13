@@ -15,24 +15,24 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"io/fs"
-	"log"
-	"net"
-	"os/exec"
-	"runtime"
-	"time"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/demo/demo_devgames"
-	"github.com/zintix-labs/problab/server"
-	"github.com/zintix-labs/problab/server/logger"
-	"github.com/zintix-labs/problab/server/svrcfg"
+	devcli "github.com/zintix-labs/problab/server/api/dev/cli"
 )
 
 // Application-owned injection points. A private project replaces these sources;
-// the server assembly and lifecycle code below stays unchanged.
+// the execution/lifecycle code below stays unchanged.
 var (
 	// pLab must construct your project's games with the same PRNG factory,
 	// configs, logics and optimal setting as production, assembled with
@@ -50,60 +50,37 @@ var (
 	devGames fs.FS = demo_devgames.FS
 )
 
-// The server runs in ModePanel: only the landing page and /dev, with no /v1
-// endpoints and no machine pools, so nothing preloads optimal artifacts.
+// The application owns its Lab and plugins; the dev panel facade serves them in
+// svrcfg.ModePanel (only /dev, no machine pools) until Ctrl+C.
 func main() {
-	runDevPanel()
+	code, err := run(os.Args[1:], os.Stdout)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "cmd/dev: %v\n", err)
+	}
+	if code != 0 {
+		os.Exit(code)
+	}
 }
 
-func runDevPanel() {
+func run(args []string, output io.Writer) (code int, err error) {
+	flags := flag.NewFlagSet("cmd/dev", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	addr := flags.String("addr", devcli.DefaultAddr, "listen address")
+	open := flags.Bool("open", true, "open the panel in the default browser")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return 1, fmt.Errorf("cmd/dev accepts only -addr <address> and -open=<bool>")
+	}
 	lab, err := pLab()
 	if err != nil {
-		log.Fatal("new problab failed: " + err.Error())
+		return 1, err
 	}
-	defer func() { _ = lab.Close() }()
-
-	url := "http://localhost:5808/dev"
-	go func() {
-		// Wait until the server is actually listening, then open the browser.
-		if err := waitForTCP(":5808", 5*time.Second); err != nil {
-			log.Fatal("dev server not ready:" + err.Error())
-		}
-		if err := openBrowser(url); err != nil {
-			log.Fatal("open browser failed:" + err.Error())
+	defer func() {
+		err = errors.Join(err, lab.Close())
+		if err != nil {
+			code = 1
 		}
 	}()
-	server.Run(&svrcfg.SvrCfg{
-		Log:         logger.NewDefaultAsyncLogger(logger.ModeDev),
-		SlotBufSize: 1,
-		Problab:     lab,
-		Mode:        svrcfg.ModePanel,
-		DevGames:    devGames,
-	})
-}
-
-func waitForTCP(addr string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	url := "127.0.0.1" + addr
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", url, 200*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return nil
-		}
-	}
-	return fmt.Errorf("timeout waiting for %s", addr)
-}
-
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	return cmd.Start()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return devcli.Run(ctx, devcli.Options{Lab: lab, DevGames: devGames, Addr: *addr, OpenBrowser: *open, Output: output})
 }
