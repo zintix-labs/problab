@@ -73,8 +73,9 @@ type SvrCfg struct {
 	Problab     *problab.Problab
 	Mode        RunMode
 	// DevGames is the optional ProbLab Dev plugin directory: <gid>.js files at its
-	// root draw game-specific details. Problab ships no game plugins; a game
-	// without one here is shown with the common panel only.
+	// root draw game-specific details, and an optional theme.css overrides the
+	// panel's colors. Problab ships no game plugins; a game without one here is
+	// shown with the common panel only.
 	DevGames fs.FS
 }
 

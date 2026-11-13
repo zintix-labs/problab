@@ -24,6 +24,7 @@ Ctrl+C 結束；仍有連線時最多等 5 秒。
 | 欄位 | 說明 |
 | --- | --- |
 | 機台、押注模式 | 由 `/dev/meta` 載入 |
+| 倍數 | 投注倍數 1～100，預設 1；旁邊顯示投注額（押注單位 × 倍數）。贏分由遊戲邏輯乘上倍數，續段與回放沿用同一個倍數 |
 | 選擇方式 | 選擇類遊戲遇到選擇點時的處理方式：`first`（預設，選位置 0）、`last`（選最後一個位置）、`player`（停在選擇點，由你選） |
 | 輸入 | `Seed` 或 `Snap`，明確指定，後端不從內容判斷 |
 | 值 | Seed：留空自動產生；十進位整數（int64）；`hex:…`；`utf8:…`。不帶前綴的其他字串一律拒絕。Snap：某一段的 `start_b64u` |
@@ -34,7 +35,7 @@ Ctrl+C 結束；仍有連線時最多等 5 秒。
 | | Seed | Snap |
 | --- | --- | --- |
 | 是什麼 | 建立機台的根 seed material | 某一段實際使用的 RNG 起點（結果中的 `start_b64u`） |
-| 重現保證 | 同一組（機台、押注模式、選擇方式、seed、局數）結果完全相同，包含 optimal 與選擇類遊戲 | 只保證第 0 段；之後的段依選擇方式繼續，不一定與原局相同，畫面會標示 |
+| 重現保證 | 同一組（機台、押注模式、倍數、選擇方式、seed、局數）結果完全相同，包含 optimal 與選擇類遊戲 | 只保證第 0 段；之後的段依選擇方式繼續，不一定與原局相同，畫面會標示 |
 
 Seed 留空時，狀態列會顯示實際使用的 seed，可以原樣貼回重現。
 
@@ -55,7 +56,7 @@ Seed 留空時，狀態列會顯示實際使用的 seed，可以原樣貼回重�
 ## 網址參數
 
 ```
-http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds=300&spin=1&bet=137&step=6
+http://localhost:5808/dev?gid=2&betmode=0&betmult=1&choose=first&input=seed&value=5&rounds=300&spin=1&bet=137&step=6
 ```
 
 `spin=1` 時載入後立即執行，再跳到第 `bet` 局的第 `step` 步（都從 1 起算）。同一組參數一定開出同一個畫面（Snap 輸入只保證第 0 段）。
@@ -65,6 +66,7 @@ http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds
 | 項目 | 限制 |
 | --- | --- |
 | 每次批次的局數 | 1～1000 |
+| 投注倍數 | 1～100 |
 | 每局的段數 | `problab.DefaultMaxSegments` |
 | 請求內容大小 | 1 MB |
 
@@ -74,11 +76,12 @@ http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds
 
 | 方法與路徑 | 用途 |
 | --- | --- |
-| `GET /dev/meta` | 機台清單：gid、名稱、logic、押注單位、最大贏分、`fixed`、各 mode 的行列數與圖標名稱、是否注入外掛（`plugin`）；另有 `max_rounds`、`max_segments`。不輸出盤面產生、賠率與中獎判定的設定 |
-| `POST /dev/spin` | `{gid, betmode, choose, input, value, rounds}` → `{seed, rounds, clamped, partial_replay, total_bet, total_win, rtp, bets}`；每一局是 `{index, bet, win, isend, segments}`，`segments` 是每一段的 SpinResult |
-| `POST /dev/next` | player 的續段：`{gid, betmode, cycle, choice, choose_next, cp}` → `{segment}` |
-| `POST /dev/replay` | `{gid, betmode, segments: [{start_b64u, cycle, choice, choose_next, cp}]}` → `{bet}` |
+| `GET /dev/meta` | 機台清單：gid、名稱、logic、押注單位、最大贏分、`fixed`、各 mode 的行列數與圖標名稱、是否注入外掛（`plugin`）；另有 `max_rounds`、`max_segments`、`max_bet_mult`，以及是否注入主題（`theme`）。不輸出盤面產生、賠率與中獎判定的設定 |
+| `POST /dev/spin` | `{gid, betmode, betmult, choose, input, value, rounds}` → `{seed, betmult, rounds, clamped, partial_replay, total_bet, total_win, rtp, bets}`；每一局是 `{index, bet, win, isend, segments}`，`segments` 是每一段的 SpinResult |
+| `POST /dev/next` | player 的續段：`{gid, betmode, betmult, cycle, choice, choose_next, cp}` → `{segment}` |
+| `POST /dev/replay` | `{gid, betmode, betmult, segments: [{start_b64u, cycle, choice, choose_next, cp}]}` → `{bet}` |
 
+- `betmult` 省略時為 1；續段與回放必須和第 0 段相同。一局的投注額是押注單位 × 倍數。
 - 一局的贏分是各段贏分的加總；投注只計第 0 段一次。`total_bet`、`total_win`、`rtp` 只計已結束的局。
 - `choose`、`input` 必填；未知欄位、格式錯誤一律回 400，錯誤內容是純文字。
 - 盤面 `screen` 是列優先：`idx = row × columns + col`；圖標 ID 是該 mode `symbols` 的索引。
@@ -113,7 +116,84 @@ DEV.register(2, {
 
 工具函式：`DEV.util.kv(rows)`（兩欄表）、`DEV.util.progress(value, total, label)`（進度條）、`DEV.util.sym(ctx, id)`（圖標 ID 轉名稱）、`DEV.util.esc(s)`。
 
-圖標配色的公版規則：C 白底、S 鵝黃白底；H 依編號用底色、L 依編號用字色，1→6 為紫、橘、黃、藍、紅、綠，7 以後從紫重來但變淡；W 和其他圖標用固定色；Z（空格）不寫名稱、不填底色。
+## 自訂配色
+
+面板的顏色都是 `app.css` 的 CSS 變數。應用端可以注入一支 `theme.css` 換掉預設值，也可以只改某一台或某一個圖標；沒有覆寫的變數維持預設。
+
+### 預設配色
+
+| 圖標 | 樣式 |
+| --- | --- |
+| H | 依編號用色序當實心底色 |
+| L | 依編號用色序混入卡片底色當淡底，字色是加深的色序 |
+| W | 灰白底、金框、深金字 |
+| C | 白底、青框、青字 |
+| S | 鵝黃白底、石板灰框、深灰字 |
+| Z（空格） | 不寫名稱、不填底色，只留很淡的框 |
+| 其他 | 固定的灰色 |
+
+H、L 的色序 1→6 為紫、橘、黃、藍、紅、綠，7 以後從 1 重來但變淡。特殊圖標（W、C、S）都有 2px 外框，中獎時外框照樣保留。
+
+### 可以覆寫的變數
+
+| 變數 | 用途 | 淺色預設 | 深色預設 |
+| --- | --- | --- | --- |
+| `--tone-1`～`--tone-6` | H、L 的色序 | `#8b5cf6`、`#f97316`、`#eab308`、`#3b82f6`、`#ef4444`、`#22c55e` | 同左 |
+| `--tone-1-text`～`--tone-6-text` | H 的字色 | `--tone-3-text` 為 `#1d2329`，其餘 `#fff` | 同左 |
+| `--sym-l-bg` | L 的淡底中色序所佔的比例，其餘是卡片底色 | `16%` | `22%` |
+| `--sym-l-text` | L 的字色中色序所佔的比例，其餘是 `--sym-l-ink` | `75%` | `80%` |
+| `--sym-l-ink` | L 的字色混入的顏色 | `#000` | `#fff` |
+| `--sym-w`、`--sym-w-text`、`--sym-w-ring` | W 的底色、字色、外框 | `#f5f5f4`、`#a16207`、`#ca8a04` | `#e7e5e4`、`#92400e`、`#ca8a04` |
+| `--sym-c`、`--sym-c-text`、`--sym-c-ring` | C 的底色、字色、外框 | `#ffffff`、`#0e7490`、`#0891b2` | `#ffffff`、`#155e75`、`#0e7490` |
+| `--sym-s`、`--sym-s-text`、`--sym-s-ring` | S 的底色、字色、外框 | `#fff6d5`、`#334155`、`#475569` | `#fff6d5`、`#1e293b`、`#334155` |
+| `--sym-x` | 其他圖標的底色 | `#d4d4d4` | `#404040` |
+| `--hit`、`--hit-glow` | 得分框與光暈 | `#10b981`、`rgba(16, 185, 129, .50)` | `#34d399`、同左 |
+| `--mark` | 外掛加上 `mark` class 時的外框 | `#db2777` | 同左 |
+| `--primary` | 主題色（按鈕、選取） | `#059669` | `#047857` |
+
+其他變數（底色、邊框、字色等）見 `app.css` 的 `:root`。
+
+### 注入 theme.css
+
+1. 在外掛目錄（`DevGames` 指向的目錄，例如下方的 `internal/devgames/`）新增 `theme.css`，只寫要改的變數。只想改色、沒有外掛的專案，目錄裡只放 `theme.css` 也可以。
+2. `embed.go` 的 pattern 要包含 css：`//go:embed *.js *.css`。目錄裡只有 `theme.css` 時寫 `//go:embed theme.css`。
+3. 重新啟動 dev 入口。`/dev/meta` 的 `theme` 會變成 `true`，面板自動在 `app.css` 之後載入 `/dev/games/theme.css`。
+4. 調色時把 `devGames` 換成 `os.DirFS("internal/devgames")`，存檔後重新整理瀏覽器就看得到，不用重新啟動。
+
+`DevGames` 裡只有 `<gid>.js` 與 `theme.css` 會送出，其他檔名一律 404。
+
+### 覆寫的範圍
+
+| 範圍 | 寫在哪裡 | 寫法 |
+| --- | --- | --- |
+| 整個面板 | `theme.css` | `:root { … }` |
+| 某一台 | `theme.css`，或該台外掛的 `css` | `body[data-gid="<gid>"] { … }` |
+| 某一個圖標 | 同上 | `.cell[data-sym="<圖標名稱>"] { … }`；H、L 改 `--tone-base`（H 的字色是 `--tone-text`），W、C、S 改 `--sym-w`、`--sym-c-ring` 這類變數 |
+
+樣式的順序是 `app.css` → `theme.css` → 外掛的 `css`，後面的蓋前面的。外掛的樣式在切換機台後仍留在頁面上，所以外掛裡的規則一律要以 `body[data-gid="<gid>"]` 限定。
+
+深色的預設值寫在 `@media (prefers-color-scheme: dark)` 裡。`theme.css` 只寫 `:root` 時，深色也會套用同一個值；深色要用不同的值，就在 `theme.css` 裡另外寫一段 media query。
+
+```css
+/* internal/devgames/theme.css */
+
+/* 整個面板：換成公司的色序與 W 的配色 */
+:root {
+  --tone-1: #0ea5e9;
+  --tone-2: #f43f5e;
+  --sym-w: #fef3c7; --sym-w-text: #92400e; --sym-w-ring: #d97706;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --sym-w: #fde68a; }
+}
+
+/* 只有 101 號機 */
+body[data-gid="101"] { --sym-l-bg: 28%; /* L 的淡底再深一點 */ }
+
+/* 只有 101 號機的 H1 與 C1 */
+body[data-gid="101"] .cell[data-sym="H1"] { --tone-base: #14b8a6; }
+body[data-gid="101"] .cell[data-sym="C1"] { --sym-c-ring: #7c3aed; --sym-c-text: #6d28d9; }
+```
 
 ## 在自己的專案使用
 
@@ -146,9 +226,10 @@ func NewForDev() (*problab.Problab, error) {
 
 ```text
 internal/devgames/
-  embed.go     // //go:embed *.js  →  var FS embed.FS
+  embed.go     // //go:embed *.js *.css  →  var FS embed.FS
   101.js       // DEV.register(101, {...})
   102.js
+  theme.css    // 選填：覆寫公版配色，見上方「自訂配色」
 ```
 
 - 寫法見上方「機台外掛」；demo 0～3 的外掛在 `demo/demo_devgames/`，可以當範本。

@@ -45,7 +45,8 @@ var (
 	// devGames holds the panel plugins, one <gid>.js per game at its root, that
 	// draw game-specific details (see demo/demo_devgames). Problab ships none;
 	// a game without a plugin, or a nil devGames, uses the common panel only.
-	// An embed.FS needs a restart after editing a plugin; os.DirFS("devgames")
+	// An optional theme.css at the same root overrides the panel colors (see
+	// the 自訂配色 section of server/api/dev/README.md). An embed.FS needs a restart after editing a plugin; os.DirFS("devgames")
 	// picks up edits on browser reload.
 	devGames fs.FS = demo_devgames.FS
 )

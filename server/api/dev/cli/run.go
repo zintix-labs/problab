@@ -47,7 +47,7 @@ const (
 // Options exposes only application composition. Lab remains caller-owned.
 type Options struct {
 	Lab         *problab.Problab // required; borrowed, the caller closes it
-	DevGames    fs.FS            // <gid>.js plugins at its root; nil uses the common panel only
+	DevGames    fs.FS            // <gid>.js plugins and an optional theme.css at its root; nil uses the common panel only
 	Addr        string           // listen address; empty selects DefaultAddr
 	OpenBrowser bool             // open the panel in the default browser once it is listening
 	Output      io.Writer        // nil suppresses text (the panel URL and browser warnings)

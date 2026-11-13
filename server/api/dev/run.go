@@ -50,7 +50,7 @@ func parseChoose(s string) (chooseMode, error) {
 // bet 是一局：投注只計第 0 段一次，贏分是各段贏分的加總。
 type bet struct {
 	Index    int              `json:"index"` // 這批的第幾局，從 1 起算
-	Bet      int              `json:"bet"`
+	Bet      int              `json:"bet"`   // 押注單位 × 投注倍數
 	Win      int              `json:"win"`
 	IsEnd    bool             `json:"isend"`
 	Segments []dto.SpinResult `json:"segments"`
@@ -73,10 +73,22 @@ type runner struct {
 	gid     spec.GID
 	name    string
 	betMode int
+	betMult int
 	wager   int
 }
 
-func newRunner(pb *problab.Problab, gid spec.GID, betMode int, seed seedspec.Spec) (*runner, error) {
+// parseBetMult 檢查投注倍數；省略（0）時為 1。
+func parseBetMult(n int) (int, error) {
+	switch {
+	case n == 0:
+		return 1, nil
+	case n < 1 || n > maxBetMult:
+		return 0, errs.NewWarn(fmt.Sprintf("betmult must be 1 to %d, got %d", maxBetMult, n))
+	}
+	return n, nil
+}
+
+func newRunner(pb *problab.Problab, gid spec.GID, betMode, betMult int, seed seedspec.Spec) (*runner, error) {
 	ent, ok := pb.EntryById(gid)
 	if !ok {
 		return nil, errs.NewWarn(fmt.Sprintf("gid %d not found", gid))
@@ -88,14 +100,14 @@ func newRunner(pb *problab.Problab, gid spec.GID, betMode int, seed seedspec.Spe
 	if betMode < 0 || betMode >= len(m.BetUnits) {
 		return nil, errs.NewWarn(fmt.Sprintf("betmode %d out of range [0, %d)", betMode, len(m.BetUnits)))
 	}
-	return &runner{m: m, gid: gid, name: ent.Name, betMode: betMode, wager: m.BetUnits[betMode]}, nil
+	return &runner{m: m, gid: gid, name: ent.Name, betMode: betMode, betMult: betMult, wager: m.BetUnits[betMode] * betMult}, nil
 }
 
 // segment 執行一段。cycle 為 0 時 choice、chooseNext 必須為空；snap 非空時從該快照開始。
 func (r *runner) segment(cycle int, choice *int, chooseNext []int, snap string, cp json.RawMessage) (dto.SpinResult, error) {
 	req := &dto.SpinRequest{
 		GameName: r.name, GameId: r.gid,
-		Bet: r.wager, BetMode: r.betMode, BetMult: 1,
+		Bet: r.wager, BetMode: r.betMode, BetMult: r.betMult,
 		Cycle: cycle, Choice: choice, ChooseNext: chooseNext,
 	}
 	if snap != "" || len(cp) != 0 {

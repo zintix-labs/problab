@@ -41,8 +41,10 @@ var contentTypes = map[string]string{
 	".woff2": "font/woff2",
 }
 
-// pluginName 是機台外掛的檔名：<gid>.js。
+// pluginName 是機台外掛的檔名：<gid>.js；themeName 是覆寫公版配色的主題檔。
 var pluginName = regexp.MustCompile(`^[0-9]+\.js$`)
+
+const themeName = "theme.css"
 
 // registerStatic 註冊頁面與靜態檔。明確的 API 路徑優先於 /dev/* 萬用路徑。
 func registerStatic(svr netsvr.NetRouter, cfg *svrcfg.SvrCfg) {
@@ -64,12 +66,12 @@ func serveStatic(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, web, path.Join("web", name))
 }
 
-// servePlugin 只從應用端注入的外掛目錄（SvrCfg.DevGames）讀取。前端只在 /dev/meta 標示有
-// 外掛時才請求，所以正常操作不會走到 404。
+// servePlugin 只從應用端注入的外掛目錄（SvrCfg.DevGames）讀取外掛與主題。前端只在 /dev/meta
+// 標示有外掛或主題時才請求，所以正常操作不會走到 404。
 func servePlugin(cfg *svrcfg.SvrCfg) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/dev/games/")
-		if !pluginName.MatchString(name) || cfg == nil || cfg.DevGames == nil {
+		if (!pluginName.MatchString(name) && name != themeName) || cfg == nil || cfg.DevGames == nil {
 			http.NotFound(w, r)
 			return
 		}
@@ -79,10 +81,14 @@ func servePlugin(cfg *svrcfg.SvrCfg) http.HandlerFunc {
 
 // hasPlugin 回報應用端是否注入了這台的外掛。
 func hasPlugin(devGames fs.FS, gid spec.GID) bool {
+	return hasFile(devGames, fmt.Sprintf("%d.js", gid))
+}
+
+func hasFile(devGames fs.FS, name string) bool {
 	if devGames == nil {
 		return false
 	}
-	_, err := fs.Stat(devGames, fmt.Sprintf("%d.js", gid))
+	_, err := fs.Stat(devGames, name)
 	return err == nil
 }
 
