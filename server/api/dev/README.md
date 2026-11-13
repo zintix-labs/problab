@@ -85,7 +85,7 @@ http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds
 
 ## 機台外掛
 
-每台可以有一支 `<gid>.js`，負責畫這台特有的東西。problab 不內建任何機台的外掛：外掛一律由應用端以 `svrcfg.SvrCfg.DevGames` 注入，沒有注入的機台只顯示公版（盤面、中獎、時間軸與 DTO 照常顯示，ext 只以原始 JSON 呈現）。demo 0～3 的外掛在 `demo/demo_devgames/`，由 `cmd/dev` 注入，可以當範例。
+每台可以有一支 `<gid>.js`，負責畫這台特有的東西。problab 不內建任何機台的外掛：外掛一律由應用端以 `svrcfg.SvrCfg.DevGames` 注入，沒有注入的機台只顯示公版（盤面、中獎、時間軸與 DTO 照常顯示，ext 只以原始 JSON 呈現）。demo 0～3 的外掛在 `demo/demo_devgames/`，由 `cmd/dev` 注入，可以當範例。在自己的專案注入外掛的方式見下方「在自己的專案使用」。
 
 ```js
 DEV.register(2, {
@@ -115,34 +115,16 @@ DEV.register(2, {
 
 圖標配色的公版規則：C 白底、S 鵝黃白底；H 依編號用底色、L 依編號用字色，1→6 為紫、橘、黃、藍、紅、綠，7 以後從紫重來但變淡；W 和其他圖標用固定色；Z（空格）不寫名稱、不填底色。
 
-### 在自己的專案啟動 ProbLab Dev
+## 在自己的專案使用
 
-server 的組裝、啟動與關閉都在門面 `server/api/dev/cli` 的 `Run(ctx, Options)`，與 `playerexp/cli`、`optimizer/v2/cli` 相同的契約：Lab 由呼叫端建立與關閉，信號由入口處理。
+使用 problab 的專案只要準備三樣東西：延遲載入的 Lab、外掛（選填）與入口。以下以常見的結構為例：`pkg/engine` 負責 engine 接線，`internal/...` 放設定、邏輯與外掛。
 
-`cmd/dev/dev.go` 是官方的入口範例，與 `cmd/exp`、`cmd/opt` 相同：檔案最上方的 `var` 是注入點，複製到自己的專案後只改這兩個變數，下方的流程一行不改。
+### 1. 在 engine 接線加 dev 用的建構函式
 
-```go
-var (
-	pLab     func() (*problab.Problab, error) = engine.NewForDev // 自己的 engine 接線
-	devGames fs.FS                            = devgames.FS      // 自己的外掛目錄，根目錄放 <gid>.js
-)
-```
-
-不想複製入口時，也可以直接呼叫門面：
+PRNG、設定、邏輯與 optimal 設定都與正式環境相同，只是以 `problab.New` 加 `RegisterAll`、`Freeze` 組裝，不用 `NewAuto`（參考 `demo.NewProbLabForDev`）：
 
 ```go
-code, err := devcli.Run(ctx, devcli.Options{
-	Lab:         lab,         // 必填；呼叫端關閉
-	DevGames:    devGames,    // nil 時只顯示公版
-	Addr:        ":5808",     // 空字串為 devcli.DefaultAddr
-	OpenBrowser: true,
-	Output:      os.Stdout,   // nil 時不印網址
-})
-```
-
-`pLab` 用與正式環境相同的 PRNG、設定、邏輯與 optimal 設定，但以 `problab.New` 加 `RegisterAll`、`Freeze` 組裝（參考 `demo.NewProbLabForDev`）：
-
-```go
+// pkg/engine/problab.go
 func NewForDev() (*problab.Problab, error) {
 	pb, err := problab.New(pRNGFactory, cfgs, logics, optimalOption)
 	if err != nil {
@@ -157,12 +139,74 @@ func NewForDev() (*problab.Problab, error) {
 }
 ```
 
-門面以 `svrcfg.ModePanel` 啟動，只掛 `/dev`，不建立機台池。
+- `NewAuto` 會在啟動時預先載入所有機台的 optimal 資料；這樣組裝則是每台在第一次 Spin 才載入，dev 入口只看一兩台時不必等。
+- 正式環境的建構函式維持 `NewAuto`：啟動時就能發現設定或檔案的錯誤，第一個請求也不必等載入。
 
-- **用 `New` 加 `RegisterAll`、`Freeze`，不要用 `NewAuto`**：`NewAuto` 會在啟動時預先載入所有機台的 optimal 資料；dev 入口只看一兩台時不必等。正式 server 則建議維持 `NewAuto`，啟動時就能發現設定或檔案的錯誤，第一個請求也不必等載入。
-- **`ModePanel` 不建立機台池**：`ModeDev` 會為 `/v1/spin` 建立每台的機台池，啟動時一樣會載入全部 optimal。
-- **外掛目錄**：用 `embed.FS`（以 `fs.Sub` 讓 `<gid>.js` 位在根目錄）時，改了外掛要重新啟動；開發外掛時改用 `os.DirFS("devgames")`，重新整理瀏覽器就看得到。
-- `/dev/meta` 以 `plugin` 標示每台有沒有注入外掛；前端只載入有注入的外掛，不會對沒有外掛的機台發出請求。
+### 2. 寫外掛（選填）
+
+```text
+internal/devgames/
+  embed.go     // //go:embed *.js  →  var FS embed.FS
+  101.js       // DEV.register(101, {...})
+  102.js
+```
+
+- 寫法見上方「機台外掛」；demo 0～3 的外掛在 `demo/demo_devgames/`，可以當範本。
+- 沒有外掛的機台照樣可以使用，只顯示公版；之後再補外掛即可。
+- `/dev/meta` 以 `plugin` 標示每台有沒有外掛，前端只載入有外掛的機台。
+
+### 3. 加入口
+
+把 `cmd/dev/dev.go` 複製到自己的 `cmd/dev/`，只改檔案最上方的兩個注入點，下方的流程（建立與關閉 Lab、處理 Ctrl+C、呼叫門面）一行不改：
+
+```go
+var (
+	pLab     func() (*problab.Problab, error) = engine.NewForDev
+	devGames fs.FS                            = devgames.FS
+)
+```
+
+也可以不複製，在自己的 `main` 直接呼叫門面 `server/api/dev/cli`。契約與 `playerexp/cli`、`optimizer/v2/cli` 相同：Lab 由呼叫端建立與關閉，信號由入口處理：
+
+```go
+code, err := devcli.Run(ctx, devcli.Options{
+	Lab:         lab,       // 必填；呼叫端關閉
+	DevGames:    devGames,  // nil 時只顯示公版
+	Addr:        ":5808",   // 空字串為 devcli.DefaultAddr
+	OpenBrowser: true,
+	Output:      os.Stdout, // nil 時不印網址
+})
+```
+
+門面以 `svrcfg.ModePanel` 啟動：只掛首頁與 `/dev`，不建立機台池。`ModeDev` 會為 `/v1/spin` 建立每台的機台池，啟動時一樣會載入全部 optimal，所以 dev 入口不要用 `ModeDev`。
+
+Makefile 可以加一個目標：
+
+```make
+dev:
+	@go run ./cmd/dev
+```
+
+### 4. 執行
+
+```sh
+make dev                                   # 開啟 http://localhost:5808/dev
+go run ./cmd/dev -addr :5810 -open=false   # 換埠號、不開瀏覽器
+```
+
+- 從專案根目錄執行：optimal 目錄是相對路徑時（例如 `internal/optimal`），要從根目錄執行才找得到。
+- 這個入口只有 `/dev`，沒有 `/v1/*`；需要 `/v1` 時另外啟動正式的 server。
+- 寫外掛時把 `devGames` 暫時換成 `os.DirFS("internal/devgames")`，改了 js 重新整理瀏覽器就看得到，不用重新啟動；`embed.FS` 則要重新啟動。
+- 沒有任何驗證機制，不得對外公開。
+
+### 從舊版升級
+
+| 舊的寫法 | 升級後 |
+| --- | --- |
+| 呼叫 `NewDevSimulator`、`DevSpinReport`、`DevSimReport` | 已刪除，編譯失敗。可重現的執行改用 `NewMachine` 加 `Machine.Spin`（一次一段）；統計改用 `NewSimulator` |
+| 呼叫 `demo.NewServerConfig` | 已刪除，編譯失敗。照上方步驟組裝 |
+| 自己的 dev 入口以 `server.Run` 加 `ModeDev` 啟動 | 仍然可以運作，面板照常出現；但啟動時會為 `/v1` 建立機台池、一次載入所有 optimal，也沒有外掛。建議照上方步驟改寫 |
+| 呼叫舊的 `/dev/spin`、`/dev/sim` | `/dev/spin` 的格式改變（見上方 API），`/dev/sim` 已刪除；統計改用 `/v1/sim` 或 Simulator |
 
 ## 字型
 
