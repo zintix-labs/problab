@@ -18,7 +18,7 @@
 // 執行與正式後端同一條路徑：每個請求以 NewMachine 建立 deterministic 的機台，逐段呼叫
 // Machine.Spin。不提供統計模擬（改用 make run 或 /v1/sim）。
 //
-// 這些路由只在 ModeDev 註冊，沒有任何驗證機制，不得對外公開。
+// 這些路由只在 ModeDev 與 ModePanel 註冊，沒有任何驗證機制，不得對外公開。
 package dev
 
 import (
@@ -45,7 +45,7 @@ const (
 )
 
 // Register 註冊 ProbLab Dev 的頁面與 API：
-//   - GET  /dev        ：內建的前端；/dev/games/<gid>.js 是機台外掛（先找 SvrCfg.DevGames）。
+//   - GET  /dev        ：內建的前端；/dev/games/<gid>.js 是應用端以 SvrCfg.DevGames 注入的機台外掛。
 //   - GET  /dev/meta   ：機台清單與畫面需要的設定。
 //   - POST /dev/spin   ：以 seed 跑一批局，或從 snap 回放一局的第 0 段。
 //   - POST /dev/next   ：player 模式的續段。
@@ -65,7 +65,7 @@ func devMeta(cfg *svrcfg.SvrCfg) http.HandlerFunc {
 			httperr.Errs(w, err)
 			return
 		}
-		meta, err := buildMeta(pb)
+		meta, err := buildMeta(pb, cfg.DevGames)
 		if err != nil {
 			httperr.Errs(w, err)
 			return

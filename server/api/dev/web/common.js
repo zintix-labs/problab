@@ -131,7 +131,7 @@ function selectGame() {
   state.betIdx = -1;
   state.steps = [];
   $("summary").textContent = "";
-  loadPlugin(state.game.gid);
+  loadPlugin(state.game);
   renderResults();
   render();
 }
@@ -144,12 +144,13 @@ function syncInputs() {
   $("value").placeholder = $("input").value === "snap" ? "某一段的 start_b64u（只保證第 0 段）" : "空白隨機｜整數｜hex:…｜utf8:…";
 }
 
-function loadPlugin(gid) {
-  if (DEV.plugins[gid] || document.querySelector(`script[data-gid="${gid}"]`)) return;
+// 只有 /dev/meta 標示 plugin 的機台才載入 games/<gid>.js；其他機台只顯示公版
+function loadPlugin(game) {
+  if (!game.plugin || DEV.plugins[game.gid] || document.querySelector(`script[data-gid="${game.gid}"]`)) return;
   const s = document.createElement("script");
-  s.src = `games/${gid}.js`;
-  s.dataset.gid = gid;
-  s.onerror = () => {}; // 沒有機台專屬檔就只用公版
+  s.src = `games/${game.gid}.js`;
+  s.dataset.gid = game.gid;
+  s.onerror = () => ($("status").textContent = `games/${game.gid}.js 載入失敗，只顯示公版`);
   document.body.appendChild(s);
 }
 
@@ -657,7 +658,7 @@ function renderGamePanel(ctx) {
     return;
   }
   if (!p.panel) {
-    $("game-panel").innerHTML = `<span class="muted">這台沒有 games/${state.game.gid}.js，只顯示公版。</span>`;
+    $("game-panel").innerHTML = `<span class="muted">這台沒有注入外掛，只顯示公版。</span>`;
     return;
   }
   try {

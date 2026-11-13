@@ -15,6 +15,8 @@
 package dev
 
 import (
+	"io/fs"
+
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/spec"
 )
@@ -36,6 +38,7 @@ type gameMeta struct {
 	MaxWinLimit int            `json:"max_win_limit"`
 	Fixed       map[string]any `json:"fixed"` // 機台自訂的參數，例如外掛畫進度條用的門檻
 	Modes       []modeMeta     `json:"modes"`
+	Plugin      bool           `json:"plugin"` // 應用端注入了 <gid>.js；false 時前端只顯示公版，不請求外掛
 }
 
 type modeMeta struct {
@@ -44,7 +47,7 @@ type modeMeta struct {
 	Symbols []string `json:"symbols"` // 圖標名稱，盤面上的圖標 ID 是它的索引
 }
 
-func buildMeta(pb *problab.Problab) (metaResponse, error) {
+func buildMeta(pb *problab.Problab, devGames fs.FS) (metaResponse, error) {
 	out := metaResponse{Games: []gameMeta{}, MaxRounds: maxRounds, MaxSegments: problab.DefaultMaxSegments}
 	for _, ent := range pb.All() {
 		gs, err := pb.GameSettingById(ent.GID)
@@ -59,6 +62,7 @@ func buildMeta(pb *problab.Problab) (metaResponse, error) {
 			MaxWinLimit: gs.MaxWinLimit,
 			Fixed:       gs.Fixed,
 			Modes:       make([]modeMeta, 0, len(gs.GameModeSettings)),
+			Plugin:      hasPlugin(devGames, gs.GameID),
 		}
 		if g.Fixed == nil {
 			g.Fixed = map[string]any{}

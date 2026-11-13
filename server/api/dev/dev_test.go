@@ -473,8 +473,11 @@ func TestMetaFieldWhitelist(t *testing.T) {
 	}
 	for _, g := range games {
 		game := g.(map[string]any)
-		if got := keys(game); got != "bet_units,fixed,gid,logic,max_win_limit,modes,name" {
+		if got := keys(game); got != "bet_units,fixed,gid,logic,max_win_limit,modes,name,plugin" {
 			t.Fatalf("game keys %s", got)
+		}
+		if game["plugin"] != false {
+			t.Fatalf("game %v has a plugin without DevGames", game["gid"])
 		}
 		for _, m := range game["modes"].([]any) {
 			mode := m.(map[string]any)
@@ -484,6 +487,30 @@ func TestMetaFieldWhitelist(t *testing.T) {
 			if len(mode["symbols"].([]any)) == 0 || mode["columns"].(float64) < 1 || mode["rows"].(float64) < 1 {
 				t.Fatalf("mode %v", mode)
 			}
+		}
+	}
+}
+
+// plugin 標示應用端是否注入了這台的 <gid>.js。
+func TestMetaMarksInjectedPlugins(t *testing.T) {
+	rt := &testRouter{r: chi.NewRouter()}
+	Register(rt, &svrcfg.SvrCfg{Problab: demoLab(t), Mode: svrcfg.ModeDev, DevGames: fstest.MapFS{
+		"2.js": &fstest.MapFile{Data: []byte("//")},
+	}})
+	ts := httptest.NewServer(rt.r)
+	t.Cleanup(ts.Close)
+	res, err := ts.Client().Get(ts.URL + "/dev/meta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var meta metaResponse
+	if err := json.NewDecoder(res.Body).Decode(&meta); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range meta.Games {
+		if g.Plugin != (g.GID == 2) {
+			t.Fatalf("game %d plugin %v", g.GID, g.Plugin)
 		}
 	}
 }

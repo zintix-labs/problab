@@ -34,6 +34,7 @@ import (
 // IMPORTANT:
 //   - Route exposure is controlled by SvrCfg.Mode.
 //   - ModeDev enables developer tooling endpoints (sim/stat/dev panel).
+//   - ModePanel serves only the dev panel (/dev), without machine pools.
 //   - ModeProd exposes production-safe endpoints only (e.g. spin/health).
 //
 // This package does NOT assume any file path/env strategy.

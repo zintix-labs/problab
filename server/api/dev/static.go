@@ -16,6 +16,7 @@ package dev
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path"
@@ -24,9 +25,10 @@ import (
 
 	"github.com/zintix-labs/problab/server/netsvr"
 	"github.com/zintix-labs/problab/server/svrcfg"
+	"github.com/zintix-labs/problab/spec"
 )
 
-// web 是內建的前端：公版（index.html、app.css、common.js）、字型與 demo 機台的外掛。
+// web 是內建的前端：公版（index.html、app.css、common.js）與字型。problab 不內建任何機台的外掛。
 //
 //go:embed web
 var web embed.FS
@@ -62,22 +64,26 @@ func serveStatic(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, web, path.Join("web", name))
 }
 
-// servePlugin 先找應用端注入的外掛目錄，再找內建的 demo 外掛；都沒有時回 404，前端只顯示公版。
+// servePlugin 只從應用端注入的外掛目錄（SvrCfg.DevGames）讀取。前端只在 /dev/meta 標示有
+// 外掛時才請求，所以正常操作不會走到 404。
 func servePlugin(cfg *svrcfg.SvrCfg) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/dev/games/")
-		if !pluginName.MatchString(name) {
+		if !pluginName.MatchString(name) || cfg == nil || cfg.DevGames == nil {
 			http.NotFound(w, r)
 			return
 		}
-		if cfg != nil && cfg.DevGames != nil {
-			if _, err := fs.Stat(cfg.DevGames, name); err == nil {
-				serveFile(w, r, cfg.DevGames, name)
-				return
-			}
-		}
-		serveFile(w, r, web, "web/games/"+name)
+		serveFile(w, r, cfg.DevGames, name)
 	}
+}
+
+// hasPlugin 回報應用端是否注入了這台的外掛。
+func hasPlugin(devGames fs.FS, gid spec.GID) bool {
+	if devGames == nil {
+		return false
+	}
+	_, err := fs.Stat(devGames, fmt.Sprintf("%d.js", gid))
+	return err == nil
 }
 
 func serveFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name string) {

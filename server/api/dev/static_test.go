@@ -63,25 +63,21 @@ func TestStaticFiles(t *testing.T) {
 	}
 }
 
-// 應用端注入的外掛優先於內建；沒有注入的機台用內建的外掛；兩邊都沒有時回 404，前端只顯示公版。
-func TestDevGamesOverrideBuiltinPlugins(t *testing.T) {
+// 外掛只從 SvrCfg.DevGames 讀取：problab 不內建任何機台的外掛，沒注入的機台回 404。
+func TestPluginsComeOnlyFromDevGames(t *testing.T) {
+	devGames := fstest.MapFS{"0.js": &fstest.MapFile{Data: []byte("// injected 0")}}
 	rt := &testRouter{r: chi.NewRouter()}
-	Register(rt, &svrcfg.SvrCfg{Problab: demoLab(t), Mode: svrcfg.ModeDev, DevGames: fstest.MapFS{
-		"0.js":  &fstest.MapFile{Data: []byte("// injected 0")},
-		"42.js": &fstest.MapFile{Data: []byte("// injected 42")},
-	}})
+	Register(rt, &svrcfg.SvrCfg{Problab: demoLab(t), Mode: svrcfg.ModeDev, DevGames: devGames})
 	ts := httptest.NewServer(rt.r)
 	t.Cleanup(ts.Close)
-	for path, want := range map[string]string{"/dev/games/0.js": "// injected 0", "/dev/games/42.js": "// injected 42"} {
-		code, ctype, body := get(t, ts, path)
-		if code != http.StatusOK || ctype != "text/javascript; charset=utf-8" || body != want {
-			t.Errorf("%s: status %d type %q body %q", path, code, ctype, body)
-		}
+	code, ctype, body := get(t, ts, "/dev/games/0.js")
+	if code != http.StatusOK || ctype != "text/javascript; charset=utf-8" || body != "// injected 0" {
+		t.Errorf("injected plugin: status %d type %q body %q", code, ctype, body)
 	}
-	if code, _, body := get(t, ts, "/dev/games/1.js"); code != http.StatusOK || !strings.Contains(body, "DEV.register(1,") {
-		t.Errorf("built-in plugin for game 1: status %d", code)
+	if code, _, _ := get(t, ts, "/dev/games/1.js"); code != http.StatusNotFound {
+		t.Errorf("game 1 without a plugin: status %d, want 404", code)
 	}
-	if code, _, _ := get(t, ts, "/dev/games/7.js"); code != http.StatusNotFound {
-		t.Errorf("plugin for a game without one: status %d, want 404", code)
+	if code, _, _ := get(t, newServer(t, demoLab(t)), "/dev/games/0.js"); code != http.StatusNotFound {
+		t.Errorf("no DevGames: status %d, want 404", code)
 	}
 }

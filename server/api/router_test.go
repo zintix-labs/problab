@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -256,5 +257,57 @@ func TestDevRoutesOnlyInDevMode(t *testing.T) {
 		if code, _ := call(t, prod, method, path, nil); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
 			t.Fatalf("prod %s %s: status %d", method, path, code)
 		}
+	}
+}
+
+// ModePanel 只掛 /dev：沒有 /v1，也不建立機台池，所以 optimal 資料缺檔時也能啟動，
+// 直到那台第一次 Spin 才回報錯誤；ModeDev 建立機台池，啟動時就失敗。
+func TestPanelModeServesOnlyDevWithoutMachinePools(t *testing.T) {
+	raw, err := fs.ReadFile(demo_configs.FS, "game_0_demonormal.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?m)^optimal_setting:\n(?:  .*\n)*`)
+	if !block.Match(raw) {
+		t.Fatal("demo config has no optimal_setting block")
+	}
+	missing := block.ReplaceAllLiteral(raw, []byte("optimal_setting:\n  use_optimal: true\n  gachas: [missing/gacha.json.zst]\n  seed_bank: [missing/seed_bank.bin]\n\n"))
+	lab, err := problab.New(core.Default(), problab.Configs(fstest.MapFS{"game.yaml": &fstest.MapFile{Data: missing}}),
+		problab.Logics(demo_logic.Logics), problab.WithOptimalDir(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lab.Close() })
+	if err := lab.RegisterAll(); err != nil {
+		t.Fatal(err)
+	}
+	lab.Freeze()
+
+	newSvr := func(mode svrcfg.RunMode) (*testSvr, error) {
+		svr := &testSvr{r: chi.NewRouter()}
+		cfg := &svrcfg.SvrCfg{Log: slog.New(slog.NewTextHandler(io.Discard, nil)), SlotBufSize: 1, Problab: lab, Mode: mode}
+		return svr, RegisterRoutes(svr, cfg)
+	}
+	if _, err := newSvr(svrcfg.ModeDev); err == nil {
+		t.Fatal("ModeDev built machine pools without the optimal artifact")
+	}
+	svr, err := newSvr(svrcfg.ModePanel)
+	if err != nil {
+		t.Fatalf("ModePanel: %v", err)
+	}
+	ts := httptest.NewServer(svr.r)
+	t.Cleanup(ts.Close)
+	code, raw2 := call(t, ts, http.MethodGet, "/dev/meta", nil)
+	requireStatus(t, "panel meta", code, raw2, http.StatusOK, `"games"`)
+	code, raw2 = call(t, ts, http.MethodGet, "/dev", nil)
+	requireStatus(t, "panel page", code, raw2, http.StatusOK, "<title>ProbLab Dev</title>")
+	for _, path := range []string{"/v1/health", "/v1/spin", "/v1/sim"} {
+		if code, _ := call(t, ts, http.MethodGet, path, nil); code != http.StatusNotFound {
+			t.Fatalf("panel %s: status %d, want 404", path, code)
+		}
+	}
+	code, raw2 = call(t, ts, http.MethodPost, "/dev/spin", map[string]any{"gid": 0, "betmode": 0, "choose": "first", "input": "seed", "value": "1", "rounds": 1})
+	if code == http.StatusOK {
+		t.Fatalf("spin without the optimal artifact succeeded: %s", raw2)
 	}
 }
