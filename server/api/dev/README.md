@@ -24,6 +24,7 @@ Ctrl+C 結束；仍有連線時最多等 5 秒。
 | 欄位 | 說明 |
 | --- | --- |
 | 機台、押注模式 | 由 `/dev/meta` 載入 |
+| 倍數 | 投注倍數 1～100，預設 1；旁邊顯示投注額（押注單位 × 倍數）。贏分由遊戲邏輯乘上倍數，續段與回放沿用同一個倍數 |
 | 選擇方式 | 選擇類遊戲遇到選擇點時的處理方式：`first`（預設，選位置 0）、`last`（選最後一個位置）、`player`（停在選擇點，由你選） |
 | 輸入 | `Seed` 或 `Snap`，明確指定，後端不從內容判斷 |
 | 值 | Seed：留空自動產生；十進位整數（int64）；`hex:…`；`utf8:…`。不帶前綴的其他字串一律拒絕。Snap：某一段的 `start_b64u` |
@@ -34,7 +35,7 @@ Ctrl+C 結束；仍有連線時最多等 5 秒。
 | | Seed | Snap |
 | --- | --- | --- |
 | 是什麼 | 建立機台的根 seed material | 某一段實際使用的 RNG 起點（結果中的 `start_b64u`） |
-| 重現保證 | 同一組（機台、押注模式、選擇方式、seed、局數）結果完全相同，包含 optimal 與選擇類遊戲 | 只保證第 0 段；之後的段依選擇方式繼續，不一定與原局相同，畫面會標示 |
+| 重現保證 | 同一組（機台、押注模式、倍數、選擇方式、seed、局數）結果完全相同，包含 optimal 與選擇類遊戲 | 只保證第 0 段；之後的段依選擇方式繼續，不一定與原局相同，畫面會標示 |
 
 Seed 留空時，狀態列會顯示實際使用的 seed，可以原樣貼回重現。
 
@@ -55,7 +56,7 @@ Seed 留空時，狀態列會顯示實際使用的 seed，可以原樣貼回重�
 ## 網址參數
 
 ```
-http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds=300&spin=1&bet=137&step=6
+http://localhost:5808/dev?gid=2&betmode=0&betmult=1&choose=first&input=seed&value=5&rounds=300&spin=1&bet=137&step=6
 ```
 
 `spin=1` 時載入後立即執行，再跳到第 `bet` 局的第 `step` 步（都從 1 起算）。同一組參數一定開出同一個畫面（Snap 輸入只保證第 0 段）。
@@ -65,6 +66,7 @@ http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds
 | 項目 | 限制 |
 | --- | --- |
 | 每次批次的局數 | 1～1000 |
+| 投注倍數 | 1～100 |
 | 每局的段數 | `problab.DefaultMaxSegments` |
 | 請求內容大小 | 1 MB |
 
@@ -74,11 +76,12 @@ http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds
 
 | 方法與路徑 | 用途 |
 | --- | --- |
-| `GET /dev/meta` | 機台清單：gid、名稱、logic、押注單位、最大贏分、`fixed`、各 mode 的行列數與圖標名稱、是否注入外掛（`plugin`）；另有 `max_rounds`、`max_segments`。不輸出盤面產生、賠率與中獎判定的設定 |
-| `POST /dev/spin` | `{gid, betmode, choose, input, value, rounds}` → `{seed, rounds, clamped, partial_replay, total_bet, total_win, rtp, bets}`；每一局是 `{index, bet, win, isend, segments}`，`segments` 是每一段的 SpinResult |
-| `POST /dev/next` | player 的續段：`{gid, betmode, cycle, choice, choose_next, cp}` → `{segment}` |
-| `POST /dev/replay` | `{gid, betmode, segments: [{start_b64u, cycle, choice, choose_next, cp}]}` → `{bet}` |
+| `GET /dev/meta` | 機台清單：gid、名稱、logic、押注單位、最大贏分、`fixed`、各 mode 的行列數與圖標名稱、是否注入外掛（`plugin`）；另有 `max_rounds`、`max_segments`、`max_bet_mult`。不輸出盤面產生、賠率與中獎判定的設定 |
+| `POST /dev/spin` | `{gid, betmode, betmult, choose, input, value, rounds}` → `{seed, betmult, rounds, clamped, partial_replay, total_bet, total_win, rtp, bets}`；每一局是 `{index, bet, win, isend, segments}`，`segments` 是每一段的 SpinResult |
+| `POST /dev/next` | player 的續段：`{gid, betmode, betmult, cycle, choice, choose_next, cp}` → `{segment}` |
+| `POST /dev/replay` | `{gid, betmode, betmult, segments: [{start_b64u, cycle, choice, choose_next, cp}]}` → `{bet}` |
 
+- `betmult` 省略時為 1；續段與回放必須和第 0 段相同。一局的投注額是押注單位 × 倍數。
 - 一局的贏分是各段贏分的加總；投注只計第 0 段一次。`total_bet`、`total_win`、`rtp` 只計已結束的局。
 - `choose`、`input` 必填；未知欄位、格式錯誤一律回 400，錯誤內容是純文字。
 - 盤面 `screen` 是列優先：`idx = row × columns + col`；圖標 ID 是該 mode `symbols` 的索引。

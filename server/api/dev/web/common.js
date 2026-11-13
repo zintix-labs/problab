@@ -42,7 +42,7 @@ const state = {
   timer: null,
   focusDetail: -1,
   pinned: new Set(), // 點一下釘住顯示格子編號的格子
-  request: null,     // 產生目前這批的請求（choose、betmode），續段與回放沿用
+  request: null,     // 產生目前這批的請求（choose、betmode、betmult），續段與回放沿用
   replay: null,      // 目前這局「回放這局」的比對結果
 };
 
@@ -76,22 +76,27 @@ async function init() {
   state.meta = await api("meta");
   state.games = state.meta.games;
   $("rounds").max = state.meta.max_rounds;
+  $("betmult").max = state.meta.max_bet_mult;
   const sel = $("game");
   sel.innerHTML = state.games.map((g, i) => `<option value="${i}">${g.gid} ${esc(g.name)}</option>`).join("");
-  // 網址參數可以直接重現某一局某一步：?gid=2&betmode=0&choose=first&input=seed&value=7&rounds=50&spin=1&bet=3&step=10
+  // 網址參數可以直接重現某一局某一步：?gid=2&betmode=0&betmult=1&choose=first&input=seed&value=7&rounds=50&spin=1&bet=3&step=10
   const q = new URLSearchParams(location.search);
   const want = q.get("gid") ?? remember("dev.game");
   const idx = state.games.findIndex((g) => String(g.gid) === want);
   sel.value = String(Math.max(idx, 0));
   selectGame();
   if (q.has("betmode")) $("betmode").value = q.get("betmode");
+  if (q.has("betmult")) $("betmult").value = q.get("betmult");
   if (q.has("choose")) $("choose").value = q.get("choose");
   if (q.has("input")) $("input").value = q.get("input");
   if (q.has("value")) $("value").value = q.get("value");
   if (q.has("rounds")) $("rounds").value = q.get("rounds");
   syncInputs();
+  syncWager();
 
   sel.onchange = selectGame;
+  $("betmode").onchange = syncWager;
+  $("betmult").oninput = syncWager;
   $("choose").onchange = syncInputs;
   $("input").onchange = syncInputs;
   $("spin").onclick = spin;
@@ -127,6 +132,7 @@ function selectGame() {
   state.pinned.clear();
   remember("dev.game", String(state.game.gid));
   $("betmode").innerHTML = state.game.bet_units.map((u, i) => `<option value="${i}">${i}（${u}）</option>`).join("");
+  syncWager();
   state.bets = [];
   state.betIdx = -1;
   state.steps = [];
@@ -142,6 +148,17 @@ function syncInputs() {
   $("rounds").disabled = single;
   if (single) $("rounds").value = 1;
   $("value").placeholder = $("input").value === "snap" ? "某一段的 start_b64u（只保證第 0 段）" : "空白隨機｜整數｜hex:…｜utf8:…";
+}
+
+// 投注倍數 1～max_bet_mult；投注額 = 押注單位 × 倍數
+function betMult() {
+  const n = Math.trunc(Number($("betmult").value));
+  return Math.max(1, Math.min(state.meta.max_bet_mult, n || 1));
+}
+
+function syncWager() {
+  const unit = state.game.bet_units[Number($("betmode").value)] ?? 0;
+  $("wager").textContent = `投注額 ${unit * betMult()}`;
 }
 
 // 只有 /dev/meta 標示 plugin 的機台才載入 games/<gid>.js；其他機台只顯示公版
@@ -160,6 +177,7 @@ async function spin() {
   const req = {
     gid: state.game.gid,
     betmode: Number($("betmode").value),
+    betmult: betMult(),
     choose: $("choose").value,
     input: $("input").value,
     value: $("input").value === "snap" ? $("value").value.trim() : $("value").value,
@@ -167,7 +185,9 @@ async function spin() {
   };
   try {
     const rep = await api("spin", req);
-    state.request = { gid: req.gid, betmode: req.betmode, choose: req.choose };
+    state.request = { gid: req.gid, betmode: req.betmode, betmult: req.betmult, choose: req.choose };
+    $("betmult").value = req.betmult; // 超出範圍的輸入顯示成實際使用的倍數
+    syncWager();
     state.bets = rep.bets || [];
     const notes = [];
     if (rep.input === "seed") notes.push(`seed ${rep.seed}`);
@@ -294,6 +314,7 @@ async function pick(position) {
     const req = {
       gid: state.request.gid,
       betmode: state.request.betmode,
+      betmult: state.request.betmult,
       cycle: b.segments.length,
       choice: position,
       choose_next: last.choose_next,
@@ -388,7 +409,9 @@ function renderDTO(ctx) {
       $("input").value = "snap";
       $("value").value = st.start_b64u || "";
       $("betmode").value = String(state.request.betmode);
+      $("betmult").value = String(state.request.betmult);
       syncInputs();
+      syncWager();
       spin();
     };
   }
@@ -407,7 +430,7 @@ async function replayBet(b) {
     return seg;
   });
   try {
-    const rep = await api("replay", { gid: state.request.gid, betmode: state.request.betmode, segments });
+    const rep = await api("replay", { gid: state.request.gid, betmode: state.request.betmode, betmult: state.request.betmult, segments });
     const got = rep.bet.segments;
     const bad = b.segments.findIndex((s, i) => JSON.stringify(s) !== JSON.stringify(got[i]));
     state.replay = bad < 0
@@ -465,7 +488,7 @@ function renderInfo(ctx) {
   }
   const { bet, segIdx, mode, act } = ctx;
   const items = [
-    ["押注", bet.bet],
+    ["押注", state.request.betmult > 1 ? `${bet.bet}（×${state.request.betmult}）` : bet.bet],
     ["總贏分", bet.win],
     ["段", bet.segments.length > 1 ? `${segIdx}（共 ${bet.segments.length} 段）` : "0"],
     ["Mode", `${mode.modeid}${mode.trigger ? `（觸發 ${mode.trigger}）` : ""}`],

@@ -34,6 +34,7 @@ import (
 	"github.com/zintix-labs/problab"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
+	"github.com/zintix-labs/problab/dto"
 	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/sdk/sampler"
@@ -392,6 +393,64 @@ func TestReplayReproducesWholeBet(t *testing.T) {
 	}
 }
 
+// 投注倍數：同一個 seed 開出同樣的盤面，投注額與贏分都乘上倍數；回放與續段沿用同一個倍數。
+func TestBetMultScalesBet(t *testing.T) {
+	ts := newServer(t, demoLab(t))
+	withMult := func(mult int) map[string]any {
+		req := seedReq(2, "first", "5", 300)
+		req["betmult"] = mult
+		return req
+	}
+	base := spin(t, ts, seedReq(2, "first", "5", 300))
+	got := spin(t, ts, withMult(3))
+	if base.BetMult != 1 || got.BetMult != 3 || len(got.Bets) != len(base.Bets) {
+		t.Fatalf("betmult %d/%d bets %d/%d", base.BetMult, got.BetMult, len(base.Bets), len(got.Bets))
+	}
+	screens := func(s dto.SpinResult) string {
+		var out []string
+		for _, gm := range s.GameModes {
+			for _, a := range gm.ActResults {
+				out = append(out, fmt.Sprint(a.Screen))
+			}
+		}
+		return strings.Join(out, "|")
+	}
+	multi, wins := 0, 0
+	for i, b := range got.Bets {
+		want := base.Bets[i]
+		if b.Bet != 3*want.Bet || b.Win != 3*want.Win || len(b.Segments) != len(want.Segments) {
+			t.Fatalf("bet %d: bet %d win %d segments %d, want ×3 of %d %d %d", b.Index, b.Bet, b.Win, len(b.Segments), want.Bet, want.Win, len(want.Segments))
+		}
+		for j, s := range b.Segments {
+			if s.Bet != b.Bet || s.BetMult != 3 || screens(s) != screens(want.Segments[j]) {
+				t.Fatalf("bet %d segment %d: bet %d betmult %d, or screens differ", b.Index, j, s.Bet, s.BetMult)
+			}
+		}
+		if b.Win > 0 {
+			wins++
+		}
+		if len(b.Segments) == 1 {
+			continue
+		}
+		multi++
+		code, raw := post(t, ts, "/dev/replay", map[string]any{"gid": 2, "betmode": 0, "betmult": 3, "segments": replayInput(b)})
+		if code != http.StatusOK {
+			t.Fatalf("replay bet %d: status %d body %s", b.Index, code, raw)
+		}
+		var rep replayResponse
+		if err := json.Unmarshal(raw, &rep); err != nil {
+			t.Fatal(err)
+		}
+		rep.Bet.Index = b.Index
+		if mustJSON(t, rep.Bet) != mustJSON(t, b) {
+			t.Fatalf("replay bet %d with betmult 3 differs", b.Index)
+		}
+	}
+	if multi == 0 || wins == 0 {
+		t.Fatalf("multi %d wins %d: betmult not exercised", multi, wins)
+	}
+}
+
 func TestInputErrors(t *testing.T) {
 	ts := newServer(t, demoLab(t))
 	snap := spin(t, ts, seedReq(2, "first", "3", 1)).Bets[0].Segments[0].State.StartCoreSnapB64U
@@ -413,6 +472,10 @@ func TestInputErrors(t *testing.T) {
 		{"/dev/spin", map[string]any{"gid": 0, "betmode": 9, "choose": "first", "input": "seed"}, "betmode 9 out of range"},
 		{"/dev/spin", map[string]any{"gid": 99, "betmode": 0, "choose": "first", "input": "seed"}, "gid 99 not found"},
 		{"/dev/spin", map[string]any{"gid": 0, "betmode": 0, "choose": "first", "input": "seed", "seed": "1"}, "unknown field"},
+		{"/dev/spin", map[string]any{"gid": 0, "betmode": 0, "betmult": 101, "choose": "first", "input": "seed"}, "betmult must be 1 to 100, got 101"},
+		{"/dev/spin", map[string]any{"gid": 0, "betmode": 0, "betmult": -1, "choose": "first", "input": "seed"}, "betmult must be 1 to 100, got -1"},
+		{"/dev/next", map[string]any{"gid": 2, "betmode": 0, "betmult": 101, "cycle": 1, "choice": 0, "choose_next": []int{3}}, "betmult must be 1 to 100"},
+		{"/dev/replay", map[string]any{"gid": 2, "betmode": 0, "betmult": 101, "segments": []any{map[string]any{"start_b64u": snap, "cycle": 0}}}, "betmult must be 1 to 100"},
 		{"/dev/spin", []byte(`{"gid": 0} {}`), "unexpected data"},
 		{"/dev/next", map[string]any{"gid": 2, "betmode": 0, "cycle": 0, "choice": 0, "choose_next": []int{3}}, "cycle must be at least 1"},
 		{"/dev/next", map[string]any{"gid": 2, "betmode": 0, "cycle": 1, "choice": 0}, "choose_next must not be empty"},
@@ -464,11 +527,12 @@ func TestMetaFieldWhitelist(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := func(m map[string]any) string { return strings.Join(slices.Sorted(maps.Keys(m)), ",") }
-	if got := keys(meta); got != "games,max_rounds,max_segments" {
+	if got := keys(meta); got != "games,max_bet_mult,max_rounds,max_segments" {
 		t.Fatalf("top-level keys %s", got)
 	}
 	games := meta["games"].([]any)
-	if len(games) != 4 || meta["max_rounds"].(float64) != maxRounds || meta["max_segments"].(float64) != problab.DefaultMaxSegments {
+	if len(games) != 4 || meta["max_rounds"].(float64) != maxRounds || meta["max_segments"].(float64) != problab.DefaultMaxSegments ||
+		meta["max_bet_mult"].(float64) != maxBetMult {
 		t.Fatalf("meta %v", meta)
 	}
 	for _, g := range games {

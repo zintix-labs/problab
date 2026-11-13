@@ -41,6 +41,7 @@ import (
 
 const (
 	maxRounds   = 1000    // 一次批次的局數上限，超過時截斷
+	maxBetMult  = 100     // 投注倍數上限
 	maxBodySize = 1 << 20 // 請求內容上限；續段與回放的請求帶有前端送回的 cp
 )
 
@@ -79,15 +80,17 @@ func devMeta(cfg *svrcfg.SvrCfg) http.HandlerFunc {
 type spinRequest struct {
 	GID     *int   `json:"gid"`
 	BetMode *int   `json:"betmode"`
-	Choose  string `json:"choose"` // first、last、player
-	Input   string `json:"input"`  // seed、snap
-	Value   string `json:"value"`  // seed：空字串表示自動產生；snap：某一段的 start_b64u
+	BetMult int    `json:"betmult"` // 投注倍數 1～100，省略時為 1；投注額 = 押注單位 × 倍數
+	Choose  string `json:"choose"`  // first、last、player
+	Input   string `json:"input"`   // seed、snap
+	Value   string `json:"value"`   // seed：空字串表示自動產生；snap：某一段的 start_b64u
 	Rounds  int    `json:"rounds"`
 }
 
 type spinResponse struct {
 	GID             spec.GID `json:"gid"`
 	BetMode         int      `json:"betmode"`
+	BetMult         int      `json:"betmult"`
 	Choose          string   `json:"choose"`
 	Input           string   `json:"input"`
 	Seed            string   `json:"seed,omitempty"` // 實際使用的 seed，可以原樣貼回重現；snap 時省略
@@ -126,11 +129,15 @@ func runSpin(cfg *svrcfg.SvrCfg, req *spinRequest) (spinResponse, error) {
 	if err != nil {
 		return spinResponse{}, err
 	}
+	betMult, err := parseBetMult(req.BetMult)
+	if err != nil {
+		return spinResponse{}, err
+	}
 	mode, err := parseChoose(req.Choose)
 	if err != nil {
 		return spinResponse{}, err
 	}
-	resp := spinResponse{GID: gid, BetMode: betMode, Choose: string(mode), Input: req.Input, RequestedRounds: req.Rounds}
+	resp := spinResponse{GID: gid, BetMode: betMode, BetMult: betMult, Choose: string(mode), Input: req.Input, RequestedRounds: req.Rounds}
 
 	var seed seedspec.Spec
 	snap := ""
@@ -168,7 +175,7 @@ func runSpin(cfg *svrcfg.SvrCfg, req *spinRequest) (spinResponse, error) {
 	resp.Rounds = rounds
 	resp.Clamped = req.Input == "seed" && mode != choosePlayer && req.Rounds > maxRounds
 
-	run, err := newRunner(pb, gid, betMode, seed)
+	run, err := newRunner(pb, gid, betMode, betMult, seed)
 	if err != nil {
 		return spinResponse{}, err
 	}
@@ -192,9 +199,11 @@ func runSpin(cfg *svrcfg.SvrCfg, req *spinRequest) (spinResponse, error) {
 }
 
 // nextRequest 是 player 模式的續段，格式與正式環境的續段請求相同；伺服器不保存狀態。
+// betmode、betmult 必須與第 0 段相同。
 type nextRequest struct {
 	GID        *int            `json:"gid"`
 	BetMode    *int            `json:"betmode"`
+	BetMult    int             `json:"betmult"`
 	Cycle      int             `json:"cycle"`
 	Choice     *int            `json:"choice"`
 	ChooseNext []int           `json:"choose_next"`
@@ -230,6 +239,10 @@ func runNext(cfg *svrcfg.SvrCfg, req *nextRequest) (dto.SpinResult, error) {
 	if err != nil {
 		return dto.SpinResult{}, err
 	}
+	betMult, err := parseBetMult(req.BetMult)
+	if err != nil {
+		return dto.SpinResult{}, err
+	}
 	if err := validContinuation(req.Cycle, req.Choice, req.ChooseNext); err != nil {
 		return dto.SpinResult{}, err
 	}
@@ -238,7 +251,7 @@ func runNext(cfg *svrcfg.SvrCfg, req *nextRequest) (dto.SpinResult, error) {
 	if err != nil {
 		return dto.SpinResult{}, err
 	}
-	run, err := newRunner(pb, gid, betMode, seed)
+	run, err := newRunner(pb, gid, betMode, betMult, seed)
 	if err != nil {
 		return dto.SpinResult{}, err
 	}
@@ -261,6 +274,7 @@ type replaySegment struct {
 type replayRequest struct {
 	GID      *int            `json:"gid"`
 	BetMode  *int            `json:"betmode"`
+	BetMult  int             `json:"betmult"`
 	Segments []replaySegment `json:"segments"`
 }
 
@@ -295,6 +309,10 @@ func runReplay(cfg *svrcfg.SvrCfg, req *replayRequest) (bet, error) {
 	if err != nil {
 		return bet{}, err
 	}
+	betMult, err := parseBetMult(req.BetMult)
+	if err != nil {
+		return bet{}, err
+	}
 	if n := len(req.Segments); n == 0 || n > problab.DefaultMaxSegments {
 		return bet{}, errs.NewWarn(fmt.Sprintf("segments must contain 1 to %d entries, got %d", problab.DefaultMaxSegments, n))
 	}
@@ -317,7 +335,7 @@ func runReplay(cfg *svrcfg.SvrCfg, req *replayRequest) (bet, error) {
 	if err != nil {
 		return bet{}, err
 	}
-	run, err := newRunner(pb, gid, betMode, seed)
+	run, err := newRunner(pb, gid, betMode, betMult, seed)
 	if err != nil {
 		return bet{}, err
 	}

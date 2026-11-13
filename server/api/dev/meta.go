@@ -26,6 +26,7 @@ type metaResponse struct {
 	Games       []gameMeta `json:"games"`
 	MaxRounds   int        `json:"max_rounds"`   // 一次批次的局數上限
 	MaxSegments int        `json:"max_segments"` // 每局的段數上限
+	MaxBetMult  int        `json:"max_bet_mult"` // 投注倍數上限
 }
 
 // gameMeta 只包含畫面需要的欄位。完整設定含盤面產生、賠率與中獎判定，不得送出；
@@ -48,7 +49,7 @@ type modeMeta struct {
 }
 
 func buildMeta(pb *problab.Problab, devGames fs.FS) (metaResponse, error) {
-	out := metaResponse{Games: []gameMeta{}, MaxRounds: maxRounds, MaxSegments: problab.DefaultMaxSegments}
+	out := metaResponse{Games: []gameMeta{}, MaxRounds: maxRounds, MaxSegments: problab.DefaultMaxSegments, MaxBetMult: maxBetMult}
 	for _, ent := range pb.All() {
 		gs, err := pb.GameSettingById(ent.GID)
 		if err != nil {

@@ -98,6 +98,7 @@ button.primary:hover { background: var(--primary-hover); }
 input[type=number] { width: 84px; }
 input[type=checkbox] { height: auto; box-shadow: none; accent-color: var(--primary); }
 #value { width: 280px; }
+#betmult { width: 64px; }
 input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
 .muted { color: var(--muted); }
 label { display: inline-flex; gap: 8px; align-items: center; font-weight: 500; }
