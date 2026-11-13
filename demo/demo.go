@@ -19,10 +19,7 @@ import (
 	"github.com/zintix-labs/problab/catalog"
 	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
-	"github.com/zintix-labs/problab/errs"
 	"github.com/zintix-labs/problab/sdk/core"
-	"github.com/zintix-labs/problab/server/logger"
-	"github.com/zintix-labs/problab/server/svrcfg"
 )
 
 // OptimalDir is the conventional local-only demo optimal output root.
@@ -31,19 +28,6 @@ const OptimalDir = "demo/optimal"
 
 func New() (*catalog.Catalog, error) {
 	return catalog.New(demo_configs.FS)
-}
-
-func NewServerConfig() (*svrcfg.SvrCfg, error) {
-	lab, err := NewProbLab()
-	if err != nil {
-		return nil, errs.NewFatal("new problab failed:" + err.Error())
-	}
-	scfg := &svrcfg.SvrCfg{
-		Log:         logger.NewDefaultAsyncLogger(logger.ModeDev),
-		SlotBufSize: 1,
-		Problab:     lab,
-	}
-	return scfg, nil
 }
 
 func NewProbLab() (*problab.Problab, error) {
@@ -59,6 +43,29 @@ func NewProbLab() (*problab.Problab, error) {
 // end to end without wiring problab.NewAuto by hand.
 func NewProbLabWithOptimalDir(root string) (*problab.Problab, error) {
 	return newProbLab(problab.WithOptimalDir(root))
+}
+
+// NewProbLabForDev builds the demo lab for the ProbLab Dev panel (cmd/dev). It
+// uses the same PRNG factory, configs and logics as NewProbLab, but assembles
+// with New, RegisterAll and Freeze instead of NewAuto: NewAuto preloads every
+// game's optimal artifact at startup, while this loads each game's artifact on
+// its first spin. A project with optimal games passes the same optimal option
+// as its production lab.
+func NewProbLabForDev() (*problab.Problab, error) {
+	lab, err := problab.New(
+		core.Default(),
+		problab.Configs(demo_configs.FS),
+		problab.Logics(demo_logic.Logics),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := lab.RegisterAll(); err != nil {
+		_ = lab.Close()
+		return nil, err
+	}
+	lab.Freeze()
+	return lab, nil
 }
 
 func newProbLab(opts ...problab.ProblabOption) (*problab.Problab, error) {

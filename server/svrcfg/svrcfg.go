@@ -15,6 +15,7 @@
 package svrcfg
 
 import (
+	"io/fs"
 	"log/slog"
 
 	"github.com/zintix-labs/problab"
@@ -55,6 +56,15 @@ const (
 	// It should expose only minimal endpoints required by production traffic
 	// (e.g. spin + health(todo)) and keep all tooling/simulation endpoints disabled.
 	ModeProd
+
+	// ModePanel serves only the ProbLab Dev panel (/dev) and the landing page.
+	//
+	// It builds no machine pools, so a Problab assembled with New, RegisterAll
+	// and Freeze loads each game's optimal artifact on its first spin instead
+	// of at startup. make dev runs in this mode.
+	//
+	// Like ModeDev, it has no authentication: do NOT expose it publicly.
+	ModePanel
 )
 
 type SvrCfg struct {
@@ -62,6 +72,10 @@ type SvrCfg struct {
 	SlotBufSize int
 	Problab     *problab.Problab
 	Mode        RunMode
+	// DevGames is the optional ProbLab Dev plugin directory: <gid>.js files at its
+	// root draw game-specific details. Problab ships no game plugins; a game
+	// without one here is shown with the common panel only.
+	DevGames fs.FS
 }
 
 func (sc *SvrCfg) Vaild() error {

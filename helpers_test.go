@@ -397,15 +397,6 @@ func choiceSimulator(t testing.TB, lab *Problab, seed int64) *Simulator {
 	return s
 }
 
-func choiceDevSimulator(t testing.TB, lab *Problab, seed int64) *DevSimulator {
-	t.Helper()
-	d, err := lab.NewDevSimulator(demoChoiceID, seed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return d
-}
-
 // ============================================================
 // demo_entry（game 3）的入口庫：在暫存目錄合成 start、a、b 三份庫，各取 raw 機台依序的
 // 快照、均勻權重。任何快照都是合法的 seed，所以不必經過 optimizer。

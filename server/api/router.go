@@ -31,6 +31,10 @@ import (
 //   - Enables developer tooling endpoints (simulation, stat, dev panel, etc.).
 //   - Intended for local development, benchmarking, debugging, and demos.
 //
+// ModePanel (dev panel only):
+//   - Mounts only the ProbLab Dev panel (/dev); no /v1 endpoints and no machine
+//     pools, so optimal artifacts are loaded per game on first use.
+//
 // ModeProd (production-safe):
 //   - Exposes only minimal, production-safe endpoints (e.g. spin/health).
 //   - Use this mode when embedding Problab into a real backend service.
@@ -48,6 +52,8 @@ func RegisterRoutes(svr netsvr.NetSvr, sCfg *svrcfg.SvrCfg) error {
 		if err := registerDev(svr, sCfg); err != nil {
 			return err
 		}
+	case svrcfg.ModePanel:
+		dev.Register(svr, sCfg)
 	case svrcfg.ModeProd:
 		if err := registerProd(svr, sCfg); err != nil {
 			return err
