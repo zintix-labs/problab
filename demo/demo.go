@@ -45,6 +45,29 @@ func NewProbLabWithOptimalDir(root string) (*problab.Problab, error) {
 	return newProbLab(problab.WithOptimalDir(root))
 }
 
+// NewProbLabForDev builds the demo lab for the ProbLab Dev panel (cmd/dev). It
+// uses the same PRNG factory, configs and logics as NewProbLab, but assembles
+// with New, RegisterAll and Freeze instead of NewAuto: NewAuto preloads every
+// game's optimal artifact at startup, while this loads each game's artifact on
+// its first spin. A project with optimal games passes the same optimal option
+// as its production lab.
+func NewProbLabForDev() (*problab.Problab, error) {
+	lab, err := problab.New(
+		core.Default(),
+		problab.Configs(demo_configs.FS),
+		problab.Logics(demo_logic.Logics),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := lab.RegisterAll(); err != nil {
+		_ = lab.Close()
+		return nil, err
+	}
+	lab.Freeze()
+	return lab, nil
+}
+
 func newProbLab(opts ...problab.ProblabOption) (*problab.Problab, error) {
 	return problab.NewAuto(
 		core.Default(),

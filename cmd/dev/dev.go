@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command dev opens ProbLab Dev, the per-segment visual panel, for the demo
-// games. It is also the reference assembly for applications that run the panel
-// on their own games: replace the configs, logics and plugins below.
 package main
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"os/exec"
@@ -26,37 +24,44 @@ import (
 	"time"
 
 	"github.com/zintix-labs/problab"
-	"github.com/zintix-labs/problab/demo/demo_configs"
+	"github.com/zintix-labs/problab/demo"
 	"github.com/zintix-labs/problab/demo/demo_devgames"
-	"github.com/zintix-labs/problab/demo/demo_logic"
-	"github.com/zintix-labs/problab/sdk/core"
 	"github.com/zintix-labs/problab/server"
 	"github.com/zintix-labs/problab/server/logger"
 	"github.com/zintix-labs/problab/server/svrcfg"
 )
 
+// Application-owned injection points. A private project replaces these sources;
+// the server assembly and lifecycle code below stays unchanged.
+var (
+	// pLab must construct your project's games with the same PRNG factory,
+	// configs, logics and optimal setting as production, assembled with
+	// problab.New, RegisterAll and Freeze (see demo.NewProbLabForDev). Each
+	// game's optimal artifact is then loaded on its first spin. problab.NewAuto
+	// also works, but preloads every game's artifact at startup.
+	// This command owns and closes the returned Lab.
+	pLab func() (*problab.Problab, error) = demo.NewProbLabForDev
+
+	// devGames holds the panel plugins, one <gid>.js per game at its root, that
+	// draw game-specific details (see demo/demo_devgames). Problab ships none;
+	// a game without a plugin, or a nil devGames, uses the common panel only.
+	// An embed.FS needs a restart after editing a plugin; os.DirFS("devgames")
+	// picks up edits on browser reload.
+	devGames fs.FS = demo_devgames.FS
+)
+
+// The server runs in ModePanel: only the landing page and /dev, with no /v1
+// endpoints and no machine pools, so nothing preloads optimal artifacts.
 func main() {
 	runDevPanel()
 }
 
 func runDevPanel() {
-	lab, err := newLab()
+	lab, err := pLab()
 	if err != nil {
 		log.Fatal("new problab failed: " + err.Error())
 	}
 	defer func() { _ = lab.Close() }()
-
-	scfg := &svrcfg.SvrCfg{
-		Log:         logger.NewDefaultAsyncLogger(logger.ModeDev),
-		SlotBufSize: 1,
-		Problab:     lab,
-		// ModePanel mounts only /dev: no /v1 endpoints and no machine pools.
-		Mode: svrcfg.ModePanel,
-		// Game-specific drawing (<gid>.js). Problab ships none; a game without a
-		// plugin is shown with the common panel. os.DirFS("devgames") instead of
-		// an embed.FS picks up plugin edits on reload without a restart.
-		DevGames: demo_devgames.FS,
-	}
 
 	url := "http://localhost:5808/dev"
 	go func() {
@@ -68,31 +73,13 @@ func runDevPanel() {
 			log.Fatal("open browser failed:" + err.Error())
 		}
 	}()
-	server.Run(scfg)
-}
-
-// newLab assembles the engine with New, RegisterAll and Freeze instead of
-// NewAuto: NewAuto preloads every game's optimal artifact at startup, while
-// this loads each game's artifact on its first spin. Use the same PRNG
-// factory, configs, logics and optimal directory as the production engine.
-// Production servers should keep NewAuto, which fails fast on a broken
-// artifact and keeps the first request from waiting on a load.
-func newLab() (*problab.Problab, error) {
-	lab, err := problab.New(
-		core.Default(),
-		problab.Configs(demo_configs.FS),
-		problab.Logics(demo_logic.Logics),
-		// problab.WithOptimalDir("<optimal root>"), // when games use optimal
-	)
-	if err != nil {
-		return nil, err
-	}
-	if err := lab.RegisterAll(); err != nil {
-		_ = lab.Close()
-		return nil, err
-	}
-	lab.Freeze()
-	return lab, nil
+	server.Run(&svrcfg.SvrCfg{
+		Log:         logger.NewDefaultAsyncLogger(logger.ModeDev),
+		SlotBufSize: 1,
+		Problab:     lab,
+		Mode:        svrcfg.ModePanel,
+		DevGames:    devGames,
+	})
 }
 
 func waitForTCP(addr string, timeout time.Duration) error {

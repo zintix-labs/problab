@@ -114,25 +114,33 @@ DEV.register(2, {
 
 ### 在自己的專案啟動 ProbLab Dev
 
-`cmd/dev/dev.go` 是官方的組裝範例，換成自己的設定、邏輯與外掛即可：
+`cmd/dev/dev.go` 是官方的入口範例，與 `cmd/exp`、`cmd/opt` 相同：檔案最上方的 `var` 是注入點，複製到自己的專案後只改這兩個變數，下方的 server 組裝與流程一行不改。
 
 ```go
-lab, err := problab.New(
-	core.Default(),                  // 與正式環境相同的 PRNG
-	problab.Configs(configs.FS),     // 自己的遊戲設定
-	problab.Logics(logic.Logics),    // 自己的遊戲邏輯
-	problab.WithOptimalDir("…"),     // 有使用 optimal 時
+var (
+	pLab     func() (*problab.Problab, error) = engine.NewForDev // 自己的 engine 接線
+	devGames fs.FS                            = devgames.FS      // 自己的外掛目錄，根目錄放 <gid>.js
 )
-// 錯誤處理省略
-lab.RegisterAll()
-lab.Freeze()
-
-server.Run(&svrcfg.SvrCfg{
-	Problab:  lab,
-	Mode:     svrcfg.ModePanel, // 只掛 /dev，不建立機台池
-	DevGames: devGames,         // fs.FS，根目錄放 <gid>.js
-})
 ```
+
+`pLab` 用與正式環境相同的 PRNG、設定、邏輯與 optimal 設定，但以 `problab.New` 加 `RegisterAll`、`Freeze` 組裝（參考 `demo.NewProbLabForDev`）：
+
+```go
+func NewForDev() (*problab.Problab, error) {
+	pb, err := problab.New(pRNGFactory, cfgs, logics, optimalOption)
+	if err != nil {
+		return nil, err
+	}
+	if err := pb.RegisterAll(); err != nil {
+		_ = pb.Close()
+		return nil, err
+	}
+	pb.Freeze()
+	return pb, nil
+}
+```
+
+入口以 `svrcfg.ModePanel` 啟動，只掛 `/dev`，不建立機台池。
 
 - **用 `New` 加 `RegisterAll`、`Freeze`，不要用 `NewAuto`**：`NewAuto` 會在啟動時預先載入所有機台的 optimal 資料；dev 入口只看一兩台時不必等。正式 server 則建議維持 `NewAuto`，啟動時就能發現設定或檔案的錯誤，第一個請求也不必等載入。
 - **`ModePanel` 不建立機台池**：`ModeDev` 會為 `/v1/spin` 建立每台的機台池，啟動時一樣會載入全部 optimal。
