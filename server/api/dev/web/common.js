@@ -42,6 +42,7 @@ const state = {
   timer: null,
   focusDetail: -1,
   pinned: new Set(), // 點一下釘住顯示格子編號的格子
+  symMode: "name",   // 格子與中獎明細顯示圖標名稱（name）或盤面上的 ID（id）
   request: null,     // 產生目前這批的請求（choose、betmode、betmult），續段與回放沿用
   replay: null,      // 目前這局「回放這局」的比對結果
 };
@@ -86,7 +87,7 @@ async function init() {
   $("betmult").max = state.meta.max_bet_mult;
   const sel = $("game");
   sel.innerHTML = state.games.map((g, i) => `<option value="${i}">${g.gid} ${esc(g.name)}</option>`).join("");
-  // 網址參數可以直接重現某一局某一步：?gid=2&betmode=0&betmult=1&choose=first&input=seed&value=7&rounds=50&spin=1&bet=3&step=10
+  // 網址參數可以直接重現某一局某一步：?gid=2&betmode=0&betmult=1&choose=first&input=seed&value=7&rounds=50&spin=1&bet=3&step=10&symmode=id
   const q = new URLSearchParams(location.search);
   const want = q.get("gid") ?? remember("dev.game");
   const idx = state.games.findIndex((g) => String(g.gid) === want);
@@ -100,8 +101,11 @@ async function init() {
   if (q.has("rounds")) $("rounds").value = q.get("rounds");
   syncInputs();
   syncWager();
+  state.symMode = (q.get("symmode") ?? remember("dev.symmode")) === "id" ? "id" : "name";
+  $("symmode").value = state.symMode;
 
   sel.onchange = selectGame;
+  $("symmode").onchange = () => setSymMode($("symmode").value);
   $("betmode").onchange = syncWager;
   $("betmult").oninput = syncWager;
   $("choose").onchange = syncInputs;
@@ -283,7 +287,17 @@ function stop() {
   $("play").textContent = "▶ 播放";
 }
 
-// Space／Enter：Spin；←／→：上一步／下一步。輸入框裡打字和選單操作不攔。
+// 切換格子與中獎明細顯示名稱或 ID；記住上次的選擇
+function setSymMode(mode) {
+  state.symMode = mode === "id" ? "id" : "name";
+  $("symmode").value = state.symMode;
+  remember("dev.symmode", state.symMode);
+  const ctx = context();
+  renderBoard(ctx);
+  renderDetails(ctx);
+}
+
+// Space／Enter：Spin；←／→：上一步／下一步；I：切換名稱／ID。輸入框裡打字和選單操作不攔。
 function onKey(e) {
   const t = e.target;
   const typing = t.matches("input:not([type=checkbox]), select");
@@ -296,6 +310,8 @@ function onKey(e) {
   } else if (!typing && e.key === "ArrowRight") {
     e.preventDefault();
     go(state.stepIdx + 1);
+  } else if (!typing && (e.key === "i" || e.key === "I") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    setSymMode(state.symMode === "id" ? "name" : "id");
   }
 }
 
@@ -554,6 +570,12 @@ function renderBoard(ctx) {
   const cells = [];
   for (let idx = 0; idx < columns * rows; idx++) {
     const id = ctx.screen[idx];
+    // 負值是不存在的格子：Trim 裁切掉的位置（-1）或遊戲封鎖的格子，畫成空位；名稱模式標一個淡淡的 ×
+    if (id < 0) {
+      cells.push(`<div class="cell void${state.pinned.has(idx) ? " pin" : ""}" data-idx="${idx}" title="idx ${idx}｜${id === -1 ? "裁切" : "封鎖"}（${id}）"><span class="idx">${idx}</span>` +
+        `${state.symMode === "id" ? id : `<span class="void-x">×</span>`}</div>`);
+      continue;
+    }
     const name = ctx.symbols[id] ?? (id === undefined ? "" : `#${id}`);
     const cls = ["cell", ...symLook(name)];
     if (state.pinned.has(idx)) cls.push("pin");
@@ -562,9 +584,9 @@ function renderBoard(ctx) {
     if (p.cellClass) cls.push(...[].concat(p.cellClass(idx, ctx) || []));
     const badge = p.badge ? p.badge(idx, ctx) : "";
     cells.push(
-      // Z 系列是空格（消除後還沒補的位置），不寫圖標名稱
-      `<div class="${cls.join(" ")}" data-idx="${idx}" data-sym="${esc(name)}" title="idx ${idx}｜${esc(name)}"><span class="idx">${idx}</span>` +
-      `${cls[1] === "sym-Z" ? "" : esc(name)}` +
+      // 名稱模式下 Z 系列是空格（消除後還沒補的位置），不寫名稱；ID 模式每一格都顯示盤面上的原始數字
+      `<div class="${cls.join(" ")}" data-idx="${idx}" data-sym="${esc(name)}" title="idx ${idx}｜${esc(name)}（id ${id}）"><span class="idx">${idx}</span>` +
+      `${state.symMode === "id" ? id : cls[1] === "sym-Z" ? "" : esc(name)}` +
       `${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`
     );
   }
@@ -665,7 +687,9 @@ function renderDetails(ctx) {
     details
       .map((d, i) => {
         const where = d.comb ? `${d.comb} 組` : `L${d.line}${d.direction ? " ←" : ""}`;
-        return `<tr data-i="${i}"><td>${esc(DEV.util.sym(ctx, d.symbol))}</td><td>${d.count}</td>` +
+        const name = DEV.util.sym(ctx, d.symbol);
+        const sym = state.symMode === "id" ? d.symbol : name;
+        return `<tr data-i="${i}"><td title="${esc(name)}（id ${d.symbol}）">${esc(sym)}</td><td>${d.count}</td>` +
           `<td>${where}</td><td>${d.win}</td></tr>`;
       })
       .join("") +
