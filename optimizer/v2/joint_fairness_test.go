@@ -279,7 +279,7 @@ func jointFairnessClass(id string, classIndex, weight, otherCount int, enabled *
 			Index: bucketIndex, Mean: 1, SecondMoment: secondMoment,
 			CDFBeforeLower: 0, CDFAtUpper: 1, RiskCap: math.Inf(1), MainGroup: -1,
 			Samples: []CollectedSample{{
-				ClassID: id, Win: 1, Snapshot: []byte(fmt.Sprintf("%s-%d", id, bucketIndex)), Sequence: uint64(bucketIndex),
+				ClassID: id, Win: 1, Snapshot: fmt.Appendf(nil, "%s-%d", id, bucketIndex), Sequence: uint64(bucketIndex),
 			}},
 		}
 	}
