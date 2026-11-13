@@ -2,7 +2,7 @@
 
 用瀏覽器逐段、逐步看一局的完整流程：盤面、中獎位置、每一步的贏分、選擇類遊戲的每一段，以及每台自己的特色（標記、進度條、角標等）。用途是開發期的除錯與重現，不做統計；統計請用 `make run` 或 `/v1/sim`。
 
-> dev 路由只在 `ModeDev` 註冊，沒有任何驗證機制，**不得對外公開**。
+> dev 路由只在 `ModeDev` 與 `ModePanel` 註冊，沒有任何驗證機制，**不得對外公開**。
 
 ## 啟動
 
@@ -10,7 +10,9 @@
 make dev   # 等於 go run ./cmd/dev，自動開啟 http://localhost:5808/dev
 ```
 
-前端檔案以 `go:embed` 包在 `server/api/dev/web/`，改了之後要重新啟動。
+`make dev` 以 `svrcfg.ModePanel` 啟動：只掛首頁與 `/dev`，沒有 `/v1`，也不建立機台池；engine 以 `problab.New` 加 `RegisterAll`、`Freeze` 組裝，所以每台的 optimal 資料在第一次 Spin 才載入，不會在啟動時一次載入全部。要同時使用 `/v1/*`，請用 `make svr`（`ModeDev`）。
+
+公版前端以 `go:embed` 包在 `server/api/dev/web/`，改了之後要重新啟動。
 
 鍵盤：Space／Enter 執行 Spin，←／→ 切換上一步／下一步。格子編號平常不顯示，滑鼠移到格子上，或點一下釘住（再點一次取消）才顯示。下方時間軸依「段 > Mode > Round」分組列出每個 act，點一下就跳過去；只有一段的局不顯示段的層級。
 
@@ -69,7 +71,7 @@ http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds
 
 | 方法與路徑 | 用途 |
 | --- | --- |
-| `GET /dev/meta` | 機台清單：gid、名稱、logic、押注單位、最大贏分、`fixed`、各 mode 的行列數與圖標名稱；另有 `max_rounds`、`max_segments`。不輸出盤面產生、賠率與中獎判定的設定 |
+| `GET /dev/meta` | 機台清單：gid、名稱、logic、押注單位、最大贏分、`fixed`、各 mode 的行列數與圖標名稱、是否注入外掛（`plugin`）；另有 `max_rounds`、`max_segments`。不輸出盤面產生、賠率與中獎判定的設定 |
 | `POST /dev/spin` | `{gid, betmode, choose, input, value, rounds}` → `{seed, rounds, clamped, partial_replay, total_bet, total_win, rtp, bets}`；每一局是 `{index, bet, win, isend, segments}`，`segments` 是每一段的 SpinResult |
 | `POST /dev/next` | player 的續段：`{gid, betmode, cycle, choice, choose_next, cp}` → `{segment}` |
 | `POST /dev/replay` | `{gid, betmode, segments: [{start_b64u, cycle, choice, choose_next, cp}]}` → `{bet}` |
@@ -80,7 +82,7 @@ http://localhost:5808/dev?gid=2&betmode=0&choose=first&input=seed&value=5&rounds
 
 ## 機台外掛
 
-每台可以有一支 `games/<gid>.js`，負責畫這台特有的東西；沒有的話只顯示公版。內建 demo 0～3 的外掛在 `web/games/`，可以當範例。
+每台可以有一支 `<gid>.js`，負責畫這台特有的東西。problab 不內建任何機台的外掛：外掛一律由應用端以 `svrcfg.SvrCfg.DevGames` 注入，沒有注入的機台只顯示公版（盤面、中獎、時間軸與 DTO 照常顯示，ext 只以原始 JSON 呈現）。demo 0～3 的外掛在 `demo/demo_devgames/`，由 `cmd/dev` 注入，可以當範例。
 
 ```js
 DEV.register(2, {
@@ -110,19 +112,32 @@ DEV.register(2, {
 
 圖標配色的公版規則：C 白底、S 鵝黃白底；H 依編號用底色、L 依編號用字色，1→6 為紫、橘、黃、藍、紅、綠，7 以後從紫重來但變淡；W 和其他圖標用固定色；Z（空格）不寫名稱、不填底色。
 
-### 注入自己的外掛
+### 在自己的專案啟動 ProbLab Dev
 
-使用 problab 的應用在組裝 server 時，把外掛目錄交給 `svrcfg.SvrCfg.DevGames`（`fs.FS`，根目錄放 `<gid>.js`），與 `problab.Configs`、`problab.Logics` 相同的注入方式：
+`cmd/dev/dev.go` 是官方的組裝範例，換成自己的設定、邏輯與外掛即可：
 
 ```go
-//go:embed devgames
-var devGames embed.FS
+lab, err := problab.New(
+	core.Default(),                  // 與正式環境相同的 PRNG
+	problab.Configs(configs.FS),     // 自己的遊戲設定
+	problab.Logics(logic.Logics),    // 自己的遊戲邏輯
+	problab.WithOptimalDir("…"),     // 有使用 optimal 時
+)
+// 錯誤處理省略
+lab.RegisterAll()
+lab.Freeze()
 
-sub, _ := fs.Sub(devGames, "devgames")
-cfg := &svrcfg.SvrCfg{Problab: lab, Mode: svrcfg.ModeDev, DevGames: sub}
+server.Run(&svrcfg.SvrCfg{
+	Problab:  lab,
+	Mode:     svrcfg.ModePanel, // 只掛 /dev，不建立機台池
+	DevGames: devGames,         // fs.FS，根目錄放 <gid>.js
+})
 ```
 
-`/dev/games/<gid>.js` 先找 `DevGames`，再找內建的外掛；都沒有時回 404，那台只顯示公版。同名時以注入的為準。
+- **用 `New` 加 `RegisterAll`、`Freeze`，不要用 `NewAuto`**：`NewAuto` 會在啟動時預先載入所有機台的 optimal 資料；dev 入口只看一兩台時不必等。正式 server 則建議維持 `NewAuto`，啟動時就能發現設定或檔案的錯誤，第一個請求也不必等載入。
+- **`ModePanel` 不建立機台池**：`ModeDev` 會為 `/v1/spin` 建立每台的機台池，啟動時一樣會載入全部 optimal。
+- **外掛目錄**：用 `embed.FS`（以 `fs.Sub` 讓 `<gid>.js` 位在根目錄）時，改了外掛要重新啟動；開發外掛時改用 `os.DirFS("devgames")`，重新整理瀏覽器就看得到。
+- `/dev/meta` 以 `plugin` 標示每台有沒有注入外掛；前端只載入有注入的外掛，不會對沒有外掛的機台發出請求。
 
 ## 字型
 
