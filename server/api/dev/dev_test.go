@@ -527,12 +527,12 @@ func TestMetaFieldWhitelist(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := func(m map[string]any) string { return strings.Join(slices.Sorted(maps.Keys(m)), ",") }
-	if got := keys(meta); got != "games,max_bet_mult,max_rounds,max_segments" {
+	if got := keys(meta); got != "games,max_bet_mult,max_rounds,max_segments,theme" {
 		t.Fatalf("top-level keys %s", got)
 	}
 	games := meta["games"].([]any)
 	if len(games) != 4 || meta["max_rounds"].(float64) != maxRounds || meta["max_segments"].(float64) != problab.DefaultMaxSegments ||
-		meta["max_bet_mult"].(float64) != maxBetMult {
+		meta["max_bet_mult"].(float64) != maxBetMult || meta["theme"] != false {
 		t.Fatalf("meta %v", meta)
 	}
 	for _, g := range games {
@@ -555,11 +555,12 @@ func TestMetaFieldWhitelist(t *testing.T) {
 	}
 }
 
-// plugin 標示應用端是否注入了這台的 <gid>.js。
+// plugin 標示應用端是否注入了這台的 <gid>.js；theme 標示是否注入了 theme.css。
 func TestMetaMarksInjectedPlugins(t *testing.T) {
 	rt := &testRouter{r: chi.NewRouter()}
 	Register(rt, &svrcfg.SvrCfg{Problab: demoLab(t), Mode: svrcfg.ModeDev, DevGames: fstest.MapFS{
-		"2.js": &fstest.MapFile{Data: []byte("//")},
+		"2.js":      &fstest.MapFile{Data: []byte("//")},
+		"theme.css": &fstest.MapFile{Data: []byte("")},
 	}})
 	ts := httptest.NewServer(rt.r)
 	t.Cleanup(ts.Close)
@@ -571,6 +572,9 @@ func TestMetaMarksInjectedPlugins(t *testing.T) {
 	var meta metaResponse
 	if err := json.NewDecoder(res.Body).Decode(&meta); err != nil {
 		t.Fatal(err)
+	}
+	if !meta.Theme {
+		t.Fatal("theme.css injected but meta.theme is false")
 	}
 	for _, g := range meta.Games {
 		if g.Plugin != (g.GID == 2) {

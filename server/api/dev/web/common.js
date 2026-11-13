@@ -75,6 +75,13 @@ function remember(key, value) {
 async function init() {
   state.meta = await api("meta");
   state.games = state.meta.games;
+  // 應用端注入的主題排在 app.css 之後、外掛的 css 之前
+  if (state.meta.theme) {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "games/theme.css";
+    document.querySelector('link[href="app.css"]').after(link);
+  }
   $("rounds").max = state.meta.max_rounds;
   $("betmult").max = state.meta.max_bet_mult;
   const sel = $("game");
@@ -129,6 +136,7 @@ async function init() {
 function selectGame() {
   stop();
   state.game = state.games[Number($("game").value)];
+  document.body.dataset.gid = state.game.gid; // 讓主題與外掛的 css 以 body[data-gid] 限定機台
   state.pinned.clear();
   remember("dev.game", String(state.game.gid));
   $("betmode").innerHTML = state.game.bet_units.map((u, i) => `<option value="${i}">${i}（${u}）</option>`).join("");
@@ -503,24 +511,21 @@ function renderInfo(ctx) {
   $("pos").textContent = `${state.stepIdx + 1} / ${state.steps.length}`;
 }
 
-// H、L 依編號套色序：1→6 為紫、橘、黃、藍、紅、綠；7 以後從紫重來，但變淡。
-// H 用作底色，L 沒有底色、用作字色。C、S 是白底和鵝黃白底，W、Z 和其他圖標維持固定色。
-const TONES = ["#8b5cf6", "#f97316", "#eab308", "#3b82f6", "#ef4444", "#22c55e"];
-const DARK_TEXT_TONES = new Set([2]); // 黃底配深色字
+// H、L 依編號套色序 tone-1～tone-6，7 以後從 tone-1 重來並加上 faded；顏色都在 app.css 的變數，
+// 可以由 theme.css 或外掛的 css 覆寫。C、S、W、Z 和其他圖標用各自的固定色。
+const TONE_COUNT = 6;
 
+// symLook 回傳格子的 class 陣列
 function symLook(name) {
   const m = /^([A-Z])(\d+)$/.exec(name || "");
   const g = m ? m[1] : (name || "").charAt(0).toUpperCase();
   if (!m || (g !== "H" && g !== "L")) {
-    return { cls: "WSCZ".includes(g) && g ? `sym-${g}` : "sym-X", style: "" };
+    return ["WSCZ".includes(g) && g ? `sym-${g}` : "sym-X"];
   }
   const n = Number(m[2]) - 1;
-  const k = ((n % TONES.length) + TONES.length) % TONES.length;
-  const faded = n >= TONES.length;
-  const tone = faded ? `color-mix(in srgb, ${TONES[k]} 50%, transparent)` : TONES[k];
-  let style = `--tone:${tone};`;
-  if (g === "H") style += `--tone-text:${faded ? "var(--text)" : DARK_TEXT_TONES.has(k) ? "#1d2329" : "#fff"};`;
-  return { cls: `sym-${g}`, style };
+  const cls = [`sym-${g}`, `tone-${(((n % TONE_COUNT) + TONE_COUNT) % TONE_COUNT) + 1}`];
+  if (n >= TONE_COUNT) cls.push("faded");
+  return cls;
 }
 
 function renderBoard(ctx) {
@@ -550,8 +555,7 @@ function renderBoard(ctx) {
   for (let idx = 0; idx < columns * rows; idx++) {
     const id = ctx.screen[idx];
     const name = ctx.symbols[id] ?? (id === undefined ? "" : `#${id}`);
-    const look = symLook(name);
-    const cls = ["cell", look.cls];
+    const cls = ["cell", ...symLook(name)];
     if (state.pinned.has(idx)) cls.push("pin");
     if (hits.has(idx)) cls.push(animate ? "hit pop" : "hit");
     if (animate && ctx.act.screen && (fresh || (ctx.prevScreen && ctx.prevScreen[idx] !== id))) cls.push("changed");
@@ -559,8 +563,8 @@ function renderBoard(ctx) {
     const badge = p.badge ? p.badge(idx, ctx) : "";
     cells.push(
       // Z 系列是空格（消除後還沒補的位置），不寫圖標名稱
-      `<div class="${cls.join(" ")}" style="${look.style}" data-idx="${idx}" title="idx ${idx}｜${esc(name)}"><span class="idx">${idx}</span>` +
-      `${look.cls === "sym-Z" ? "" : esc(name)}` +
+      `<div class="${cls.join(" ")}" data-idx="${idx}" data-sym="${esc(name)}" title="idx ${idx}｜${esc(name)}"><span class="idx">${idx}</span>` +
+      `${cls[1] === "sym-Z" ? "" : esc(name)}` +
       `${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`
     );
   }

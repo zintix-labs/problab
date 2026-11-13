@@ -63,9 +63,13 @@ func TestStaticFiles(t *testing.T) {
 	}
 }
 
-// 外掛只從 SvrCfg.DevGames 讀取：problab 不內建任何機台的外掛，沒注入的機台回 404。
+// 外掛與主題只從 SvrCfg.DevGames 讀取：problab 不內建任何機台的外掛，沒注入的回 404。
 func TestPluginsComeOnlyFromDevGames(t *testing.T) {
-	devGames := fstest.MapFS{"0.js": &fstest.MapFile{Data: []byte("// injected 0")}}
+	devGames := fstest.MapFS{
+		"0.js":      &fstest.MapFile{Data: []byte("// injected 0")},
+		"theme.css": &fstest.MapFile{Data: []byte(":root { --sym-w: #000; }")},
+		"other.css": &fstest.MapFile{Data: []byte("")},
+	}
 	rt := &testRouter{r: chi.NewRouter()}
 	Register(rt, &svrcfg.SvrCfg{Problab: demoLab(t), Mode: svrcfg.ModeDev, DevGames: devGames})
 	ts := httptest.NewServer(rt.r)
@@ -74,10 +78,19 @@ func TestPluginsComeOnlyFromDevGames(t *testing.T) {
 	if code != http.StatusOK || ctype != "text/javascript; charset=utf-8" || body != "// injected 0" {
 		t.Errorf("injected plugin: status %d type %q body %q", code, ctype, body)
 	}
-	if code, _, _ := get(t, ts, "/dev/games/1.js"); code != http.StatusNotFound {
-		t.Errorf("game 1 without a plugin: status %d, want 404", code)
+	code, ctype, body = get(t, ts, "/dev/games/theme.css")
+	if code != http.StatusOK || ctype != "text/css; charset=utf-8" || !strings.Contains(body, "--sym-w") {
+		t.Errorf("injected theme: status %d type %q body %q", code, ctype, body)
 	}
-	if code, _, _ := get(t, newServer(t, demoLab(t)), "/dev/games/0.js"); code != http.StatusNotFound {
-		t.Errorf("no DevGames: status %d, want 404", code)
+	for _, path := range []string{"/dev/games/1.js", "/dev/games/other.css"} {
+		if code, _, _ := get(t, ts, path); code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404", path, code)
+		}
+	}
+	bare := newServer(t, demoLab(t))
+	for _, path := range []string{"/dev/games/0.js", "/dev/games/theme.css"} {
+		if code, _, _ := get(t, bare, path); code != http.StatusNotFound {
+			t.Errorf("no DevGames %s: status %d, want 404", path, code)
+		}
 	}
 }
