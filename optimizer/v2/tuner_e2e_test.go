@@ -125,7 +125,7 @@ func runCompleteProductionPipelineWithExporter(t *testing.T, seed SeedSpec, plan
 	const samples uint64 = 256
 	collection := CollectionOptions{Workers: 2, BatchSize: 64, MaxSpins: samples}
 	fixture := collectionFixturePlan(0, collection.Workers, samples, collection.MaxSpins, collection.BatchSize)
-	fixture.Plan.Seed = seed.clone()
+	fixture.Plan.Seed = seed
 	collected, diagnostics, err := NewCollector(lab).Collect(context.Background(), fixture, 0)
 	if err != nil {
 		t.Fatalf("derive deterministic fixture support: %v", err)
@@ -259,7 +259,7 @@ func exactPipelineConfig(t *testing.T, collected CollectedProblem, samples uint6
 		Version: ConfigVersion,
 		Plans: []RunPlan{{
 			ID: planID, Target: target,
-			Engine: EngineIntentLPV2, Intent: planID, Seed: seed.clone(),
+			Engine: EngineIntentLPV2, Intent: planID, Seed: seed,
 			Collection:         collection,
 			CandidateSelection: CandidateSelectionOptions{Evaluator: "none", MaxCandidates: 1},
 			Output: OutputOptions{

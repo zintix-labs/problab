@@ -834,7 +834,7 @@ func cloneRunOverrides(overrides RunOverrides) RunOverrides {
 		cloned.BetMode = &betMode
 	}
 	if overrides.Seed != nil {
-		seed := overrides.Seed.clone()
+		seed := *overrides.Seed
 		cloned.Seed = &seed
 	}
 	return cloned
