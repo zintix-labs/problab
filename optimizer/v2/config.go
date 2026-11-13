@@ -318,7 +318,7 @@ func (p ResolvedPlan) WithOverrides(overrides RunOverrides) (ResolvedPlan, error
 		resolved.Plan.Target.BetModes = []int{*overrides.BetMode}
 	}
 	if overrides.Seed != nil {
-		resolved.Plan.Seed = overrides.Seed.clone()
+		resolved.Plan.Seed = *overrides.Seed
 	}
 	return resolved, nil
 }
@@ -838,7 +838,6 @@ func cloneConfig(config Config) Config {
 // scalar IDs, seed, collection limits, and output policy exactly.
 func cloneRunPlan(plan RunPlan) RunPlan {
 	cloned := plan
-	cloned.Seed = plan.Seed.clone()
 	cloned.Target.BetModes = slices.Clone(plan.Target.BetModes)
 	if plan.Target.Input != nil {
 		input := TargetInput{ChooseNext: slices.Clone(plan.Target.Input.ChooseNext)}

@@ -34,7 +34,6 @@ package problab
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"io/fs"
@@ -498,6 +497,15 @@ func (p *Problab) EntryByName(name string) (catalog.Entry, bool) {
 	return p.cat.GetByName(name)
 }
 
+// GameSettingById 回傳 id 的完整遊戲設定（YAML 或 JSON 依副檔名解析）。
+//
+// 每次呼叫都重新讀取並解析設定檔，回傳新的物件；呼叫端可以修改，不影響引擎。
+// 回傳內容包含盤面產生、賠率與中獎判定等完整數學設定，轉送到程序外部時必須
+// 自行篩選欄位。未知的 id 回傳 errs.Warn。
+func (p *Problab) GameSettingById(id spec.GID) (*spec.GameSetting, error) {
+	return p.cat.GameSettingById(id)
+}
+
 func (p *Problab) IDs() []spec.GID {
 	return p.cat.IDs()
 }
@@ -587,40 +595,6 @@ func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
 	rt.Health() // set health data
 	built = true
 	return rt, nil
-}
-
-// NewDevSimulator
-//
-// 注意只能由Problab起
-// 只提供給Dev模式使用的模擬器，重點是保持單機台模式所以保持可重現性
-func (p *Problab) NewDevSimulator(gid spec.GID, seed int64) (*DevSimulator, error) {
-	sim, err := p.NewSimulator(gid, MachineConfig{Seed: SeedInt64(seed)})
-	if err != nil {
-		return nil, err
-	}
-	m, err := p.NewMachine(gid, MachineConfig{Seed: SeedInt64(seed)})
-	if err != nil {
-		return nil, err
-	}
-	simBe, err := sim.mBuf[0].SnapshotCore()
-	if err != nil {
-		return nil, err
-	}
-	mBe, err := m.SnapshotCore()
-	if err != nil {
-		return nil, err
-	}
-	simBe64 := base64.StdEncoding.EncodeToString(simBe)
-	mBe64 := base64.StdEncoding.EncodeToString(mBe)
-	if mBe64 != simBe64 {
-		return nil, errs.NewFatal("seeds are not equal")
-	}
-	dev := &DevSimulator{
-		sim: sim,
-		m:   m,
-		cfg: defaultBetCfg(),
-	}
-	return dev, nil
 }
 
 func (p *Problab) NewCore(seed int64) (*core.Core, error) {

@@ -20,3 +20,14 @@ module.
 
 A copy of the BSD 3-Clause License is provided in:
 third_party/licenses/GO_BSD-3-Clause.txt
+
+3) JetBrains Mono
+   Copyright 2020 The JetBrains Mono Project Authors
+   License: SIL Open Font License, Version 1.1
+   Source: https://github.com/JetBrains/JetBrainsMono
+
+The ProbLab Dev panel (server/api/dev/web/fonts/) embeds the Regular, Medium,
+SemiBold and Bold WOFF2 files of this font.
+
+A copy of the SIL Open Font License is provided in:
+third_party/licenses/JetBrainsMono_OFL-1.1.txt

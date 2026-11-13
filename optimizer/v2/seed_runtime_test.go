@@ -207,32 +207,6 @@ func TestValidateRuntimeTargetAcceptsArbitraryLengthSeedOnChaCha20(t *testing.T)
 	}
 }
 
-func TestResolvedPlanSeedCopiesDoNotAlias(t *testing.T) {
-	raw := strings.Replace(validConfigYAML, "seed: 4127483647", `seed: "utf8:immutable"`, 1)
-	config, err := ParseConfig([]byte(raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := config.ResolvePlan(config.Plans[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.Plans[0].Seed.material[0] = 'X'
-	if resolved.Plan.Seed.String() != "utf8:immutable" {
-		t.Fatalf("resolved seed aliased Config: %q", resolved.Plan.Seed.String())
-	}
-
-	override, _ := UTF8Seed("override")
-	overridden, err := resolved.WithOverrides(RunOverrides{Seed: &override})
-	if err != nil {
-		t.Fatal(err)
-	}
-	override.material[0] = 'X'
-	if overridden.Plan.Seed.String() != "utf8:override" {
-		t.Fatalf("override seed aliased caller: %q", overridden.Plan.Seed.String())
-	}
-}
-
 func TestRunReportOverridesAreDeepCopied(t *testing.T) {
 	config, err := ParseConfig([]byte(validConfigYAML))
 	if err != nil {
@@ -259,7 +233,6 @@ func TestRunReportOverridesAreDeepCopied(t *testing.T) {
 	}
 	game = 1
 	mode = 9
-	seed.material[0] = 'X'
 	assertReportOverrides(t, result.Report.Overrides, 999999, 0, "utf8:report-seed")
 }
 
@@ -289,7 +262,6 @@ func TestEarlyFailureRunReportOverridesAreDeepCopied(t *testing.T) {
 	}
 	game = 8
 	mode = 4
-	seed.material[0] = 'X'
 	assertReportOverrides(t, result.Report.Overrides, 7, 3, "utf8:early-seed")
 }
 

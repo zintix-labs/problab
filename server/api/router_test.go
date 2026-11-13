@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -92,16 +93,6 @@ func callWith(t *testing.T, ts *httptest.Server, client *http.Client, method, pa
 	return res.StatusCode, raw
 }
 
-// game0 是 dev API 的遊戲參數：gid 0 視為未指定，所以以名稱指定 game 0。
-func game0(t *testing.T, lab *problab.Problab) string {
-	t.Helper()
-	ent, ok := lab.EntryById(0)
-	if !ok {
-		t.Fatal("no game 0")
-	}
-	return ent.Name
-}
-
 func requireStatus(t *testing.T, step string, code int, raw []byte, want int, contains string) {
 	t.Helper()
 	if code != want || !strings.Contains(string(raw), contains) {
@@ -123,20 +114,14 @@ func canonical(t *testing.T, v any) string {
 	return string(out)
 }
 
-// choose 只接受 first、last 或省略；其他值以 400 拒絕。
+// 模擬 API 的 choose 只接受 first、last 或省略；其他值以 400 拒絕。
 func TestChooseParameterValidation(t *testing.T) {
-	lab := choiceLab(t)
-	ts := newTestServer(t, lab)
-	name := game0(t, lab)
+	ts := newTestServer(t, choiceLab(t))
 	for _, bad := range []string{"player", "First", "auto"} {
 		code, raw := call(t, ts, http.MethodGet, "/v1/sim?gid=0&bet_mode=0&round=10&seed=1&choose="+bad, nil)
 		requireStatus(t, "GET /v1/sim "+bad, code, raw, http.StatusBadRequest, "choose must be first or last")
 		code, raw = call(t, ts, http.MethodPost, "/v1/simplayer", map[string]any{"gid": 0, "player": 2, "bets": 50, "bet_mode": 0, "round": 10, "seed": 1, "choose": bad})
 		requireStatus(t, "POST /v1/simplayer "+bad, code, raw, http.StatusBadRequest, "choose must be first or last")
-		code, raw = call(t, ts, http.MethodPost, "/dev/spin", map[string]any{"game": name, "betmode": 0, "rounds": 5, "seed": "1", "choose": bad})
-		requireStatus(t, "POST /dev/spin "+bad, code, raw, http.StatusBadRequest, "choose must be first or last")
-		code, raw = call(t, ts, http.MethodPost, "/dev/sim", map[string]any{"game": name, "betmode": 0, "rounds": 5, "seed": "1", "choose": bad})
-		requireStatus(t, "POST /dev/sim "+bad, code, raw, http.StatusBadRequest, "choose must be first or last")
 	}
 }
 
@@ -168,32 +153,6 @@ func TestRoutesWithoutChooseMatchGoAPI(t *testing.T) {
 		}
 	}
 
-	d, err := lab.NewDevSimulator(0, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	spins, err := d.Spins(0, 300)
-	if err != nil {
-		t.Fatal(err)
-	}
-	code, raw := call(t, ts, http.MethodPost, "/dev/spin", map[string]any{"game": game0(t, lab), "betmode": 0, "rounds": 300, "seed": "7"})
-	var gotSpins problab.DevSpinReport
-	if code != http.StatusOK || json.Unmarshal(raw, &gotSpins) != nil || canonical(t, gotSpins) != canonical(t, spins) {
-		t.Fatalf("/dev/spin: status %d", code)
-	}
-	d, err = lab.NewDevSimulator(0, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dsim, err := d.Sim(0, 2000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	code, raw = call(t, ts, http.MethodPost, "/dev/sim", map[string]any{"game": game0(t, lab), "betmode": 0, "rounds": 2000, "seed": "7"})
-	var gotSim problab.DevSimReport
-	if code != http.StatusOK || json.Unmarshal(raw, &gotSim) != nil || canonical(t, gotSim) != canonical(t, dsim) {
-		t.Fatalf("/dev/sim: status %d", code)
-	}
 }
 
 // v1 SimPlayers 固定 4 個 worker，依排程分派玩家：只驗證不變量。
@@ -222,8 +181,6 @@ func TestChoiceGameRoutes(t *testing.T) {
 	}{
 		{http.MethodGet, "/v1/sim?gid=2&bet_mode=0&round=3000&seed=5", nil},
 		{http.MethodPost, "/v1/simplayer", map[string]any{"gid": 2, "player": 3000, "bets": 100, "bet_mode": 0, "round": 50, "seed": 5}},
-		{http.MethodPost, "/dev/spin", map[string]any{"gid": 2, "betmode": 0, "rounds": 3000, "seed": "5"}},
-		{http.MethodPost, "/dev/sim", map[string]any{"gid": 2, "betmode": 0, "rounds": 3000, "seed": "5"}},
 	} {
 		code, raw := call(t, ts, c.method, c.path, c.body)
 		requireStatus(t, c.path, code, raw, http.StatusBadRequest, "choose mode first or last")
@@ -234,7 +191,7 @@ func TestChoiceGameRoutes(t *testing.T) {
 	requireStatus(t, "first", code, raw, http.StatusOK, `"Choose":"first"`)
 	code, raw = call(t, ts, http.MethodPost, "/v1/simplayer", map[string]any{"gid": 2, "player": 10, "bets": 100, "bet_mode": 0, "round": 50, "seed": 5, "choose": "last"})
 	requireStatus(t, "last players", code, raw, http.StatusOK, `"Choose":"last"`)
-	code, raw = call(t, ts, http.MethodPost, "/dev/spin", map[string]any{"gid": 2, "betmode": 0, "rounds": 500, "seed": "5", "choose": "first"})
+	code, raw = call(t, ts, http.MethodPost, "/dev/spin", map[string]any{"gid": 2, "betmode": 0, "choose": "first", "input": "seed", "value": "5", "rounds": 500})
 	requireStatus(t, "dev first", code, raw, http.StatusOK, `"choose":"first"`)
 }
 
@@ -247,7 +204,7 @@ func (l *incompleteLogic) GetResult(r *buf.SpinRequest, g *slot.Game) *buf.SpinR
 	return sr
 }
 
-// DevSim 遇到輸出違約時 panic，由 Recover middleware 轉成錯誤回應，server 能處理下一個請求。
+// /dev/spin 遇到輸出違約時 Machine.Spin panic，由 Recover middleware 轉成錯誤回應，server 能處理下一個請求。
 func TestDevSpinOutputViolationIsRecovered(t *testing.T) {
 	reg := slot.NewLogicRegistry()
 	if err := reg.Register("demo_normal", func(g *slot.Game) (slot.GameLogic, error) {
@@ -267,14 +224,90 @@ func TestDevSpinOutputViolationIsRecovered(t *testing.T) {
 	t.Cleanup(func() { _ = lab.Close() })
 	ts := newTestServer(t, lab)
 	plain := &http.Client{Transport: &http.Transport{DisableCompression: true}}
-	code, body := callWith(t, ts, plain, http.MethodPost, "/dev/spin", map[string]any{"game": game0(t, lab), "betmode": 0, "rounds": 5, "seed": "1"})
+	code, body := callWith(t, ts, plain, http.MethodPost, "/dev/spin", map[string]any{"gid": 0, "betmode": 0, "choose": "first", "input": "seed", "value": "1", "rounds": 5})
 	if code != http.StatusInternalServerError {
 		t.Fatalf("without compression: status %d body %s", code, body)
 	}
-	code, body = call(t, ts, http.MethodPost, "/dev/spin", map[string]any{"game": game0(t, lab), "betmode": 0, "rounds": 5, "seed": "1"})
+	code, body = call(t, ts, http.MethodPost, "/dev/spin", map[string]any{"gid": 0, "betmode": 0, "choose": "first", "input": "seed", "value": "1", "rounds": 5})
 	if code != http.StatusInternalServerError {
 		t.Fatalf("with gzip: status %d body %q", code, body)
 	}
 	code, body = call(t, ts, http.MethodGet, "/dev/meta", nil)
 	requireStatus(t, "next request", code, body, http.StatusOK, "")
+}
+
+// dev 路由只在 ModeDev 註冊；ModeProd 不提供。
+func TestDevRoutesOnlyInDevMode(t *testing.T) {
+	lab := choiceLab(t)
+	code, raw := call(t, newTestServer(t, lab), http.MethodGet, "/dev/meta", nil)
+	requireStatus(t, "dev mode", code, raw, http.StatusOK, `"games"`)
+
+	svr := &testSvr{r: chi.NewRouter()}
+	cfg := &svrcfg.SvrCfg{Log: slog.New(slog.NewTextHandler(io.Discard, nil)), SlotBufSize: 1, Problab: lab, Mode: svrcfg.ModeProd}
+	if err := RegisterRoutes(svr, cfg); err != nil {
+		t.Fatal(err)
+	}
+	prod := httptest.NewServer(svr.r)
+	t.Cleanup(prod.Close)
+	for _, path := range []string{"/dev/meta", "/dev/spin", "/dev/next", "/dev/replay"} {
+		method := http.MethodPost
+		if path == "/dev/meta" {
+			method = http.MethodGet
+		}
+		if code, _ := call(t, prod, method, path, nil); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
+			t.Fatalf("prod %s %s: status %d", method, path, code)
+		}
+	}
+}
+
+// ModePanel 只掛 /dev：沒有 /v1，也不建立機台池，所以 optimal 資料缺檔時也能啟動，
+// 直到那台第一次 Spin 才回報錯誤；ModeDev 建立機台池，啟動時就失敗。
+func TestPanelModeServesOnlyDevWithoutMachinePools(t *testing.T) {
+	raw, err := fs.ReadFile(demo_configs.FS, "game_0_demonormal.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?m)^optimal_setting:\n(?:  .*\n)*`)
+	if !block.Match(raw) {
+		t.Fatal("demo config has no optimal_setting block")
+	}
+	missing := block.ReplaceAllLiteral(raw, []byte("optimal_setting:\n  use_optimal: true\n  gachas: [missing/gacha.json.zst]\n  seed_bank: [missing/seed_bank.bin]\n\n"))
+	lab, err := problab.New(core.Default(), problab.Configs(fstest.MapFS{"game.yaml": &fstest.MapFile{Data: missing}}),
+		problab.Logics(demo_logic.Logics), problab.WithOptimalDir(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lab.Close() })
+	if err := lab.RegisterAll(); err != nil {
+		t.Fatal(err)
+	}
+	lab.Freeze()
+
+	newSvr := func(mode svrcfg.RunMode) (*testSvr, error) {
+		svr := &testSvr{r: chi.NewRouter()}
+		cfg := &svrcfg.SvrCfg{Log: slog.New(slog.NewTextHandler(io.Discard, nil)), SlotBufSize: 1, Problab: lab, Mode: mode}
+		return svr, RegisterRoutes(svr, cfg)
+	}
+	if _, err := newSvr(svrcfg.ModeDev); err == nil {
+		t.Fatal("ModeDev built machine pools without the optimal artifact")
+	}
+	svr, err := newSvr(svrcfg.ModePanel)
+	if err != nil {
+		t.Fatalf("ModePanel: %v", err)
+	}
+	ts := httptest.NewServer(svr.r)
+	t.Cleanup(ts.Close)
+	code, raw2 := call(t, ts, http.MethodGet, "/dev/meta", nil)
+	requireStatus(t, "panel meta", code, raw2, http.StatusOK, `"games"`)
+	code, raw2 = call(t, ts, http.MethodGet, "/dev", nil)
+	requireStatus(t, "panel page", code, raw2, http.StatusOK, "<title>ProbLab Dev</title>")
+	for _, path := range []string{"/v1/health", "/v1/spin", "/v1/sim"} {
+		if code, _ := call(t, ts, http.MethodGet, path, nil); code != http.StatusNotFound {
+			t.Fatalf("panel %s: status %d, want 404", path, code)
+		}
+	}
+	code, raw2 = call(t, ts, http.MethodPost, "/dev/spin", map[string]any{"gid": 0, "betmode": 0, "choose": "first", "input": "seed", "value": "1", "rounds": 1})
+	if code == http.StatusOK {
+		t.Fatalf("spin without the optimal artifact succeeded: %s", raw2)
+	}
 }

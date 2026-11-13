@@ -169,7 +169,6 @@ func validateNodes(n *yaml.Node, key string) error {
 }
 
 func normalizeConfig(c Config) (Config, error) {
-	c.Seed = c.Seed.clone()
 	c.Analysis = append([]GroupConfig(nil), c.Analysis...)
 	if len(c.Analysis) == 0 {
 		return c, fmt.Errorf("analysis must not be empty")

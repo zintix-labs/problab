@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <base href="/dev/" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMwOTA5MGIiIC8+CiAgPHRleHQgeD0iNTAlIiB5PSI1NSUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIAogICAgICAgIGZvbnQtZmFtaWx5PSJtb25vc3BhY2UsIHNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LXNpemU9IjQ0IiBmaWxsPSIjZjk3MzE2Ij5aPC90ZXh0Pgo8L3N2Zz4=" />
+  <title>ProbLab Dev</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <header class="bar">
+    <strong class="brand">ProbLab Dev</strong>
+    <label>機台 <select id="game"></select></label>
+    <label>押注模式 <select id="betmode"></select></label>
+    <label>選擇方式
+      <select id="choose" title="選擇類遊戲遇到選擇點時的處理方式">
+        <option value="first">first</option>
+        <option value="last">last</option>
+        <option value="player">player</option>
+      </select>
+    </label>
+    <label>輸入
+      <select id="input" title="Seed：建立機台的根 seed；Snap：某一段的 start_b64u">
+        <option value="seed">Seed</option>
+        <option value="snap">Snap</option>
+      </select>
+    </label>
+    <input id="value" placeholder="空白隨機｜整數｜hex:…｜utf8:…" />
+    <label>局數 <input id="rounds" type="number" min="1" value="50" /></label>
+    <button id="spin" class="primary" title="Space／Enter">Spin</button>
+    <span id="status" class="muted"></span>
+  </header>
+
+  <main class="layout">
+    <aside class="panel" id="results-panel">
+      <div class="panel-head">
+        <span>局列表</span>
+        <label class="inline"><input id="only-win" type="checkbox" /> 只看有贏分</label>
+      </div>
+      <div id="summary" class="summary muted"></div>
+      <ol id="results" class="results"></ol>
+    </aside>
+
+    <section class="stage">
+      <div id="info" class="info"></div>
+      <div id="board" class="board"></div>
+      <div class="controls">
+        <button id="first" title="第一步">⏮</button>
+        <button id="prev" title="上一步（←）">◀</button>
+        <button id="play" title="自動播放">▶ 播放</button>
+        <button id="next" title="下一步（→）">▶</button>
+        <button id="last" title="最後一步">⏭</button>
+        <label class="inline">速度
+          <select id="speed">
+            <option value="1200">慢</option>
+            <option value="600" selected>中</option>
+            <option value="250">快</option>
+          </select>
+        </label>
+        <span id="pos" class="muted"></span>
+        <span class="muted keys">Space／Enter：Spin　←／→：換步</span>
+      </div>
+      <div id="timeline" class="timeline"></div>
+    </section>
+
+    <aside class="panel" id="side-panel">
+      <div class="panel-head"><span>本步中獎</span></div>
+      <table id="details" class="details"></table>
+      <div class="panel-head"><span id="game-panel-title">機台資訊</span></div>
+      <div id="game-panel" class="game-panel"></div>
+      <details class="raw">
+        <summary>ext 原始資料</summary>
+        <pre id="raw-ext"></pre>
+      </details>
+      <div class="panel-head"><span>本局 DTO</span></div>
+      <div id="dto" class="dto"></div>
+      <details class="raw">
+        <summary>完整 DTO JSON（所有段）</summary>
+        <pre id="raw-dto"></pre>
+      </details>
+    </aside>
+  </main>
+
+  <script src="common.js"></script>
+</body>
+</html>
