@@ -44,7 +44,8 @@ const (
 	maxBodySize = 1 << 20 // 請求內容上限；續段與回放的請求帶有前端送回的 cp
 )
 
-// Register 註冊 ProbLab Dev 的 API：
+// Register 註冊 ProbLab Dev 的頁面與 API：
+//   - GET  /dev        ：內建的前端；/dev/games/<gid>.js 是機台外掛（先找 SvrCfg.DevGames）。
 //   - GET  /dev/meta   ：機台清單與畫面需要的設定。
 //   - POST /dev/spin   ：以 seed 跑一批局，或從 snap 回放一局的第 0 段。
 //   - POST /dev/next   ：player 模式的續段。
@@ -54,6 +55,7 @@ func Register(svr netsvr.NetRouter, cfg *svrcfg.SvrCfg) {
 	svr.Post("/dev/spin", devSpin(cfg))
 	svr.Post("/dev/next", devNext(cfg))
 	svr.Post("/dev/replay", devReplay(cfg))
+	registerStatic(svr, cfg)
 }
 
 func devMeta(cfg *svrcfg.SvrCfg) http.HandlerFunc {

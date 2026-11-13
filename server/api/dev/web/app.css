@@ -1,0 +1,307 @@
+/* ProbLab Dev 公版樣式：中性灰底、細邊框、圓角、Emerald 主題色；只用 CSS，不加任何套件 */
+:root {
+  --radius: 14px;
+  --bg: #fafafa;
+  --card: #ffffff;
+  --card-2: #f5f5f5;            /* 卡片內的次要區塊、輸入框底 */
+  --border: #e5e5e5;
+  --text: #0a0a0a;
+  --muted: #737373;
+  --muted-bg: #f5f5f5;
+  --primary: #059669;           /* emerald-600 */
+  --primary-hover: #047857;
+  --primary-text: #ffffff;
+  --primary-soft: rgba(16, 185, 129, .14);
+  --primary-ink: #047857;       /* 綠色文字 */
+  --ring: rgba(16, 185, 129, .30);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .04);
+  --hit: #10b981;                /* 得分框跟主題色（emerald） */
+  --hit-glow: rgba(16, 185, 129, .50);
+  --mark: #db2777;
+  --fresh-glow: rgba(16, 185, 129, .45);
+  --fresh-overlay: rgba(16, 185, 129, .40);
+  /* 圖標配色：W wild、Z 空格、X 其他；C／S 白底與鵝黃白底；H、L 的色序在 common.js 的 TONES */
+  --sym-w: #f5c542;
+  --sym-z: #e5e5e5;
+  --sym-x: #d4d4d4;
+  --sym-c: #ffffff;
+  --sym-s: #fff6d5;
+  --sym-cs-text: #171717;
+  --tag: #8b5cf6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0a0a;
+    --card: #171717;
+    --card-2: #1f1f1f;
+    --border: #262626;
+    --text: #fafafa;
+    --muted: #a3a3a3;
+    --muted-bg: #262626;
+    --primary: #047857;         /* emerald-700 */
+    --primary-hover: #059669;
+    --primary-text: #ecfdf5;
+    --primary-soft: rgba(16, 185, 129, .16);
+    --primary-ink: #34d399;     /* emerald-400 */
+    --ring: rgba(52, 211, 153, .28);
+    --shadow: none;
+    --sym-w: #c9a227;
+    --sym-z: #262626;
+    --sym-x: #404040;
+    --fresh-glow: rgba(255, 236, 190, .22);      /* 淡鵝黃 */
+    --fresh-overlay: rgba(255, 240, 205, .42);
+    --hit: #34d399;
+  }
+}
+
+/* JetBrains Mono（SIL OFL 1.1，授權見 third_party/licenses/JetBrainsMono_OFL-1.1.txt）：裝置有裝就用本機的，沒有就用 fonts/ 附帶的檔案。
+   字型沒有中文字，中文由後面的蘋方／Noto Sans TC 補上。 */
+@font-face { font-family: "JetBrains Mono"; font-weight: 400; font-display: swap; src: local("JetBrains Mono"), local("JetBrainsMono-Regular"), url("fonts/JetBrainsMono-Regular.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 500; font-display: swap; src: local("JetBrains Mono Medium"), local("JetBrainsMono-Medium"), url("fonts/JetBrainsMono-Medium.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 600; font-display: swap; src: local("JetBrains Mono SemiBold"), local("JetBrainsMono-SemiBold"), url("fonts/JetBrainsMono-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-weight: 700; font-display: swap; src: local("JetBrains Mono Bold"), local("JetBrainsMono-Bold"), url("fonts/JetBrainsMono-Bold.woff2") format("woff2"); }
+
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+/* 整頁固定高度，只有各區塊內部捲動，換步時盤面和按鈕位置不變 */
+body {
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.55 "JetBrains Mono", Menlo, Consolas, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", monospace;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------- 表單元件 ---------- */
+button, input, select {
+  font: inherit; font-weight: 500;
+  color: inherit;
+  height: 32px; padding: 0 10px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: background-color .15s, border-color .15s, box-shadow .15s;
+}
+input { font-weight: 400; }
+input::placeholder { color: var(--muted); }
+input:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--ring); }
+button { cursor: pointer; white-space: nowrap; }
+button:hover { background: var(--muted-bg); }
+button:active { transform: translateY(.5px); }
+button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+button.primary {
+  background: var(--primary); border-color: transparent; color: var(--primary-text);
+  padding: 0 20px;
+}
+button.primary:hover { background: var(--primary-hover); }
+input[type=number] { width: 84px; }
+input[type=checkbox] { height: auto; box-shadow: none; accent-color: var(--primary); }
+#value { width: 280px; }
+input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
+.muted { color: var(--muted); }
+label { display: inline-flex; gap: 8px; align-items: center; font-weight: 500; }
+label.inline { font-size: 13px; }
+
+/* ---------- 版面 ---------- */
+.bar {
+  display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+  margin: 12px 16px 0; padding: 10px 14px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.brand { font-weight: 600;  margin-right: 8px; }
+.keys { font-size: 13px; }
+
+.layout {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr) 328px;
+  gap: 14px; padding: 14px 16px 16px;
+  flex: 1; min-height: 0;
+}
+@media (max-width: 1100px) {
+  body { height: auto; overflow: auto; }
+  .layout { grid-template-columns: 1fr; }
+}
+.panel {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: auto; padding: 12px 14px;
+}
+.panel-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-weight: 500; font-size: 15px;  margin: 2px 0 10px;
+}
+.panel .panel-head ~ .panel-head { margin: 14px -14px 10px; padding: 12px 14px 0; border-top: 1px solid var(--border); }
+.summary { font-size: 13px; margin-bottom: 8px; }
+
+/* ---------- 局列表 ---------- */
+#results-panel { position: relative; }
+.results { list-style: none; margin: 0; padding: 0; }
+.results li {
+  display: flex; justify-content: space-between; gap: 6px;
+  padding: 5px 8px; border-radius: 6px; cursor: pointer; font-variant-numeric: tabular-nums;
+  transition: background-color .12s;
+}
+.results li:hover { background: var(--muted-bg); }
+.results li.active { background: var(--primary-soft); color: var(--primary-ink); font-weight: 600; }
+.tag {
+  font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
+  background: var(--muted-bg); color: var(--text);
+}
+
+/* ---------- 中間：資訊列、盤面、按鈕、時間軸 ---------- */
+/* 資訊列、盤面、按鈕固定高度；只有時間軸吃剩下的空間並自己捲動 */
+.stage {
+  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px; min-width: 0; min-height: 0;
+}
+.info {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px 16px;
+  min-height: 62px; align-content: center;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 10px 16px;
+  font-size: 14px; font-variant-numeric: tabular-nums;
+}
+.info > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.info .muted { font-size: 13px; }
+.info b { font-weight: 600; }
+
+.board {
+  display: grid; gap: 5px; justify-self: center;
+  padding: 10px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.cell {
+  position: relative;
+  width: var(--cell, 64px); height: var(--cell, 64px);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; background: var(--muted-bg);
+  font-weight: 700; font-size: calc(var(--cell, 64px) * 0.24);
+  transition: background-color .2s, outline-color .2s, opacity .2s;
+  outline: 3px solid transparent; outline-offset: -3px;
+}
+/* 格子編號平常不顯示；滑鼠移上去，或點一下釘住（再點一次取消）才顯示 */
+.cell { cursor: pointer; }
+.cell .idx {
+  position: absolute; top: 2px; left: 4px; font-size: 10px; font-weight: 600; line-height: 1.3;
+  padding: 0 4px; border-radius: 4px; background: var(--card); color: var(--text);
+  opacity: 0; transition: opacity .12s; pointer-events: none;
+}
+.cell:hover .idx, .cell.pin .idx { opacity: .95; }
+.cell .badge { position: absolute; bottom: 3px; right: 5px; font-size: 10px; font-weight: 600; }
+.cell.sym-W { background: var(--sym-w); color: #171717; }
+.cell.sym-C { background: var(--sym-c); color: var(--sym-cs-text); box-shadow: inset 0 0 0 1px var(--border); }
+.cell.sym-S { background: var(--sym-s); color: var(--sym-cs-text); }
+/* H 底色、L 字色由 common.js 依編號帶入 --tone；L 沒有底色，只留細框看得出格子 */
+.cell.sym-H { background-color: var(--tone); color: var(--tone-text, #fff); }
+.cell.sym-L {
+  background-color: transparent; color: var(--tone);
+  box-shadow: inset 0 0 0 1px var(--border); font-size: calc(var(--cell, 64px) * 0.28);
+}
+/* 空格：不寫名稱、不填底色，只留很淡的框 */
+.cell.sym-Z { background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent); }
+.cell.sym-X { background: var(--sym-x); }
+/* 新出現的圖標（首盤、每個 round 的首盤、補盤改盤的格子）：一層亮光直接蓋在圖標上再淡掉，不加框 */
+.cell.changed { animation: fresh .9s ease-out; }
+.cell.changed::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(circle at 50% 45%, var(--fresh-overlay), color-mix(in srgb, var(--fresh-overlay) 45%, transparent) 75%);
+  animation: fresh-overlay .9s ease-out forwards;
+}
+/* 得分框：主題綠框加光暈，整步都留著；剛進到這一步時先彈一下（pop） */
+.cell.hit { box-shadow: 0 0 0 3px var(--hit), 0 0 16px 3px var(--hit-glow); z-index: 1; }
+.cell.hit.pop { animation: pop .9s ease-out; }
+.board.focus .cell:not(.hit) { opacity: .3; }
+/* generic marks a game script can add via cellClass() */
+.cell.mark { outline-color: var(--mark); }
+.cell.dim { opacity: .3; }
+@keyframes fresh {
+  0%   { filter: brightness(1.25); box-shadow: 0 0 12px 2px var(--fresh-glow); }
+}
+@keyframes fresh-overlay {
+  0%   { opacity: 1; }
+  25%  { opacity: .85; }
+  100% { opacity: 0; }
+}
+@keyframes pop {
+  0%   { filter: brightness(1.8) saturate(1.3); box-shadow: 0 0 0 3px #ffffff, 0 0 26px 8px var(--hit-glow); transform: scale(1.07); }
+  35%  { filter: brightness(1.3); box-shadow: 0 0 0 3px var(--hit), 0 0 20px 5px var(--hit-glow); transform: scale(1); }
+}
+
+.controls { display: flex; gap: 8px; align-items: center; justify-content: center; }
+.controls button { height: 32px; padding: 0 10px; }
+#play { width: 88px; }
+#pos { display: inline-block; min-width: 80px; font-variant-numeric: tabular-nums; }
+
+/* 時間軸：段 > Mode > Round > act；只有一段的局不顯示段的層級 */
+.timeline {
+  position: relative; overflow: auto; min-height: 0;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 10px 14px;
+}
+.tl-mode + .tl-mode { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.tl-seg + .tl-seg { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.tl-seg-head { font-weight: 600; font-size: 14px; margin: 0 0 6px; color: var(--primary-ink); }
+.tl-seg-head .muted { font-weight: 500; font-size: 13px; }
+.tl-seg > .tl-mode { padding-left: 10px; }
+/* player 模式：停在選擇點時列出選項 */
+.choices {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border);
+}
+.choices .muted { font-size: 13px; }
+.choices button { height: 30px; font-size: 13px; }
+.tl-mode-head { font-weight: 600; font-size: 14px; margin: 0 0 4px; }
+.tl-mode-head .muted { font-weight: 500; font-size: 13px; }
+.tl-round { display: grid; grid-template-columns: 80px 1fr; gap: 8px; padding: 3px 0 3px 10px; }
+.tl-round-head { font-size: 13px; font-weight: 500; color: var(--muted); padding-top: 3px; white-space: nowrap; }
+.tl-acts { display: flex; flex-wrap: wrap; gap: 5px; }
+.tl-act {
+  font-size: 12.5px; font-weight: 500; padding: 2px 8px; line-height: 18px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--card-2);
+  cursor: pointer; font-variant-numeric: tabular-nums;
+  transition: background-color .12s, border-color .12s;
+}
+.tl-act:hover { background: var(--muted-bg); }
+.tl-act.win { border-color: color-mix(in srgb, var(--hit) 60%, transparent); color: color-mix(in srgb, var(--hit) 80%, var(--text)); }
+.tl-act.active { background: var(--primary); color: var(--primary-text); border-color: var(--primary); }
+
+/* ---------- 右側：中獎明細、機台面板、DTO ---------- */
+.details { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.details th {
+  font-size: 13px; font-weight: 500; color: var(--muted);
+  text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border);
+}
+.details td { text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--border); }
+.details th:first-child, .details td:first-child { text-align: left; }
+.details tbody tr { cursor: default; transition: background-color .12s; }
+.details tbody tr:hover { background: var(--muted-bg); }
+
+.game-panel { font-size: 14px; }
+.game-panel .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+.game-panel .kv dt { color: var(--muted); }
+.game-panel .kv dd { margin: 0; font-weight: 500; font-variant-numeric: tabular-nums; }
+.progress { height: 6px; border-radius: 999px; background: var(--muted-bg); overflow: hidden; margin: 4px 0 10px; }
+.progress > span {
+  display: block; height: 100%; border-radius: 999px; transition: width .3s;
+  background: #10b981;
+}
+.dto { font-size: 13px; }
+.dto .snap {
+  display: block; font-family: inherit; font-size: 11px;
+  word-break: break-all; user-select: all; padding: 6px 8px; margin: 3px 0 8px;
+  background: var(--card-2); border: 1px solid var(--border); border-radius: 8px;
+}
+.dto .btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.dto button { height: 30px; font-size: 13px; padding: 0 10px; }
+.dto .seg-title { font-weight: 600; margin: 8px 0 2px; }
+.replay-result { font-size: 13px; margin: 2px 0 8px; }
+.replay-result.ok { color: var(--primary-ink); }
+.replay-result.bad { color: var(--mark); }
+.summary button { height: 28px; font-size: 12px; padding: 0 10px; margin-top: 4px; }
+.raw { margin-top: 6px; }
+.raw summary { cursor: pointer; font-size: 14px; font-weight: 500; padding: 4px 0; }
+.raw pre {
+  font-family: inherit; font-size: 11px;
+  white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow: auto;
+  background: var(--card-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 6px 0 0;
+}

@@ -15,6 +15,7 @@
 package svrcfg
 
 import (
+	"io/fs"
 	"log/slog"
 
 	"github.com/zintix-labs/problab"
@@ -62,6 +63,10 @@ type SvrCfg struct {
 	SlotBufSize int
 	Problab     *problab.Problab
 	Mode        RunMode
+	// DevGames is the optional ProbLab Dev plugin directory: <gid>.js files at its
+	// root draw game-specific details. A file here takes precedence over the
+	// built-in demo plugin with the same name; nil uses the built-in ones only.
+	DevGames fs.FS
 }
 
 func (sc *SvrCfg) Vaild() error {
