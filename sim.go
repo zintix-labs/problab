@@ -75,7 +75,7 @@ func newSimulator(gs *spec.GameSetting, reg *slot.LogicRegistry, cf core.PRNGFac
 	return s, nil
 }
 
-// BetConfig 是 Simulator 與 DevSimulator 的執行設定。零值即預設：ChoosePlayer（不自動
+// BetConfig 是 Simulator 的執行設定。零值即預設：ChoosePlayer（不自動
 // 選擇，遇到選擇點時回報 ErrChooseModeRequired）與 DefaultMaxSegments。
 type BetConfig struct {
 	Choose      ChooseMode // ChooseFirst、ChooseLast 自動選擇；ChoosePlayer 不自動選擇
@@ -382,7 +382,7 @@ send:
 }
 
 // ErrChooseModeRequired 表示以 ChoosePlayer（未指定選擇方式）執行時遇到選擇點：不會做
-// 選擇的消費端（Simulator、DevSimulator）必須指定 ChooseFirst 或 ChooseLast。
+// 選擇的消費端（Simulator）必須指定 ChooseFirst 或 ChooseLast。
 var ErrChooseModeRequired = errors.New("a choice game requires choose mode first or last")
 
 // playBet 以 br 執行一筆下注並回傳完整局，是不會做選擇的消費端共用的包裝：ChoosePlayer

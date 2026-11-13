@@ -34,7 +34,6 @@ package problab
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"io/fs"
@@ -596,40 +595,6 @@ func (p *Problab) BuildRuntime(poolSize int) (*SlotRuntime, error) {
 	rt.Health() // set health data
 	built = true
 	return rt, nil
-}
-
-// NewDevSimulator
-//
-// 注意只能由Problab起
-// 只提供給Dev模式使用的模擬器，重點是保持單機台模式所以保持可重現性
-func (p *Problab) NewDevSimulator(gid spec.GID, seed int64) (*DevSimulator, error) {
-	sim, err := p.NewSimulator(gid, MachineConfig{Seed: SeedInt64(seed)})
-	if err != nil {
-		return nil, err
-	}
-	m, err := p.NewMachine(gid, MachineConfig{Seed: SeedInt64(seed)})
-	if err != nil {
-		return nil, err
-	}
-	simBe, err := sim.mBuf[0].SnapshotCore()
-	if err != nil {
-		return nil, err
-	}
-	mBe, err := m.SnapshotCore()
-	if err != nil {
-		return nil, err
-	}
-	simBe64 := base64.StdEncoding.EncodeToString(simBe)
-	mBe64 := base64.StdEncoding.EncodeToString(mBe)
-	if mBe64 != simBe64 {
-		return nil, errs.NewFatal("seeds are not equal")
-	}
-	dev := &DevSimulator{
-		sim: sim,
-		m:   m,
-		cfg: defaultBetCfg(),
-	}
-	return dev, nil
 }
 
 func (p *Problab) NewCore(seed int64) (*core.Core, error) {
