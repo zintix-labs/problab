@@ -1,6 +1,6 @@
 /* ProbLab Dev 公版樣式：中性灰底、細邊框、圓角、Emerald 主題色；只用 CSS，不加任何套件。
    應用端可以注入 theme.css（排在本檔之後）覆寫下面的變數；外掛的 css 再排在它之後。
-   只改某一台時用 body[data-gid="<gid>"] 限定範圍，例如 body[data-gid="2"] { --sym-w: #fde68a; }。 */
+   只改某一台時用 body[data-gid="<gid>"] 限定範圍，例如 body[data-gid="2"] { --sym-w: #fff; }。 */
 :root {
   --radius: 14px;
   --bg: #fafafa;
@@ -22,21 +22,24 @@
   --mark: #db2777;
   --fresh-glow: rgba(16, 185, 129, .45);
   --fresh-overlay: rgba(16, 185, 129, .40);
-  /* 圖標配色：W wild、Z 空格、X 其他；C／S 白底與鵝黃白底 */
-  --sym-w: #f5c542;
+  /* 特殊圖標（W wild、C scatter、S special）：淺底、2px 有色框、同色系的字 */
+  --sym-w: #f5f5f4;  --sym-w-text: #a16207;  --sym-w-ring: #ca8a04;   /* 灰白底、金框 */
+  --sym-c: #ffffff;  --sym-c-text: #0e7490;  --sym-c-ring: #0891b2;   /* 白底、青框 */
+  --sym-s: #fff6d5;  --sym-s-text: #334155;  --sym-s-ring: #475569;   /* 鵝黃白底、石板灰框 */
+  /* Z 空格、X 其他 */
   --sym-z: #e5e5e5;
   --sym-x: #d4d4d4;
-  --sym-c: #ffffff;
-  --sym-s: #fff6d5;
-  --sym-cs-text: #171717;
   /* H、L 的色序：1→6 為紫、橘、黃、藍、紅、綠，7 以後從 1 重來但變淡。
-     H 用色序當底色、--tone-N-text 當字色；L 沒有底色，用色序當字色 */
+     H 用色序當底色、--tone-N-text 當字色；L 用色序混入卡片底色當淡底，字色是色序加深 */
   --tone-1: #8b5cf6;  --tone-1-text: #fff;
   --tone-2: #f97316;  --tone-2-text: #fff;
   --tone-3: #eab308;  --tone-3-text: #1d2329;
   --tone-4: #3b82f6;  --tone-4-text: #fff;
   --tone-5: #ef4444;  --tone-5-text: #fff;
   --tone-6: #22c55e;  --tone-6-text: #fff;
+  --sym-l-bg: 16%;    /* L 底色：色序佔的比例，其餘是卡片底色 */
+  --sym-l-text: 75%;  /* L 字色：色序佔的比例，其餘是 --sym-l-ink */
+  --sym-l-ink: #000;
   --tag: #8b5cf6;
 }
 
@@ -56,7 +59,12 @@
     --primary-ink: #34d399;     /* emerald-400 */
     --ring: rgba(52, 211, 153, .28);
     --shadow: none;
-    --sym-w: #c9a227;
+    --sym-w: #e7e5e4;  --sym-w-text: #92400e;  --sym-w-ring: #ca8a04;
+    --sym-c-text: #155e75;  --sym-c-ring: #0e7490;
+    --sym-s-text: #1e293b;  --sym-s-ring: #334155;
+    --sym-l-bg: 22%;
+    --sym-l-text: 80%;
+    --sym-l-ink: #fff;
     --sym-z: #262626;
     --sym-x: #404040;
     --fresh-glow: rgba(255, 236, 190, .22);      /* 淡鵝黃 */
@@ -199,9 +207,14 @@ label.inline { font-size: 13px; }
 }
 .cell:hover .idx, .cell.pin .idx { opacity: .95; }
 .cell .badge { position: absolute; bottom: 3px; right: 5px; font-size: 10px; font-weight: 600; }
-.cell.sym-W { background: var(--sym-w); color: #171717; }
-.cell.sym-C { background: var(--sym-c); color: var(--sym-cs-text); box-shadow: inset 0 0 0 1px var(--border); }
-.cell.sym-S { background: var(--sym-s); color: var(--sym-cs-text); }
+.cell.sym-W { background: var(--sym-w); color: var(--sym-w-text); --sym-ring: var(--sym-w-ring); }
+.cell.sym-C { background: var(--sym-c); color: var(--sym-c-text); --sym-ring: var(--sym-c-ring); }
+.cell.sym-S { background: var(--sym-s); color: var(--sym-s-text); --sym-ring: var(--sym-s-ring); }
+/* 特殊圖標的框畫在 ::before，中獎時不會被得分框（box-shadow）蓋掉 */
+.cell.sym-W::before, .cell.sym-C::before, .cell.sym-S::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  border: 2px solid var(--sym-ring);
+}
 /* H、L 的色序：common.js 依編號加上 tone-1～tone-6，7 以後再加 faded。
    只改某個圖標時覆寫 --tone-base，例如 .cell[data-sym="H1"] { --tone-base: #0ea5e9; } */
 .cell.tone-1 { --tone-base: var(--tone-1); --tone-text: var(--tone-1-text); }
@@ -212,11 +225,12 @@ label.inline { font-size: 13px; }
 .cell.tone-6 { --tone-base: var(--tone-6); --tone-text: var(--tone-6-text); }
 .cell.sym-H, .cell.sym-L { --tone: var(--tone-base); }
 .cell.faded { --tone: color-mix(in srgb, var(--tone-base) 50%, transparent); --tone-text: var(--text); }
-/* H 實心底；L 沒有底色，只留細框看得出格子 */
+/* H 實心底；L 淡底、有色字，和透明的空格（Z）分得開 */
 .cell.sym-H { background-color: var(--tone); color: var(--tone-text); }
 .cell.sym-L {
-  background-color: transparent; color: var(--tone);
-  box-shadow: inset 0 0 0 1px var(--border); font-size: calc(var(--cell, 64px) * 0.28);
+  background-color: color-mix(in srgb, var(--tone) var(--sym-l-bg), var(--card));
+  color: color-mix(in srgb, var(--tone) var(--sym-l-text), var(--sym-l-ink));
+  font-size: calc(var(--cell, 64px) * 0.28);
 }
 /* 空格：不寫名稱、不填底色，只留很淡的框 */
 .cell.sym-Z { background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent); }
