@@ -15,6 +15,7 @@
 package calc
 
 import (
+	"math/rand/v2"
 	"slices"
 	"testing"
 
@@ -155,5 +156,105 @@ func TestCalcByCluster(t *testing.T) {
 	}
 	if hit := gmr.HitMapTmp(); len(hit) != 4 {
 		t.Fatalf("expected hitmap length 4, got %v", hit)
+	}
+}
+
+// 用上下左右填 neighbor 時，cluster_by_neighbor 必須和 cluster 的結果與 hits 順序完全相同。
+func TestCalcByClusterByNeighborMatchesCluster(t *testing.T) {
+	cols, rows := 6, 5
+	symbols := []string{"H1", "H2", "H3", "W1"}
+	pay := [][]int{}
+	for range symbols {
+		p := make([]int, cols*rows)
+		for k := 3; k < len(p); k++ {
+			p[k] = k + 1
+		}
+		pay = append(pay, p)
+	}
+	pay[3] = make([]int, cols*rows)
+	neighbor := map[int][]int16{}
+	for i := range cols * rows {
+		r, c := i/cols, i%cols
+		if c > 0 {
+			neighbor[i] = append(neighbor[i], int16(i-1))
+		}
+		if c+1 < cols {
+			neighbor[i] = append(neighbor[i], int16(i+1))
+		}
+		if r > 0 {
+			neighbor[i] = append(neighbor[i], int16(i-cols))
+		}
+		if r+1 < rows {
+			neighbor[i] = append(neighbor[i], int16(i+cols))
+		}
+	}
+	grid := buildGameModeSetting(cols, rows, "cluster", nil, symbols, pay)
+	custom := buildGameModeSetting(cols, rows, "cluster_by_neighbor", nil, symbols, pay)
+	custom.HitSetting.Neighbor = neighbor
+	scGrid, scCustom := NewScreenCalculator(&grid), NewScreenCalculator(&custom)
+	gGrid := buf.NewGameModeResult(0, &grid, 4, 4, false)
+	gCustom := buf.NewGameModeResult(0, &custom, 4, 4, false)
+
+	rng := rand.New(rand.NewPCG(1, 2))
+	screen := make([]int16, cols*rows)
+	for range 2000 {
+		for i := range screen {
+			screen[i] = int16(rng.IntN(len(symbols)+1)) - 1 // 含 -1 的裁切格
+		}
+		gGrid.Reset()
+		gCustom.Reset()
+		scGrid.CalcScreen(2, screen, gGrid)
+		scCustom.CalcScreen(2, screen, gCustom)
+		if !slices.Equal(gGrid.GetDetails(), gCustom.GetDetails()) || !slices.Equal(gGrid.HitMapTmp(), gCustom.HitMapTmp()) {
+			t.Fatalf("screen=%v\ncluster=%+v %v\ncluster_by_neighbor=%+v %v", screen,
+				gGrid.GetDetails(), gGrid.HitMapTmp(), gCustom.GetDetails(), gCustom.HitMapTmp())
+		}
+	}
+}
+
+// 每格鄰居數不限於 4：3x3 八方向，中心格有 8 個鄰居，0、4、8 只靠斜角相連。
+func TestCalcByClusterByNeighborEightDirections(t *testing.T) {
+	neighbor := map[int][]int16{}
+	for i := range 9 {
+		r, c := i/3, i%3
+		for dr := -1; dr <= 1; dr++ {
+			for dc := -1; dc <= 1; dc++ {
+				rr, cc := r+dr, c+dc
+				if (dr != 0 || dc != 0) && rr >= 0 && rr < 3 && cc >= 0 && cc < 3 {
+					neighbor[i] = append(neighbor[i], int16(rr*3+cc))
+				}
+			}
+		}
+	}
+	gms := buildGameModeSetting(3, 3, "cluster_by_neighbor", nil, []string{"H1", "H2"}, [][]int{{0, 0, 7, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0, 0}})
+	gms.HitSetting.Neighbor = neighbor
+	sc := NewScreenCalculator(&gms)
+	gmr := buf.NewGameModeResult(0, &gms, 4, 4, false)
+	sc.CalcScreen(1, []int16{0, 1, 1, 1, 0, 1, 1, 1, 0}, gmr)
+	if gmr.GetTmpWin() != 7 || !slices.Equal(gmr.HitMapTmp(), []int16{0, 4, 8}) {
+		t.Fatalf("win=%d hits=%v, want win=7 hits=[0 4 8]", gmr.GetTmpWin(), gmr.HitMapTmp())
+	}
+}
+
+func TestCalcByClusterByNeighborUsesOnlyListedCells(t *testing.T) {
+	// 0 和 2 在格子上不相鄰但被指定相鄰；0 和 1 相鄰但未列出
+	gms := buildGameModeSetting(3, 1, "cluster_by_neighbor", nil, []string{"H1", "H2"}, [][]int{{0, 5, 9}, {0, 0, 0}})
+	gms.HitSetting.Neighbor = map[int][]int16{0: {2}, 2: {0}}
+	sc := NewScreenCalculator(&gms)
+	gmr := buf.NewGameModeResult(0, &gms, 4, 4, false)
+	for _, tc := range []struct {
+		screen []int16
+		want   int
+		hits   []int16
+	}{
+		{[]int16{0, 1, 0}, 5, []int16{0, 2}},
+		{[]int16{0, 0, 1}, 0, nil},
+		{[]int16{0, 0, 0}, 5, []int16{0, 2}}, // 1 只有自己一顆，不足 2 顆
+	} {
+		gmr.Reset()
+		sc.CalcScreen(1, tc.screen, gmr)
+		if gmr.GetTmpWin() != tc.want || !slices.Equal(gmr.HitMapTmp(), tc.hits) {
+			t.Fatalf("screen=%v win=%d hits=%v, want win=%d hits=%v", tc.screen, gmr.GetTmpWin(), gmr.HitMapTmp(), tc.want, tc.hits)
+		}
 	}
 }

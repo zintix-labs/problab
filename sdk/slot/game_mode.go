@@ -231,7 +231,7 @@ func (gm *GameMode) getInitCap() (int, int) {
 	case spec.BetTypeCount:
 		buffer = gms.SymbolSetting.SymbolCount + 1                                // 直接把所有圖標都當作得分計數 + 1
 		hitsFlatInitSize = gms.ScreenSetting.Columns * gms.ScreenSetting.Rows * 2 // 兩倍盤面大小
-	case spec.BetTypeCluster:
+	case spec.BetTypeCluster, spec.BetTypeClusterByNeighbor:
 		buffer = (gms.ScreenSetting.Columns * gms.ScreenSetting.Rows) + gms.SymbolSetting.SymbolCount // 盤面大小(每個格子都算一次得分)+圖標數量
 		hitsFlatInitSize = gms.ScreenSetting.Columns * gms.ScreenSetting.Rows * 2                     // 兩倍盤面大小
 	default:
