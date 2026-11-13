@@ -498,6 +498,15 @@ func (p *Problab) EntryByName(name string) (catalog.Entry, bool) {
 	return p.cat.GetByName(name)
 }
 
+// GameSettingById 回傳 id 的完整遊戲設定（YAML 或 JSON 依副檔名解析）。
+//
+// 每次呼叫都重新讀取並解析設定檔，回傳新的物件；呼叫端可以修改，不影響引擎。
+// 回傳內容包含盤面產生、賠率與中獎判定等完整數學設定，轉送到程序外部時必須
+// 自行篩選欄位。未知的 id 回傳 errs.Warn。
+func (p *Problab) GameSettingById(id spec.GID) (*spec.GameSetting, error) {
+	return p.cat.GameSettingById(id)
+}
+
 func (p *Problab) IDs() []spec.GID {
 	return p.cat.IDs()
 }

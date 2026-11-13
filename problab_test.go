@@ -22,14 +22,17 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
 
+	"github.com/zintix-labs/problab/demo/demo_configs"
 	"github.com/zintix-labs/problab/demo/demo_logic"
 	"github.com/zintix-labs/problab/internal/optimalrt"
 	"github.com/zintix-labs/problab/sdk/core"
+	"gopkg.in/yaml.v3"
 )
 
 func TestOptimalMachineRequiresSource(t *testing.T) {
@@ -491,5 +494,63 @@ func TestUnoptimizedMachinePreservesReplayIdentity(t *testing.T) {
 	}
 	if string(first) != string(second) {
 		t.Fatal("pre-spin raw Core snapshot did not reproduce the collected outcome")
+	}
+}
+
+// GameSettingById 每次回傳新解析的物件，修改後再取一次不受影響；JSON 設定也能取得。
+func TestGameSettingByIdReturnsFreshCopy(t *testing.T) {
+	raw, err := fs.ReadFile(demo_configs.FS, "game_0_demonormal.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	asJSON, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, src := range map[string]fs.FS{
+		"yaml": demo_configs.FS,
+		"json": fstest.MapFS{"game.json": &fstest.MapFile{Data: asJSON}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lab, err := NewAuto(core.Default(), Configs(src), Logics(demo_logic.Logics))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = lab.Close() }()
+			first, err := lab.GameSettingById(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append([]int(nil), first.BetUnits...)
+			wantModes := len(first.GameModeSettings)
+			first.BetUnits[0] = -1
+			first.GameModeSettings = nil
+			if first.Fixed == nil {
+				first.Fixed = map[string]any{}
+			}
+			first.Fixed["mutated"] = true
+			second, err := lab.GameSettingById(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(second.BetUnits, want) || len(second.GameModeSettings) != wantModes || second.Fixed["mutated"] != nil {
+				t.Fatalf("second read observed caller mutation: bet units %v modes %d fixed %v", second.BetUnits, len(second.GameModeSettings), second.Fixed)
+			}
+			if second.GameID != 0 || wantModes == 0 || len(second.GameModeSettings[0].SymbolSetting.SymbolUsedStr) == 0 {
+				t.Fatalf("setting not parsed: %+v", second)
+			}
+		})
+	}
+	lab, err := NewAuto(core.Default(), Configs(demo_configs.FS), Logics(demo_logic.Logics))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lab.Close() }()
+	if _, err := lab.GameSettingById(999); err == nil {
+		t.Fatal("unknown gid returned a setting")
 	}
 }
