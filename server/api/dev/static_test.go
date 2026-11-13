@@ -63,7 +63,7 @@ func TestStaticFiles(t *testing.T) {
 	}
 }
 
-// 應用端注入的外掛優先於內建；兩邊都沒有時回 404，前端只顯示公版。
+// 應用端注入的外掛優先於內建；沒有注入的機台用內建的外掛；兩邊都沒有時回 404，前端只顯示公版。
 func TestDevGamesOverrideBuiltinPlugins(t *testing.T) {
 	rt := &testRouter{r: chi.NewRouter()}
 	Register(rt, &svrcfg.SvrCfg{Problab: demoLab(t), Mode: svrcfg.ModeDev, DevGames: fstest.MapFS{
@@ -77,6 +77,9 @@ func TestDevGamesOverrideBuiltinPlugins(t *testing.T) {
 		if code != http.StatusOK || ctype != "text/javascript; charset=utf-8" || body != want {
 			t.Errorf("%s: status %d type %q body %q", path, code, ctype, body)
 		}
+	}
+	if code, _, body := get(t, ts, "/dev/games/1.js"); code != http.StatusOK || !strings.Contains(body, "DEV.register(1,") {
+		t.Errorf("built-in plugin for game 1: status %d", code)
 	}
 	if code, _, _ := get(t, ts, "/dev/games/7.js"); code != http.StatusNotFound {
 		t.Errorf("plugin for a game without one: status %d, want 404", code)
