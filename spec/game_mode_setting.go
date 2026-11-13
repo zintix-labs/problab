@@ -35,5 +35,8 @@ func (gms *GameModeSetting) init() error {
 	if err := gms.HitSetting.Init(); err != nil {
 		return err
 	}
+	if err := hitNeighborValid(&gms.HitSetting, &gms.ScreenSetting); err != nil {
+		return err
+	}
 	return nil
 }

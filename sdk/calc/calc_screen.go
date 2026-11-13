@@ -33,6 +33,8 @@ var fromBetTypeGetCalcScreenFn = map[spec.BetType]CalcScreenFn{
 	spec.BetTypeWayBoth:  CalcByWay,
 	spec.BetTypeCount:    CalcByCount,
 	spec.BetTypeCluster:  CalcByCluster,
+
+	spec.BetTypeClusterByNeighbor: CalcByCluster,
 }
 
 // SymbolMask 使用 uint64 以支援最多 64 種不同的圖標
@@ -81,7 +83,9 @@ type ScreenCalculator struct {
 	wildCounts int // 計算wild盤面上出現總數
 
 	// ----------  Cluster 熱路徑暫存資料 ----------
-	clusterBuf *clusterBuf
+	clusterBuf      *clusterBuf
+	clusterAdjFlat  []int16 // cluster_by_neighbor 專用：平坦化的相鄰格表
+	clusterAdjIndex []int   // cluster_by_neighbor 專用：每格相鄰格在 clusterAdjFlat 的起點，長度為盤面大小+1；cluster 為 nil
 
 	// calcScreen預封装
 	calcScreenFn CalcScreenFn
@@ -176,7 +180,7 @@ func (sc *ScreenCalculator) initHitSetting() {
 	}
 	if spec.IsBetTypeCluster(betType) {
 		sc.initClusterBuf()
-		// sc.initClusterBufOld() // Cluster 暫存緩衝
+		sc.initClusterAdj()
 	}
 
 }
@@ -234,6 +238,22 @@ func (sc *ScreenCalculator) initClusterBuf() {
 	}
 	// 將目前的 Rows/Cols 與遮罩快取到 buffer
 	sc.clusterBuf.resetSizes(sc.Rows, sc.Cols)
+}
+
+// initClusterAdj 為 cluster_by_neighbor 把 neighbor 攤平成相鄰格表，熱路徑只做 slice 存取。
+// 依格子索引逐格寫入（不走 map 迭代），確保每次建出的表與 hits 順序一致。
+func (sc *ScreenCalculator) initClusterAdj() {
+	if sc.HitSetting.BetType != spec.BetTypeClusterByNeighbor {
+		return
+	}
+	n := sc.ScreenSize
+	sc.clusterAdjFlat = make([]int16, 0, n*4)
+	sc.clusterAdjIndex = make([]int, n+1)
+	for i := 0; i < n; i++ {
+		sc.clusterAdjIndex[i] = len(sc.clusterAdjFlat)
+		sc.clusterAdjFlat = append(sc.clusterAdjFlat, sc.HitSetting.Neighbor[i]...)
+	}
+	sc.clusterAdjIndex[n] = len(sc.clusterAdjFlat)
 }
 
 func (sc *ScreenCalculator) initCalcFn() {

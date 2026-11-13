@@ -91,6 +91,8 @@ func CalcByCluster(betMult int, screen []int16, gmr *buf.GameModeResult, sc *Scr
 	}
 
 	n := b.n
+	adjFlat := sc.clusterAdjFlat
+	adjIndex := sc.clusterAdjIndex
 	wildMask := sc.wildMask
 	paidMask := sc.paidMask
 	payFlat := sc.PayTableFlat
@@ -142,9 +144,6 @@ func CalcByCluster(betMult int, screen []int16, gmr *buf.GameModeResult, sc *Scr
 			head++
 			clusterSize++
 
-			r := curr / cols
-			c := curr % cols
-
 			// 定義鄰居檢查邏輯
 			checkNeighbor := func(next int) {
 				ns := screen[next]
@@ -171,7 +170,17 @@ func CalcByCluster(betMult int, screen []int16, gmr *buf.GameModeResult, sc *Scr
 				}
 			}
 
-			// 展開四個方向
+			// cluster_by_neighbor：展開設定檔指定的相鄰格
+			if adjIndex != nil {
+				for k, end := adjIndex[curr], adjIndex[curr+1]; k < end; k++ {
+					checkNeighbor(int(adjFlat[k]))
+				}
+				continue
+			}
+
+			// cluster：展開四個方向（寫死比查表快，保留給一般盤面）
+			r := curr / cols
+			c := curr % cols
 			if c > 0 {
 				checkNeighbor(curr - 1)
 			}
