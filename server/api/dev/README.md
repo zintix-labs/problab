@@ -2,6 +2,8 @@
 
 用瀏覽器逐段、逐步看一局的完整流程：盤面、中獎位置、每一步的贏分、選擇類遊戲的每一段，以及每台自己的特色（標記、進度條、角標等）。用途是開發期的除錯與重現，不做統計；統計請用 `make run` 或 `/v1/sim`。
 
+本文的「段」是一次 `Machine.Spin` 的結果（一個 SpinResult）。一般遊戲一局只有一段；選擇類遊戲在選擇點把一局切成多段，選完再送續段請求。面板上一律標成 Cycle，與 DTO 的 `cycle` 欄位同名。
+
 > dev 路由只在 `ModeDev` 與 `ModePanel` 註冊，沒有任何驗證機制，**不得對外公開**。
 
 ## 啟動
@@ -17,9 +19,32 @@ Ctrl+C 結束；仍有連線時最多等 5 秒。
 
 公版前端以 `go:embed` 包在 `server/api/dev/web/`，改了之後要重新啟動。
 
-鍵盤：Space／Enter 執行 Spin，←／→ 切換上一步／下一步，I 切換「顯示」。格子編號平常不顯示，滑鼠移到格子上，或點一下釘住（再點一次取消）才顯示。
+## 操作
 
-盤面下方的「顯示」切換格子與「本步中獎」的圖標欄要寫名稱（`H1`）還是盤面上的 ID（該 mode `symbols` 的索引，也就是後端陣列裡的數字）；ID 模式下空格與不存在的格子也寫出原始值，方便逐格比對。滑鼠移到格子上一律同時顯示兩者，瀏覽器會記住上次的選擇。下方時間軸依「段 > Mode > Round」分組列出每個 act，點一下就跳過去；只有一段的局不顯示段的層級。
+頂部欄最右邊的鍵盤圖示（或按 `?`）列出所有快捷鍵與滑鼠操作；它左邊的主題按鈕依序切換跟隨系統、淺色、深色。
+
+| 按鍵 | 功能 |
+| --- | --- |
+| Space／Enter | Spin |
+| ←／→ | 上一步／下一步 |
+| Shift+←／→ | 上一個／下一個 round |
+| Home／End | 第一步／最後一步 |
+| ↑／↓ | 上一局／下一局：只在局列表看得到的局之間切換（「只看有贏分」時跳過沒有贏分的局），到頭不繞回 |
+| P | 播放／暫停 |
+| + | 速度切到下一檔，turbo 之後回到 normal |
+| I | 切換 SymbolName／SymbolID |
+| Esc | 說明開著時關閉說明，否則清掉所有釘住的格子編號 |
+| ? | 開關說明 |
+
+在輸入框與選單裡打字時不攔按鍵；Enter 在輸入框裡也會執行 Spin。
+
+格子編號平常不顯示，滑鼠移到格子上，或點一下釘住（再點一次取消）才顯示。
+
+盤面下方的控制列分三組：左邊是步進（⏮ ◀ 目前步數 ▶ ⏭），中間是播放（播放、速度、單局／連續），右邊是檢視與分享（SymbolName／SymbolID、複製連結）。兩段切換的按鈕只寫目前的值，按一下切換。
+
+播放速度固定三檔：normal（預設，每步 1350 ms）、fast（650 ms）、turbo（200 ms）。盤面下方亮幾個箭頭就是第幾檔，點第幾個就切到第幾檔。預設是「單局」，只播完這一局；切到「連續」後接著播局列表的下一局（同樣依「只看有贏分」篩選），播到最後一局或停在選擇點（player）的局就停，不會自動 Spin。手動換局會停止播放，手動換步不會。
+
+盤面下方的 SymbolName／SymbolID 按鈕（或按 I）切換格子與「本步中獎」的圖標欄要寫名稱（`H1`）還是盤面上的 ID（該 mode `symbols` 的索引，也就是後端陣列裡的數字）；ID 模式下空格與不存在的格子也寫出原始值，方便逐格比對。滑鼠移到格子上一律同時顯示兩者，瀏覽器會記住上次的選擇。下方時間軸依「Cycle > State > Round」分組列出每個 act，點一下就跳過去；只有一段的局不顯示 Cycle 的層級。Mode 的標題寫成 `State 1 · ModeID 2 [FreeGame]`：State 是這一段 `gamemodes` 裡的第幾個（每一段各自從 0 起算），ModeID 是設定檔 `game_mode_settings` 的索引，方括號裡是外掛提供的名稱，沒有外掛或外掛沒寫時省略。資訊列的 State 欄用同一個格式。
 
 ## 頂部欄
 
@@ -45,11 +70,13 @@ Seed 留空時，狀態列會顯示實際使用的 seed，可以原樣貼回重�
 
 | 方式 | 做法 | 範圍 |
 | --- | --- | --- |
-| 回放這局 | 右側 DTO 面板的按鈕：以這局每一段記錄的 `start_b64u`，加上續段的 `choice`、`choose_next` 與 `cp`，逐段重跑並比對 | 整局完全重現，包含 optimal 依入口抽庫的續段 |
-| 用這段快照重跑 | 第 0 段的按鈕：輸入切到 Snap、填入 `start_b64u` 後執行 | 只保證第 0 段 |
+| 回放這局 | 右側「本局 DTO」的按鈕：以這局每一段記錄的 `start_b64u`，加上續段的 `choice`、`choose_next` 與 `cp`，逐段重跑並比對 | 整局完全重現，包含 optimal 依入口抽庫的續段 |
+| 用這個快照重跑 | 右側「Cycle 0 快照」的按鈕（只有第 0 段有）：輸入切到 Snap、填入 `start_b64u` 後執行 | 只保證第 0 段 |
 | 手動貼 Snap | 從正式後端的紀錄貼上某一局第 0 段的 `start_b64u` | 只保證第 0 段 |
 
 一局有多段時，單一快照無法還原續段的輸入，所以要完整重現必須用「回放這局」。
+
+右側面板的「Cycle N 快照」是目前這一步所在那一段的 `start_b64u`、`after_b64u` 與 `cp`，換步到別的段時跟著換；「本局 DTO」是整局的回放、複製與完整 JSON。
 
 ## player 模式
 
@@ -63,6 +90,8 @@ http://localhost:5808/dev?gid=2&betmode=0&betmult=1&choose=first&input=seed&valu
 
 `spin=1` 時載入後立即執行，再跳到第 `bet` 局的第 `step` 步（都從 1 起算）。同一組參數一定開出同一個畫面（Snap 輸入只保證第 0 段）。加上 `symmode=id` 會以 ID 模式開啟。
 
+盤面下方的「複製連結」會把目前這一步組成上面的網址（seed 留空時填入實際使用的 seed），用來回報問題。player 的選擇不在網址裡，所以 player 的局只重現到第 0 段；這種局與 Snap 輸入的多段局，按鈕旁會出現 ⚠，滑鼠移上去看說明。
+
 ## 限制
 
 | 項目 | 限制 |
@@ -72,7 +101,7 @@ http://localhost:5808/dev?gid=2&betmode=0&betmult=1&choose=first&input=seed&valu
 | 每局的段數 | `problab.DefaultMaxSegments` |
 | 請求內容大小 | 1 MB |
 
-一批的結果整批算完才回傳，只放在瀏覽器記憶體中，不寫入瀏覽器儲存；瀏覽器只記住上次選的機台與「顯示」的選擇。
+一批的結果整批算完才回傳，只放在瀏覽器記憶體中，不寫入瀏覽器儲存；瀏覽器只記住上次選的機台、SymbolName／SymbolID 與主題的選擇。
 
 ## API
 
@@ -95,6 +124,7 @@ http://localhost:5808/dev?gid=2&betmode=0&betmult=1&choose=first&input=seed&valu
 ```js
 DEV.register(2, {
   title: "demo_choice 資訊",           // 右側面板標題
+  modes: { 0: "BaseGame", 1: "FG-A", 2: "FG-B" }, // 每個 ModeID 的名稱，顯示在時間軸與資訊列
   css: ".cell.blast { outline-color: red; }", // 這台專用的樣式，選填
   panel(ctx) { return "<html>"; },     // 右側面板內容
   cellClass(idx, ctx) { return []; },  // 格子要加的 class，例如 "mark"、"dim" 或自訂的
@@ -110,11 +140,13 @@ DEV.register(2, {
 | `game` | `/dev/meta` 的這台資料（含 `fixed`、`modes`） |
 | `bet` | 這一局：`{index, bet, win, isend, segments}` |
 | `segment`、`segIdx` | 目前這一步所在的段（SpinResult）與段號 |
-| `mode` | 目前的 game mode（`modeid`、`trigger`、`win`、`acts`） |
+| `mode`、`modeIdx` | 目前的 game mode（`modeid`、`trigger`、`win`、`acts`），以及它在這一段 `gamemodes` 裡的索引（畫面上的 State） |
 | `act` | 目前這一步（`acttype`、`round`、`step`、各種贏分、`screen`、`details`、`ext`） |
 | `ext`、`prevExt` | 這一步和上一步的 ext；這一步沒有 ext 時，沿用這局最近一次出現的值 |
 | `screen`、`prevScreen`、`prevAct` | 這一步和上一步的盤面與 act；沒有盤面的步驟沿用同一個 mode 的前一個盤面 |
 | `modeInfo`、`symbols` | 這個 mode 的行列數和圖標名稱 |
+
+`modes` 與 `actLabel` 是替玩法和動作取名，屬於畫面的工作，不寫進遊戲設定檔。撰寫外掛時（包括請 AI 協作時），先列出這台每個 ModeID 的行列數、圖標與觸發方式，請使用者決定每個 ModeID 的名稱，並依這些資訊提供建議選項（例如觸發 FG 的 mode 叫 `FreeGame`）；`actLabel` 的文字也先問過再寫。
 
 工具函式：`DEV.util.kv(rows)`（兩欄表）、`DEV.util.progress(value, total, label)`（進度條）、`DEV.util.sym(ctx, id)`（圖標 ID 轉名稱）、`DEV.util.esc(s)`。
 
@@ -175,7 +207,7 @@ H、L 的色序 1→6 為紫、橘、黃、藍、紅、綠，7 以後從 1 重�
 
 樣式的順序是 `app.css` → `theme.css` → 外掛的 `css`，後面的蓋前面的。外掛的樣式在切換機台後仍留在頁面上，所以外掛裡的規則一律要以 `body[data-gid="<gid>"]` 限定。
 
-深色的預設值寫在 `@media (prefers-color-scheme: dark)` 裡。`theme.css` 只寫 `:root` 時，深色也會套用同一個值；深色要用不同的值，就在 `theme.css` 裡另外寫一段 media query。
+深色的預設值寫在 `:root:where([data-theme="dark"])` 裡：面板依頂部欄的主題按鈕（跟隨系統、淺色、深色）在 `<html>` 設定 `data-theme="light"` 或 `"dark"`。`theme.css` 只寫 `:root` 時，深色也會套用同一個值；深色要用不同的值，就在 `theme.css` 裡另外寫 `:root[data-theme="dark"]`。不要用 `@media (prefers-color-scheme: dark)`：手動切換主題時它不會跟著變。
 
 ```css
 /* internal/devgames/theme.css */
@@ -186,9 +218,7 @@ H、L 的色序 1→6 為紫、橘、黃、藍、紅、綠，7 以後從 1 重�
   --tone-2: #f43f5e;
   --sym-w: #fef3c7; --sym-w-text: #92400e; --sym-w-ring: #d97706;
 }
-@media (prefers-color-scheme: dark) {
-  :root { --sym-w: #fde68a; }
-}
+:root[data-theme="dark"] { --sym-w: #fde68a; }
 
 /* 只有 101 號機 */
 body[data-gid="101"] { --sym-l-bg: 28%; /* L 的淡底再深一點 */ }

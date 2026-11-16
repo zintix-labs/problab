@@ -14,6 +14,7 @@
 
   DEV.register(1, {
     title: "demo_cascade 資訊",
+    modes: { 0: "BaseGame", 1: "FreeGame" },
     cellClass: (idx, ctx) => (scatters(ctx).includes(idx) ? ["mark"] : []),
     badge: (idx, ctx) => (scatters(ctx).includes(idx) ? "S" : ""),
     panel(ctx) {

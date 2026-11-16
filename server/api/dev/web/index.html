@@ -6,6 +6,15 @@
   <base href="/dev/" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMwOTA5MGIiIC8+CiAgPHRleHQgeD0iNTAlIiB5PSI1NSUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIAogICAgICAgIGZvbnQtZmFtaWx5PSJtb25vc3BhY2UsIHNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSJib2xkIiBmb250LXNpemU9IjQ0IiBmaWxsPSIjZjk3MzE2Ij5aPC90ZXh0Pgo8L3N2Zz4=" />
   <title>ProbLab Dev</title>
+  <script>
+    // 在畫面出現前套用主題，避免先閃一下另一種顏色；選擇記在 dev.theme（system、light、dark），common.js 的 applyTheme 同一套規則
+    (function () {
+      var pref = "system";
+      try { pref = localStorage.getItem("dev.theme") || "system"; } catch (e) {}
+      var dark = pref === "dark" || (pref !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    })();
+  </script>
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
@@ -23,7 +32,7 @@
       </select>
     </label>
     <label>輸入
-      <select id="input" title="Seed：建立機台的根 seed；Snap：某一段的 start_b64u">
+      <select id="input" title="Seed：建立機台的根 seed；Snap：某個 Cycle 的 start_b64u">
         <option value="seed">Seed</option>
         <option value="snap">Snap</option>
       </select>
@@ -32,7 +41,32 @@
     <label>局數 <input id="rounds" type="number" min="1" value="50" /></label>
     <button id="spin" class="primary" title="Space／Enter">Spin</button>
     <span id="status" class="muted"></span>
+    <button id="theme-btn" class="theme-btn"></button>
+    <button id="help-btn" class="help-btn" popovertarget="help" title="快捷鍵（?）" aria-label="快捷鍵說明"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8" /></svg></button>
   </header>
+
+  <div id="help" class="help" popover>
+    <div class="help-title">鍵盤</div>
+    <table class="help-keys">
+      <tr><td><kbd>Space</kbd> <kbd>Enter</kbd></td><td>Spin</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>上一步／下一步</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>上一個／下一個 round</td></tr>
+      <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>第一步／最後一步</td></tr>
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>上一局／下一局（依局列表的篩選）</td></tr>
+      <tr><td><kbd>P</kbd></td><td>播放／暫停</td></tr>
+      <tr><td><kbd>+</kbd></td><td>速度切到下一檔，turbo 之後回到 normal</td></tr>
+      <tr><td><kbd>I</kbd></td><td>切換 SymbolName／SymbolID</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>關閉說明；清掉釘住的格子編號</td></tr>
+      <tr><td><kbd>?</kbd></td><td>開關這個說明</td></tr>
+    </table>
+    <div class="help-title">滑鼠</div>
+    <ul class="help-mouse">
+      <li>移到格子上：顯示格子編號與名稱／ID</li>
+      <li>點格子：釘住編號，再點一次取消</li>
+      <li>點時間軸：跳到那一步</li>
+      <li>點速度的第幾個箭頭：切到第幾檔</li>
+    </ul>
+  </div>
 
   <main class="layout">
     <aside class="panel" id="results-panel">
@@ -47,27 +81,25 @@
     <section class="stage">
       <div id="info" class="info"></div>
       <div id="board" class="board"></div>
+      <!-- 三組：步進（手動移動到哪一步）、播放（自動播放怎麼播）、檢視與分享（不影響播放） -->
       <div class="controls">
-        <button id="first" title="第一步">⏮</button>
-        <button id="prev" title="上一步（←）">◀</button>
-        <button id="play" title="自動播放">▶ 播放</button>
-        <button id="next" title="下一步（→）">▶</button>
-        <button id="last" title="最後一步">⏭</button>
-        <label class="inline">速度
-          <select id="speed">
-            <option value="1200">慢</option>
-            <option value="600" selected>中</option>
-            <option value="250">快</option>
-          </select>
-        </label>
-        <span id="pos" class="muted"></span>
-        <label class="inline" title="格子與中獎明細顯示圖標名稱或盤面上的 ID（I）">顯示
-          <select id="symmode">
-            <option value="name">名稱</option>
-            <option value="id">ID</option>
-          </select>
-        </label>
-        <span class="muted keys">Space／Enter：Spin　←／→：換步　I：名稱／ID</span>
+        <div class="ctrl-group ctrl-step">
+          <button id="first" title="第一步（Home）">⏮</button>
+          <button id="prev" title="上一步（←）">◀</button>
+          <span id="pos" class="muted"></span>
+          <button id="next" title="下一步（→）">▶</button>
+          <button id="last" title="最後一步（End）">⏭</button>
+        </div>
+        <div class="ctrl-group ctrl-play">
+          <button id="play" title="自動播放（P）">▶ 播放</button>
+          <span id="speed" class="speed" role="group" aria-label="速度"></span>
+          <button id="chain" class="toggle" title="單局：播完這局就停；連續：接著播局列表的下一局。按一下切換"></button>
+        </div>
+        <div class="ctrl-group ctrl-view">
+          <button id="symmode" class="toggle" title="格子與中獎明細顯示圖標名稱或盤面上的 ID，按一下切換（I）"></button>
+          <button id="copy-link" title="複製能重現這一步的網址">複製連結</button>
+          <span id="link-note" class="link-note" hidden>⚠</span>
+        </div>
       </div>
       <div id="timeline" class="timeline"></div>
     </section>
@@ -81,10 +113,12 @@
         <summary>ext 原始資料</summary>
         <pre id="raw-ext"></pre>
       </details>
+      <div class="panel-head"><span id="cycle-title">本 Cycle 快照</span></div>
+      <div id="cycle-dto" class="dto"></div>
       <div class="panel-head"><span>本局 DTO</span></div>
       <div id="dto" class="dto"></div>
       <details class="raw">
-        <summary>完整 DTO JSON（所有段）</summary>
+        <summary>完整 DTO JSON（所有 Cycle）</summary>
         <pre id="raw-dto"></pre>
       </details>
     </aside>
