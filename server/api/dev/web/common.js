@@ -43,11 +43,29 @@ const state = {
   focusDetail: -1,
   pinned: new Set(), // 點一下釘住顯示格子編號的格子
   symMode: "name",   // 格子與中獎明細顯示圖標名稱（name）或盤面上的 ID（id）
-  request: null,     // 產生目前這批的請求（choose、betmode、betmult），續段與回放沿用
+  speed: 0,          // SPEEDS 的索引
+  chain: false,      // 播放模式：false 單局（播完這局就停）、true 連續（接著播局列表的下一局）
+  theme: "system",   // 主題：system（跟隨系統）、light、dark；記在瀏覽器
+  request: null,     // 產生目前這批的請求（choose、betmode、betmult、input、value、rounds），續段、回放與複製連結沿用
   replay: null,      // 目前這局「回放這局」的比對結果
 };
 
 const $ = (id) => document.getElementById(id);
+
+// 主題按鈕依序切換：跟隨系統 → 淺色 → 深色
+const THEMES = {
+  system: { label: "跟隨系統", next: "light", icon: `<rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" />` },
+  light: { label: "淺色", next: "dark", icon: `<circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />` },
+  dark: { label: "深色", next: "system", icon: `<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />` },
+};
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+
+// 播放速度固定三檔，不開放設定；畫面上以亮幾個箭頭表示第幾檔
+const SPEEDS = [
+  { name: "normal", ms: 1350 },
+  { name: "fast", ms: 650 },
+  { name: "turbo", ms: 200 },
+];
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -60,7 +78,7 @@ async function api(path, body) {
   return res.json();
 }
 
-// 瀏覽器儲存只記住上次選的機台；無法使用時照常運作
+// 瀏覽器儲存只記住上次選的機台、圖標的 Name／ID 與主題；無法使用時照常運作
 function remember(key, value) {
   try {
     if (value === undefined) return localStorage.getItem(key);
@@ -102,10 +120,27 @@ async function init() {
   syncInputs();
   syncWager();
   state.symMode = (q.get("symmode") ?? remember("dev.symmode")) === "id" ? "id" : "name";
-  $("symmode").value = state.symMode;
+  $("symmode").textContent = symModeText();
 
   sel.onchange = selectGame;
-  $("symmode").onchange = () => setSymMode($("symmode").value);
+  $("symmode").onclick = () => setSymMode(state.symMode === "id" ? "name" : "id");
+  $("chain").textContent = "單局";
+  $("chain").onclick = () => {
+    state.chain = !state.chain;
+    $("chain").textContent = state.chain ? "連續" : "單局";
+  };
+  // 粗的實心箭頭，彼此緊貼
+  const chevron = `<svg viewBox="0 0 12 16" width="12" height="16" aria-hidden="true"><path d="M0 0h5.5l6.5 8-6.5 8H0l6.5-8z" fill="currentColor" /></svg>`;
+  setTheme(remember("dev.theme"));
+  $("theme-btn").onclick = () => setTheme(THEMES[state.theme].next);
+  systemDark.addEventListener("change", () => setTheme(state.theme));
+  $("speed").innerHTML = SPEEDS.map((s, i) => `<button data-level="${i}" title="${s.name}" aria-label="速度 ${s.name}">${chevron}</button>`).join("");
+  $("speed").onclick = (e) => {
+    const btn = e.target.closest("button");
+    if (btn) setSpeed(Number(btn.dataset.level));
+  };
+  setSpeed(0);
+  $("copy-link").onclick = (e) => copy(stepLink(), e.target);
   $("betmode").onchange = syncWager;
   $("betmult").oninput = syncWager;
   $("choose").onchange = syncInputs;
@@ -159,7 +194,7 @@ function syncInputs() {
   const single = $("input").value === "snap" || $("choose").value === "player";
   $("rounds").disabled = single;
   if (single) $("rounds").value = 1;
-  $("value").placeholder = $("input").value === "snap" ? "某一段的 start_b64u（只保證第 0 段）" : "空白隨機｜整數｜hex:…｜utf8:…";
+  $("value").placeholder = $("input").value === "snap" ? "某個 Cycle 的 start_b64u（只保證 Cycle 0）" : "空白隨機｜整數｜hex:…｜utf8:…";
 }
 
 // 投注倍數 1～max_bet_mult；投注額 = 押注單位 × 倍數
@@ -197,13 +232,16 @@ async function spin() {
   };
   try {
     const rep = await api("spin", req);
-    state.request = { gid: req.gid, betmode: req.betmode, betmult: req.betmult, choose: req.choose };
+    state.request = {
+      gid: req.gid, betmode: req.betmode, betmult: req.betmult, choose: req.choose,
+      input: req.input, value: rep.input === "seed" ? rep.seed : req.value, rounds: rep.rounds,
+    };
     $("betmult").value = req.betmult; // 超出範圍的輸入顯示成實際使用的倍數
     syncWager();
     state.bets = rep.bets || [];
     const notes = [];
     if (rep.input === "seed") notes.push(`seed ${rep.seed}`);
-    else notes.push(rep.partial_replay ? "snap 回放（只保證第 0 段）" : "snap 回放");
+    else notes.push(rep.partial_replay ? "snap 回放（只保證 Cycle 0）" : "snap 回放");
     if (rep.clamped) notes.push(`已限制為 ${rep.rounds} 局`);
     $("status").textContent = notes.join("｜");
     renderSummary();
@@ -252,6 +290,11 @@ function flatten(b) {
 
 function selectBet(i) {
   stop();
+  showBet(i);
+}
+
+// 換到第 i 局的第 1 步；連播換局時不停止播放
+function showBet(i) {
   if (i < 0 || i >= state.bets.length) return;
   state.betIdx = i;
   state.steps = flatten(state.bets[i]);
@@ -260,6 +303,38 @@ function selectBet(i) {
   state.boardKey = null; // 重新 Spin 後同一個位置也要重播首盤高亮
   markActiveResult();
   render();
+}
+
+// 局列表上 dir 方向（-1 上一局、1 下一局）的下一個看得到的局；「只看有贏分」時跳過沒有贏分的局
+function nextBet(dir) {
+  const onlyWin = $("only-win").checked;
+  for (let i = state.betIdx + dir; i >= 0 && i < state.bets.length; i += dir) {
+    if (!onlyWin || state.bets[i].win > 0) return i;
+  }
+  return -1;
+}
+
+// 同一段、同一個 mode、同一個 round 的步屬於同一個 round
+function roundKey(s) {
+  return `${s.segIdx}:${s.modeIdx}:${s.act.round}`;
+}
+
+function roundStart(i) {
+  const key = roundKey(state.steps[i]);
+  while (i > 0 && roundKey(state.steps[i - 1]) === key) i--;
+  return i;
+}
+
+// dir 1：下一個 round 的第一步；dir -1：上一個 round 的第一步，已經在第一個 round 時回到第 1 步
+function goRound(dir) {
+  if (!state.steps.length) return;
+  if (dir < 0) {
+    const start = roundStart(state.stepIdx);
+    return go(start > 0 ? roundStart(start - 1) : 0);
+  }
+  const key = roundKey(state.steps[state.stepIdx]);
+  const i = state.steps.findIndex((s, j) => j > state.stepIdx && roundKey(s) !== key);
+  go(i < 0 ? state.steps.length - 1 : i);
 }
 
 function go(i) {
@@ -271,14 +346,40 @@ function go(i) {
 
 function togglePlay() {
   if (state.timer) return stop();
+  if (!state.steps.length) return;
   if (state.stepIdx >= state.steps.length - 1) go(0);
   $("play").textContent = "⏸ 暫停";
+  // 播完這局：單局模式、這局停在選擇點，或已經是最後一局時停止；否則換到局列表的下一局
   const tick = () => {
-    if (state.stepIdx >= state.steps.length - 1) return stop();
-    go(state.stepIdx + 1);
-    state.timer = setTimeout(tick, Number($("speed").value));
+    if (state.stepIdx < state.steps.length - 1) {
+      go(state.stepIdx + 1);
+    } else {
+      const next = state.chain && state.bets[state.betIdx].isend ? nextBet(1) : -1;
+      if (next < 0) return stop();
+      showBet(next);
+    }
+    state.timer = setTimeout(tick, SPEEDS[state.speed].ms);
   };
-  state.timer = setTimeout(tick, Number($("speed").value));
+  state.timer = setTimeout(tick, SPEEDS[state.speed].ms);
+}
+
+// 套用主題並記住選擇；跟隨系統時依目前的系統設定。index.html 開頭的 script 在畫面出現前先套用一次
+function setTheme(theme) {
+  state.theme = THEMES[theme] ? theme : "system";
+  remember("dev.theme", state.theme);
+  const dark = state.theme === "dark" || (state.theme === "system" && systemDark.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  const t = THEMES[state.theme];
+  $("theme-btn").title = `主題：${t.label}（按一下切換）`;
+  $("theme-btn").setAttribute("aria-label", `主題：${t.label}`);
+  $("theme-btn").innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${t.icon}</svg>`;
+}
+
+// 播放中換檔從下一步開始生效
+function setSpeed(level) {
+  state.speed = ((level % SPEEDS.length) + SPEEDS.length) % SPEEDS.length;
+  $("speed").title = `速度 ${SPEEDS[state.speed].name}（+）`;
+  $("speed").querySelectorAll("button").forEach((btn, i) => btn.classList.toggle("on", i <= state.speed));
 }
 
 function stop() {
@@ -287,32 +388,82 @@ function stop() {
   $("play").textContent = "▶ 播放";
 }
 
+function symModeText() {
+  return state.symMode === "id" ? "SymbolID" : "SymbolName";
+}
+
 // 切換格子與中獎明細顯示名稱或 ID；記住上次的選擇
 function setSymMode(mode) {
   state.symMode = mode === "id" ? "id" : "name";
-  $("symmode").value = state.symMode;
+  $("symmode").textContent = symModeText();
   remember("dev.symmode", state.symMode);
   const ctx = context();
   renderBoard(ctx);
   renderDetails(ctx);
 }
 
-// Space／Enter：Spin；←／→：上一步／下一步；I：切換名稱／ID。輸入框裡打字和選單操作不攔。
+// 快捷鍵一覽在 index.html 的說明面板（#help）。輸入框裡打字和選單操作不攔；Enter 在輸入框裡也執行 Spin。
 function onKey(e) {
   const t = e.target;
   const typing = t.matches("input:not([type=checkbox]), select");
   if (e.key === "Enter" || (e.key === " " && !typing)) {
     e.preventDefault(); // 避免同時觸發焦點所在的按鈕
     spin();
-  } else if (!typing && e.key === "ArrowLeft") {
-    e.preventDefault();
-    go(state.stepIdx - 1);
-  } else if (!typing && e.key === "ArrowRight") {
-    e.preventDefault();
-    go(state.stepIdx + 1);
-  } else if (!typing && (e.key === "i" || e.key === "I") && !e.metaKey && !e.ctrlKey && !e.altKey) {
-    setSymMode(state.symMode === "id" ? "name" : "id");
+    return;
   }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  const help = $("help");
+  const keys = {
+    ArrowLeft: () => (e.shiftKey ? goRound(-1) : go(state.stepIdx - 1)),
+    ArrowRight: () => (e.shiftKey ? goRound(1) : go(state.stepIdx + 1)),
+    ArrowUp: () => { const i = nextBet(-1); if (i >= 0) selectBet(i); },
+    ArrowDown: () => { const i = nextBet(1); if (i >= 0) selectBet(i); },
+    Home: () => go(0),
+    End: () => go(state.steps.length - 1),
+    p: togglePlay,
+    P: togglePlay,
+    "+": () => setSpeed(state.speed + 1),
+    "=": () => setSpeed(state.speed + 1), // 美式鍵盤上不按 Shift 的 + 鍵
+    i: () => setSymMode(state.symMode === "id" ? "name" : "id"),
+    I: () => setSymMode(state.symMode === "id" ? "name" : "id"),
+    "?": () => help.togglePopover(),
+    Escape: () => {
+      if (help.matches(":popover-open")) return help.hidePopover();
+      state.pinned.clear();
+      renderBoard(context());
+    },
+  };
+  const fn = keys[e.key];
+  if (!fn) return;
+  e.preventDefault(); // 方向鍵、Home／End 不捲動整頁
+  fn();
+}
+
+// 目前這一步的網址：載入後以同一組參數執行，再跳到這一局的這一步
+function stepLink() {
+  const r = state.request;
+  if (!r || state.betIdx < 0) return location.origin + location.pathname;
+  const q = new URLSearchParams({
+    gid: r.gid, betmode: r.betmode, betmult: r.betmult, choose: r.choose, input: r.input, value: r.value,
+    rounds: r.rounds, spin: 1, bet: state.betIdx + 1, step: state.stepIdx + 1,
+  });
+  if (state.symMode === "id") q.set("symmode", "id");
+  return `${location.origin}${location.pathname}?${q}`;
+}
+
+// 只在重現不完整時顯示 ⚠，說明放在滑鼠提示，不撐寬控制列
+function showLinkNote(note) {
+  $("link-note").hidden = !note;
+  $("link-note").title = note;
+}
+
+// 網址重現不了第 1 段以後的局：player 的選擇不在網址裡；Snap 只保證第 0 段
+function linkNote() {
+  const b = state.bets[state.betIdx];
+  if (!b || b.segments.length < 2 || !state.request) return "";
+  if (state.request.choose === "player") return "player 的選擇不在網址裡，只重現到 Cycle 0";
+  if (state.request.input === "snap") return "Snap 只重現到 Cycle 0";
+  return "";
 }
 
 // 只捲動容器本身，不帶動整頁，盤面才不會跳
@@ -330,7 +481,7 @@ async function pick(position) {
   const b = state.bets[state.betIdx];
   const last = b.segments[b.segments.length - 1];
   if (b.segments.length >= state.meta.max_segments) {
-    $("status").textContent = `錯誤：一局最多 ${state.meta.max_segments} 段`;
+    $("status").textContent = `錯誤：一局最多 ${state.meta.max_segments} 個 Cycle`;
     return;
   }
   $("status").textContent = "執行中…";
@@ -348,7 +499,7 @@ async function pick(position) {
     b.segments.push(rep.segment);
     b.win += rep.segment.win;
     b.isend = rep.segment.isend;
-    $("status").textContent = b.isend ? `第 ${b.index} 局結束，總贏分 ${b.win}` : "請選擇下一段";
+    $("status").textContent = b.isend ? `第 ${b.index} 局結束，總贏分 ${b.win}` : "請選擇下一個 Cycle";
     const from = state.steps.length;
     state.steps = flatten(b);
     state.stepIdx = Math.min(from, state.steps.length - 1);
@@ -374,6 +525,7 @@ function context() {
     bet: state.bets[state.betIdx],
     segment: step.segment,
     segIdx: step.segIdx,
+    modeIdx: step.modeIdx,
     mode: step.mode,
     act: step.act,
     ext: step.ext,
@@ -390,6 +542,13 @@ function plugin() {
   return DEV.plugins[state.game.gid] || {};
 }
 
+// 「State 1 · ModeID 2 [FreeGame]」中 State 後面的部分。State 是這一段 gamemodes 的索引，
+// ModeID 是設定檔 game_mode_settings 的索引；名稱由外掛的 modes 提供，沒有就省略
+function stateLabel(modeIdx, mode) {
+  const name = (plugin().modes || {})[mode.modeid];
+  return `${modeIdx} · ModeID ${mode.modeid}${name ? ` [${name}]` : ""}`;
+}
+
 function render() {
   const ctx = context();
   renderInfo(ctx);
@@ -400,26 +559,31 @@ function render() {
   renderDTO(ctx);
 }
 
-// 本局 DTO：每一段的 start_b64u 是該段實際使用的起始快照；「回放這局」以每一段的快照逐段重跑
+// 分成兩塊：「Cycle N 快照」是目前這一步所在的 Cycle（段），換步到別的 Cycle 時跟著換；
+// 「本局 DTO」是整局，「回放這局」以每個 Cycle 的快照逐一重跑
 function renderDTO(ctx) {
   const b = state.bets[state.betIdx];
   if (!b || !ctx) {
+    $("cycle-title").textContent = "本 Cycle 快照";
+    $("cycle-dto").innerHTML = "";
     $("dto").innerHTML = "";
     $("raw-dto").textContent = "";
     return;
   }
   const seg = ctx.segment;
   const st = seg.spin_state || {};
-  const multi = b.segments.length > 1;
-  let html = multi ? `<div class="seg-title">第 ${ctx.segIdx} 段（共 ${b.segments.length} 段）</div>` : "";
-  html +=
-    `<div class="muted">start_b64u（本段起始快照）</div><code class="snap">${esc(st.start_b64u || "")}</code>` +
-    `<div class="muted">after_b64u（本段結束後）</div><code class="snap">${esc(st.after_b64u || "")}</code>` +
-    (st.cp !== undefined ? `<div class="muted">cp（本段輸出的 checkpoint）</div><code class="snap">${esc(JSON.stringify(st.cp))}</code>` : "") +
+  $("cycle-title").textContent = `Cycle ${ctx.segIdx} 快照` + (b.segments.length > 1 ? `（共 ${b.segments.length} 個 Cycle）` : "");
+  $("cycle-dto").innerHTML =
+    `<div class="muted">start_b64u（起始快照）</div><code class="snap">${esc(st.start_b64u || "")}</code>` +
+    `<div class="muted">after_b64u（結束後）</div><code class="snap">${esc(st.after_b64u || "")}</code>` +
+    (st.cp !== undefined ? `<div class="muted">cp（輸出的 checkpoint）</div><code class="snap">${esc(JSON.stringify(st.cp))}</code>` : "") +
     `<div class="btns">` +
-    (ctx.segIdx === 0 ? `<button id="dto-snap" title="輸入切到 Snap，只保證第 0 段">用這段快照重跑</button>` : "") +
     `<button id="dto-copy-snap">複製 start_b64u</button>` +
-    `<button id="dto-replay" title="以每一段的快照逐段重跑，整局完全重現">回放這局</button>` +
+    (ctx.segIdx === 0 ? `<button id="dto-snap" title="輸入切到 Snap，只保證 Cycle 0">用這個快照重跑</button>` : "") +
+    `</div>`;
+  let html =
+    `<div class="btns">` +
+    `<button id="dto-replay" title="以每個 Cycle 的快照逐一重跑，整局完全重現">回放這局</button>` +
     `<button id="dto-copy">複製完整 DTO</button></div>`;
   if (state.replay) html += `<div class="replay-result ${state.replay.ok ? "ok" : "bad"}">${esc(state.replay.text)}</div>`;
   $("dto").innerHTML = html;
@@ -458,8 +622,8 @@ async function replayBet(b) {
     const got = rep.bet.segments;
     const bad = b.segments.findIndex((s, i) => JSON.stringify(s) !== JSON.stringify(got[i]));
     state.replay = bad < 0
-      ? { ok: true, text: `回放一致：${got.length} 段完全相同` }
-      : { ok: false, text: `回放不一致：第 ${bad} 段不同` };
+      ? { ok: true, text: `回放一致：${got.length} 個 Cycle 完全相同` }
+      : { ok: false, text: `回放不一致：Cycle ${bad} 不同` };
   } catch (e) {
     state.replay = { ok: false, text: "回放失敗：" + e.message };
   }
@@ -484,7 +648,7 @@ function renderResults() {
     .map((b, i) => {
       if (onlyWin && !(b.win > 0)) return "";
       const fg = b.segments.some((s) => (s.gamemodes || []).length > 1) ? `<span class="tag">FG</span>` : "";
-      const seg = b.segments.length > 1 ? ` <span class="tag">${b.segments.length} 段</span>` : "";
+      const seg = b.segments.length > 1 ? ` <span class="tag" title="${b.segments.length} 個 Cycle">C×${b.segments.length}</span>` : "";
       const open = b.isend ? "" : ` <span class="tag">進行中</span>`;
       const mult = b.bet ? (b.win / b.bet).toFixed(2) : "0";
       return `<li data-i="${i}"><span>#${b.index} ${fg}${seg}${open}</span><span>${b.win}（×${mult}）</span></li>`;
@@ -508,14 +672,15 @@ function renderInfo(ctx) {
   if (!ctx) {
     $("info").innerHTML = `<span class="muted">按 Spin 產生結果，再從左邊選一局。</span>`;
     $("pos").textContent = "";
+    showLinkNote("");
     return;
   }
-  const { bet, segIdx, mode, act } = ctx;
+  const { bet, segIdx, modeIdx, mode, act } = ctx;
   const items = [
     ["押注", state.request.betmult > 1 ? `${bet.bet}（×${state.request.betmult}）` : bet.bet],
     ["總贏分", bet.win],
-    ["段", bet.segments.length > 1 ? `${segIdx}（共 ${bet.segments.length} 段）` : "0"],
-    ["Mode", `${mode.modeid}${mode.trigger ? `（觸發 ${mode.trigger}）` : ""}`],
+    ["Cycle", bet.segments.length > 1 ? `${segIdx}（共 ${bet.segments.length}）` : "0"],
+    ["State", stateLabel(modeIdx, mode) + (mode.trigger ? `（觸發 ${mode.trigger}）` : "")],
     ["round", act.round],
     ["step", act.step],
     ["act", `${act.act} ${act.acttype}`],
@@ -523,8 +688,9 @@ function renderInfo(ctx) {
     ["step 累積", act.stepaccwin],
     ["round 累積", act.roundaccwin],
   ];
-  $("info").innerHTML = items.map(([k, v]) => `<span><span class="muted">${k}</span> <b>${esc(v)}</b></span>`).join("");
+  $("info").innerHTML = items.map(([k, v]) => `<span title="${esc(`${k} ${v}`)}"><span class="muted">${k}</span> <b>${esc(v)}</b></span>`).join("");
   $("pos").textContent = `${state.stepIdx + 1} / ${state.steps.length}`;
+  showLinkNote(linkNote());
 }
 
 // H、L 依編號套色序 tone-1～tone-6，7 以後從 tone-1 重來並加上 faded；顏色都在 app.css 的變數，
@@ -614,19 +780,19 @@ function renderTimeline() {
   const p = plugin();
   const ctxBase = context();
   const b = state.bets[state.betIdx];
-  const segs = []; // [{segIdx, segment, modes: [{mode, rounds: [{round, items: [[step, i]]}]}]}]
+  const segs = []; // [{segIdx, segment, modes: [{modeIdx, mode, rounds: [{round, items: [[step, i]]}]}]}]
   state.steps.forEach((s, i) => {
     let sg = segs[segs.length - 1];
     if (!sg || s.segStart) segs.push((sg = { segIdx: s.segIdx, segment: s.segment, modes: [] }));
     let g = sg.modes[sg.modes.length - 1];
-    if (!g || s.modeStart) sg.modes.push((g = { mode: s.mode, rounds: [] }));
+    if (!g || s.modeStart) sg.modes.push((g = { modeIdx: s.modeIdx, mode: s.mode, rounds: [] }));
     let r = g.rounds[g.rounds.length - 1];
     if (!r || r.round !== s.act.round) g.rounds.push((r = { round: s.act.round, items: [] }));
     r.items.push([s, i]);
   });
   const showSeg = b && (b.segments.length > 1 || !b.isend);
   const modeHTML = (g) => {
-    const head = `Mode ${g.mode.modeid}` +
+    const head = `State ${esc(stateLabel(g.modeIdx, g.mode))}` +
       ` <span class="muted">贏分 ${g.mode.win}${g.mode.trigger ? `｜觸發 ${g.mode.trigger}` : ""}</span>`;
     const rounds = g.rounds
       .map((r) => {
@@ -652,14 +818,14 @@ function renderTimeline() {
       const modes = sg.modes.map(modeHTML).join("");
       if (!showSeg) return modes;
       const picked = sg.segIdx > 0 && sg.segment.choice !== undefined ? `｜選 #${sg.segment.choice}` : "";
-      const head = `段 ${sg.segIdx} <span class="muted">贏分 ${sg.segment.win}${picked}${sg.segment.isend ? "" : "｜結束於選擇點"}</span>`;
+      const head = `Cycle ${sg.segIdx} <span class="muted">贏分 ${sg.segment.win}${picked}${sg.segment.isend ? "" : "｜結束於選擇點"}</span>`;
       return `<div class="tl-seg"><div class="tl-seg-head">${head}</div>${modes}</div>`;
     })
     .join("");
   // player：這局停在選擇點時列出選項
   if (b && !b.isend) {
     const last = b.segments[b.segments.length - 1];
-    html += `<div class="choices"><span class="muted">選擇下一段：</span>` +
+    html += `<div class="choices"><span class="muted">選擇下一個 Cycle：</span>` +
       (last.choose_next || []).map((entry, i) => `<button data-choice="${i}" title="位置 ${i}，入口 ${entry}">#${i} → ${esc(entry)}</button>`).join("") +
       `</div>`;
   }

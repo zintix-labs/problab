@@ -15,6 +15,7 @@
 
   DEV.register(2, {
     title: "demo_choice 資訊",
+    modes: { 0: "BaseGame", 1: "FG-A", 2: "FG-B" },
     cellClass: (idx, ctx) => (scatters(ctx).includes(idx) ? ["mark"] : []),
     badge: (idx, ctx) => (scatters(ctx).includes(idx) ? "S" : ""),
     panel(ctx) {
