@@ -156,6 +156,7 @@ async function init() {
   $("choose").onchange = syncInputs;
   $("input").onchange = syncInputs;
   $("spin").onclick = () => spin();
+  $("seed-copy").onclick = (e) => copy($("seed-copy").dataset.seed, e.currentTarget);
   initStats();
   $("win-filter").onchange = () => {
     remember("dev.winfilter", $("win-filter").checked ? "1" : "0");
@@ -272,9 +273,12 @@ async function spin(opts = {}) {
       state.bets.forEach((b) => (b.record = true));
       statsAddEnded(state.bets);
     }
+    // 實際使用的 seed 不寫在狀態列，改由「seed」按鈕複製
+    $("seed-copy").hidden = rep.input !== "seed";
+    $("seed-copy").title = rep.input === "seed" ? `複製這批的 seed：${rep.seed}` : "";
+    $("seed-copy").dataset.seed = rep.input === "seed" ? rep.seed : "";
     const notes = [];
-    if (rep.input === "seed") notes.push(`seed ${rep.seed}`);
-    else notes.push(rep.partial_replay ? "snap 回放（只保證 Cycle 0）" : "snap 回放");
+    if (rep.input !== "seed") notes.push(rep.partial_replay ? "snap 回放（只保證 Cycle 0）" : "snap 回放");
     if (rep.clamped) notes.push(`已限制為 ${rep.rounds} 局`);
     $("status").textContent = notes.join("｜");
     renderSummary();
@@ -677,9 +681,9 @@ async function replayBet(b) {
 async function copy(text, btn) {
   try {
     await navigator.clipboard.writeText(text);
-    const old = btn.textContent;
+    const old = btn.innerHTML; // 按鈕裡可能有圖示，整段換回
     btn.textContent = "已複製";
-    setTimeout(() => (btn.textContent = old), 1000);
+    setTimeout(() => (btn.innerHTML = old), 1000);
   } catch {
     window.prompt("複製下面的內容", text);
   }

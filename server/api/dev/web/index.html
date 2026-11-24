@@ -19,11 +19,15 @@
 </head>
 <body>
   <header class="bar">
-    <strong class="brand">ProbLab Dev</strong>
+    <strong class="brand">ProbLab</strong>
+    <!-- 頂部欄分三組，寬度不夠時整組換行：機台與押注、執行、資金與工具 -->
+    <span class="bar-group">
     <label>機台 <select id="game"></select></label>
     <label>押注模式 <select id="betmode"></select></label>
     <label>倍數 <input id="betmult" type="number" min="1" max="100" value="1" title="投注倍數；投注額 = 押注單位 × 倍數" /></label>
     <span id="wager" class="muted"></span>
+    </span>
+    <span class="bar-group">
     <label>選擇方式
       <select id="choose" title="選擇類遊戲遇到選擇點時的處理方式">
         <option value="first">first</option>
@@ -40,10 +44,16 @@
     <input id="value" placeholder="空白隨機｜整數｜hex:…｜utf8:…" />
     <label>局數 <input id="rounds" type="number" min="1" value="50" /></label>
     <button id="spin" class="primary" title="Space／Enter">Spin</button>
+    <!-- 這批實際使用的 seed 不直接顯示，按一下複製；滑鼠提示看得到值 -->
+    <button id="seed-copy" class="seed-copy" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></svg> seed</button>
     <span id="status" class="muted"></span>
+    </span>
+    <span class="bar-group bar-tools">
+    <button id="funds-chip" class="funds-chip" title="玩家剩餘資金：起始資金 + 累計淨輸贏（按一下打開玩家統計）"><span class="muted">資金</span> <b id="funds-val">—</b></button>
     <button id="stats-btn" class="stats-btn" title="玩家統計（S）" aria-label="玩家統計"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18" /><path d="M7 15l4-5 3 3 5-7" /></svg></button>
     <button id="theme-btn" class="theme-btn"></button>
     <button id="help-btn" class="help-btn" popovertarget="help" title="快捷鍵（?）" aria-label="快捷鍵說明"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8" /></svg></button>
+    </span>
   </header>
 
   <div id="help" class="help" popover>
@@ -83,7 +93,7 @@
     <div id="stats-nums" class="stats-nums"></div>
     <div class="stats-chart-head">
       <span id="stats-view" class="stats-view" role="group" aria-label="走勢圖">
-        <button data-view="funds">資金</button><button data-view="rtp">RTP</button>
+        <button data-view="funds">資金</button><button data-view="rtp">資金 RTP</button><button data-view="mrtp">倍率 RTP</button>
       </span>
       <span id="stats-legend"></span>
       <span id="stats-hover" class="muted"></span>

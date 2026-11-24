@@ -122,7 +122,10 @@ function statsAddEnded(bets) {
     bet: b.bet, win: b.win, fg: hasFG(b), segs: replaySegments(b), h: betHash(b),
   }));
   statsAppend(items)
-    .then(() => { if ($("stats").open) refreshStats(); })
+    .then(() => {
+      renderFundsChip();
+      if ($("stats").open) refreshStats();
+    })
     .catch((e) => ($("status").textContent = "統計寫入失敗：" + e.message));
 }
 
@@ -182,6 +185,22 @@ async function loadReplayLink(q) {
   }
 }
 
+// ---------- 頂部欄的剩餘資金 ----------
+
+// 只讀最後一筆就夠：累計淨輸贏跟著每一筆紀錄走
+async function statsLast() {
+  const db = await statsDB();
+  if (!db) return null;
+  return statsTx(db, "readonly", (st, done) => (st.openCursor(null, "prev").onsuccess = (e) => done(e.target.result ? e.target.result.value : null)));
+}
+
+async function renderFundsChip() {
+  const last = await statsLast().catch(() => null);
+  const v = statsFunds() + (last ? last.net : 0);
+  $("funds-val").textContent = fmtNum(v);
+  $("funds-chip").classList.toggle("neg", v < 0);
+}
+
 // ---------- 面板 ----------
 
 function initStats() {
@@ -192,10 +211,15 @@ function initStats() {
   if (winMin !== null && winMin !== "") $("stats-win-min").value = winMin;
 
   $("stats-btn").onclick = toggleStats;
+  $("funds-chip").onclick = openStats;
+  renderFundsChip();
+  // 別的分頁也可能寫入統計，回到這個分頁時更新剩餘資金
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) renderFundsChip(); });
   $("stats-close").onclick = () => $("stats").close();
   $("stats-funds").oninput = () => {
     remember("dev.funds", $("stats-funds").value);
     renderStats();
+    renderFundsChip();
   };
   $("stats-reset").onclick = resetStats;
   $("stats-view").onclick = (e) => {
@@ -276,6 +300,7 @@ async function resetStats() {
   if (db) await statsTx(db, "readwrite", (st) => st.clear());
   stats.shown = STATS_PAGE;
   await refreshStats();
+  renderFundsChip();
 }
 
 function statsFunds() {
@@ -328,19 +353,15 @@ function renderStats() {
   renderStatsList();
 }
 
-// 走勢圖的每條線：資金一條；RTP 兩條（資金 RTP、倍率 RTP）
+// 走勢圖一次畫一條線，三種視圖都用主題綠，靠切換按鈕與圖例標明目前是哪一個
 function statsSeries(funds) {
   if (stats.view === "rtp") {
-    return {
-      lines: [
-        { cls: "s-a", name: "資金 RTP", get: (r) => (r.cb > 0 ? (100 * r.cw) / r.cb : 0) },
-        { cls: "s-b", name: "倍率 RTP", get: (r) => (100 * r.cm) / r.n },
-      ],
-      refs: [100],
-      fmt: fmtPct,
-    };
+    return { lines: [{ cls: "s-a", name: "資金 RTP", get: (r) => (r.cb > 0 ? (100 * r.cw) / r.cb : 0) }], hint: "總贏分 ÷ 總押注", refs: [100], fmt: fmtPct, rtp: true };
   }
-  return { lines: [{ cls: "s-a", name: "資金", get: (r) => funds + r.net }], refs: [funds, 0], fmt: (v) => fmtNum(v) };
+  if (stats.view === "mrtp") {
+    return { lines: [{ cls: "s-a", name: "倍率 RTP", get: (r) => (100 * r.cm) / r.n }], hint: "每局贏倍的平均", refs: [100], fmt: fmtPct, rtp: true };
+  }
+  return { lines: [{ cls: "s-a", name: "資金", get: (r) => funds + r.net }], hint: "起始資金 + 累計淨輸贏", refs: [funds, 0], fmt: (v) => fmtNum(v) };
 }
 
 const CHART = { h: 220, l: 72, r: 14, t: 12, b: 24 };
@@ -362,7 +383,7 @@ function renderStatsChart() {
   const ph = CHART.h - CHART.t - CHART.b;
   const vals = s.lines.map((ln) => recs.map(ln.get));
   // RTP 在開頭幾局會劇烈跳動（第一局 ×20 就是 2000%），縱軸範圍跳過開頭 5%（最多 200 局）再決定，超出的部分在圖框邊緣截掉
-  const from = stats.view === "rtp" && recs[0].n === 1 ? Math.min(Math.floor(recs.length * 0.05), 200) : 0;
+  const from = s.rtp && recs[0].n === 1 ? Math.min(Math.floor(recs.length * 0.05), 200) : 0;
   let lo = Infinity, hi = -Infinity;
   vals.forEach((v) => { for (let i = from; i < v.length; i++) { if (v[i] < lo) lo = v[i]; if (v[i] > hi) hi = v[i]; } });
   // 參考線只在範圍附近時納入，避免為了畫 0 把曲線壓扁
@@ -387,8 +408,12 @@ function renderStatsChart() {
     return d;
   };
   const ticks = [hi - padY, (hi + lo) / 2, lo + padY];
+  // 山形圖：線下方填一層由上往下淡出的漸層
+  const fades = s.lines.map((ln, k) =>
+    `<linearGradient id="stats-fade-${k}" class="fade" x1="0" y1="0" x2="0" y2="1">` +
+    `<stop offset="0" stop-opacity="0.32" /><stop offset="1" stop-opacity="0" /></linearGradient>`).join("");
   let svg = `<svg width="${W}" height="${CHART.h}" viewBox="0 0 ${W} ${CHART.h}" aria-label="走勢圖">` +
-    `<clipPath id="stats-clip"><rect x="${CHART.l}" y="${CHART.t}" width="${pw}" height="${ph}" /></clipPath>`;
+    `<defs>${fades}<clipPath id="stats-clip"><rect x="${CHART.l}" y="${CHART.t}" width="${pw}" height="${ph}" /></clipPath></defs>`;
   ticks.forEach((t) => {
     svg += `<line class="grid" x1="${CHART.l}" x2="${W - CHART.r}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" />` +
       `<text class="axis" x="${CHART.l - 8}" y="${(y(t) + 4).toFixed(1)}" text-anchor="end">${esc(s.fmt(t))}</text>`;
@@ -397,7 +422,10 @@ function renderStatsChart() {
     if (ref < lo || ref > hi) return;
     svg += `<line class="ref" x1="${CHART.l}" x2="${W - CHART.r}" y1="${y(ref).toFixed(1)}" y2="${y(ref).toFixed(1)}" />`;
   });
-  vals.forEach((v, k) => (svg += `<path class="line ${s.lines[k].cls}" d="${path(v)}" clip-path="url(#stats-clip)" />`));
+  const base = CHART.t + ph;
+  const lines = vals.map((v) => path(v));
+  lines.forEach((d, k) => (svg += `<path class="area" d="${d}L${CHART.l + pw},${base}L${CHART.l},${base}Z" fill="url(#stats-fade-${k})" clip-path="url(#stats-clip)" />`));
+  lines.forEach((d, k) => (svg += `<path class="line ${s.lines[k].cls}" d="${d}" clip-path="url(#stats-clip)" />`));
   if (stats.view === "funds") {
     const bust = statsBust(funds);
     if (bust && !bust.early) svg += `<circle class="bust-dot" cx="${x(bust.index).toFixed(1)}" cy="${y(vals[0][bust.index]).toFixed(1)}" r="4.5"><title>第 ${bust.n} 局破產</title></circle>`;
@@ -408,7 +436,7 @@ function renderStatsChart() {
     s.lines.map((ln, k) => `<circle class="guide-dot ${ln.cls}" data-k="${k}" r="3.5" visibility="hidden" />`).join("") +
     `</svg>`;
   box.innerHTML = svg;
-  legend.innerHTML = s.lines.map((ln) => `<span class="legend ${ln.cls}"><i></i>${esc(ln.name)}</span>`).join("");
+  legend.innerHTML = s.lines.map((ln) => `<span class="legend ${ln.cls}"><i></i>${esc(ln.name)}</span>`).join("") + `<span class="muted">${esc(s.hint)}</span>`;
   stats.chart = { x, y, vals, s, pw };
   statsHover(null);
 }

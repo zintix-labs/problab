@@ -117,7 +117,7 @@ button.primary {
 button.primary:hover { background: var(--primary-hover); }
 input[type=number] { width: 84px; }
 input[type=checkbox] { height: auto; box-shadow: none; accent-color: var(--primary); }
-#value { width: 280px; }
+#value { width: 180px; }
 #betmult { width: 64px; }
 input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
 .muted { color: var(--muted); }
@@ -129,13 +129,20 @@ label.inline { font-size: 13px; }
 
 /* ---------- 版面 ---------- */
 .bar {
-  display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+  display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center;
   margin: 12px 16px 0; padding: 10px 14px;
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
 }
 .brand { font-weight: 600;  margin-right: 8px; }
-/* 統計、主題與說明按鈕靠右；margin 放在第一個，狀態列文字變長變短時它們才不會跟著移動 */
-.stats-btn { margin-left: auto; }
+/* 資金、統計、主題與說明按鈕一組靠右（.bar-tools），狀態列文字變長變短時它們不會跟著移動 */
+.bar-group { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: center; }
+.bar-tools { margin-left: auto; gap: 8px; }
+.funds-chip { font-variant-numeric: tabular-nums; }
+.funds-chip b { font-weight: 600; }
+.funds-chip.neg b { color: #dc2626; }
+:root:where([data-theme="dark"]) .funds-chip.neg b { color: #f87171; }
+.seed-copy { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; font-size: 13px; color: var(--muted); }
+.seed-copy[hidden] { display: none; }
 .help-btn, .theme-btn, .stats-btn { padding: 0 8px; display: inline-flex; align-items: center; }
 #status.warn { color: #dc2626; }
 :root:where([data-theme="dark"]) #status.warn { color: #f87171; }
@@ -437,21 +444,23 @@ button.danger:hover { background: #b91c1c; }
 .stats-view { display: inline-flex; }
 .stats-view button { height: 28px; font-size: 13px; border-radius: 0; }
 .stats-view button:first-child { border-radius: 8px 0 0 8px; }
-.stats-view button:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+.stats-view button + button { margin-left: -1px; }
+.stats-view button:last-child { border-radius: 0 8px 8px 0; }
 .stats-view button.on { background: var(--primary-soft); color: var(--primary-ink); border-color: var(--primary); position: relative; }
 #stats-hover { margin-left: auto; font-variant-numeric: tabular-nums; }
 .legend { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; }
 .legend i { width: 14px; height: 3px; border-radius: 2px; background: currentColor; }
 .legend.s-a { color: var(--primary-ink); }
-.legend.s-b { color: #3b82f6; }
 /* 走勢圖用 margin 留邊，clientWidth 才等於實際可畫的寬度 */
 .stats > .stats-chart { height: 220px; flex: none; margin: 6px 18px 0; padding: 0; position: relative; }
 .stats-chart svg { display: block; }
-.stats-chart .line { fill: none; stroke-width: 1.6; stroke-linejoin: round; }
+.stats-chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .stats-chart .s-a { stroke: var(--primary-ink); fill: var(--primary-ink); }
-.stats-chart .s-b { stroke: #3b82f6; fill: #3b82f6; }
-.stats-chart .line.s-a, .stats-chart .line.s-b { fill: none; }
-.stats-chart .grid { stroke: var(--border); stroke-width: 1; }
+.stats-chart .line.s-a { fill: none; }
+.stats-chart .grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 5; }
+/* 山形圖：線下方由上往下漸層到透明 */
+.stats-chart .area { stroke: none; }
+.stats-chart .fade stop { stop-color: var(--primary-ink); }
 .stats-chart .ref { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; opacity: .7; }
 .stats-chart .axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .stats-chart .guide { stroke: var(--muted); stroke-width: 1; }
