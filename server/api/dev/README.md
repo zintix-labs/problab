@@ -42,7 +42,7 @@ Ctrl+C 結束；仍有連線時最多等 5 秒。
 
 盤面下方的控制列分三組：左邊是步進（⏮ ◀ 目前步數 ▶ ⏭），中間是播放（播放、速度、單局／連續），右邊是檢視與分享（SymbolName／SymbolID、複製連結）。兩段切換的按鈕只寫目前的值，按一下切換。
 
-播放速度固定三檔：normal（預設，每步 1350 ms）、fast（650 ms）、turbo（200 ms）。盤面下方亮幾個箭頭就是第幾檔，點第幾個就切到第幾檔。預設是「單局」，只播完這一局；切到「連續」後接著播局列表的下一局（同樣依「只看有贏分」篩選），播到最後一局或停在選擇點（player）的局就停，不會自動 Spin。手動換局會停止播放，手動換步不會。
+播放速度固定三檔：normal（預設，每步 1350 ms）、fast（650 ms）、turbo（200 ms）。換步時盤面會播落下動態（見下方「落下動態」），normal 與 fast 依速度縮短，turbo 不播；系統設定「減少動態效果」時也不播。盤面下方亮幾個箭頭就是第幾檔，點第幾個就切到第幾檔。預設是「單局」，只播完這一局；切到「連續」後接著播局列表的下一局（同樣依「只看有贏分」篩選），播到最後一局或停在選擇點（player）的局就停，不會自動 Spin。手動換局會停止播放，手動換步不會。
 
 盤面下方的 SymbolName／SymbolID 按鈕（或按 I）切換格子與「本步中獎」的圖標欄要寫名稱（`H1`）還是盤面上的 ID（該 mode `symbols` 的索引，也就是後端陣列裡的數字）；ID 模式下空格與不存在的格子也寫出原始值，方便逐格比對。滑鼠移到格子上一律同時顯示兩者，瀏覽器會記住上次的選擇。下方時間軸依「Cycle > State > Round」分組列出每個 act，點一下就跳過去；只有一段的局不顯示 Cycle 的層級。Mode 的標題寫成 `State 1 · ModeID 2 [FreeGame]`：State 是這一段 `gamemodes` 裡的第幾個（每一段各自從 0 起算），ModeID 是設定檔 `game_mode_settings` 的索引，方括號裡是外掛提供的名稱，沒有外掛或外掛沒寫時省略。資訊列的 State 欄用同一個格式。
 
@@ -130,6 +130,7 @@ DEV.register(2, {
   cellClass(idx, ctx) { return []; },  // 格子要加的 class，例如 "mark"、"dim" 或自訂的
   badge(idx, ctx) { return ""; },      // 格子右下角的小字
   actLabel(act, ctx) { return act.acttype; }, // 時間軸上每一步的文字
+  motion(ctx) { return DEV.util.motion(ctx); }, // 盤面的落下動態，見下方「落下動態」
 });
 ```
 
@@ -148,7 +149,43 @@ DEV.register(2, {
 
 `modes` 與 `actLabel` 是替玩法和動作取名，屬於畫面的工作，不寫進遊戲設定檔。撰寫外掛時（包括請 AI 協作時），先列出這台每個 ModeID 的行列數、圖標與觸發方式，請使用者決定每個 ModeID 的名稱，並依這些資訊提供建議選項（例如觸發 FG 的 mode 叫 `FreeGame`）；`actLabel` 的文字也先問過再寫。
 
-工具函式：`DEV.util.kv(rows)`（兩欄表）、`DEV.util.progress(value, total, label)`（進度條）、`DEV.util.sym(ctx, id)`（圖標 ID 轉名稱）、`DEV.util.esc(s)`。
+工具函式：`DEV.util.kv(rows)`（兩欄表）、`DEV.util.progress(value, total, label)`（進度條）、`DEV.util.sym(ctx, id)`（圖標 ID 轉名稱）、`DEV.util.motion(ctx)`（公版推斷的落下動態）、`DEV.util.esc(s)`。
+
+### 落下動態
+
+換步時，公版比對這一步和上一步的盤面，推斷格子怎麼移動，不看 `acttype`，所以沒有外掛的機台也有：
+
+| 情況 | 動態 |
+| --- | --- |
+| 每個 round 的首盤 | 整盤從上方落下，由左到右一欄一欄依序落下，一邊落下一邊淡入 |
+| 某一欄上一步有被拿掉的格子，這一步剩下的圖標順序不變、全部落在這一欄最底下 | 剩下的圖標從原本的列滑下來；上方新出現的圖標從盤面上緣補進來。受影響的欄同時落下，沒變的欄不動 |
+| 其他變化（圖標變身、固定格、往側邊掉等） | 不播落下，只有新圖標的亮光 |
+
+「被拿掉的格子」是上一步的空格（Z 系列圖標，例如 `clear` 之後的盤面）；上一步沒有空格時，改用上一步的中獎格，所以把消除、下落、補牌放在同一個 act 的遊戲也適用。負值格（不存在的格子）不動，圖標可以跨過它，與 `ops.Gravity` 相同。往下滑的舊圖標不加新圖標的亮光；落下的格子等落定後才開始亮光與中獎框的 pop。
+
+規則不同的機台用外掛的 `motion(ctx)` 指定，只在換步時呼叫：
+
+| 回傳值 | 效果 |
+| --- | --- |
+| `false` | 這一步不播落下 |
+| `undefined`、`null` | 用公版推斷 |
+| 物件或 `Map`，`idx` → `{dx, dy, order, fade}` | 只播列出的格子 |
+
+- `dx`、`dy`：起點相對終點差幾格，可以有小數；`dy` 負數是在上方，`dx` 負數是在左邊。省略為 0。
+- `order`：依序落下的順位，0 最先，越大越晚；實際間隔依速度換算，全部錯開不超過 normal 350 ms、fast 180 ms。省略為 0。
+- `fade`：新出現的圖標，一邊移動一邊淡入，也照常加上新圖標的亮光；省略時視為舊圖標移動，不加亮光。
+
+例如往左掉的遊戲，可以先拿公版結果再換方向，或整個自己算：
+
+```js
+motion(ctx) {
+  if (ctx.act.acttype !== "slide_left") return DEV.util.motion(ctx);
+  const cols = ctx.modeInfo.columns;
+  const m = new Map();
+  ctx.act.ext.moves.forEach(([from, to]) => m.set(to, { dx: (from % cols) - (to % cols) }));
+  return m;
+},
+```
 
 ## 自訂配色
 

@@ -278,6 +278,10 @@ kbd {
 /* generic marks a game script can add via cellClass() */
 .cell.mark { outline-color: var(--mark); }
 .cell.dim { opacity: .3; }
+/* 落下動態（common.js 的 playMotion）：落下的格子帶 --after，亮光與 pop 等落定後才開始；
+   落下期間盤面裁掉外框以外的部分，從上方進來的格子不會蓋到資訊列 */
+.cell.changed, .cell.changed::after, .cell.hit.pop { animation-delay: var(--after, 0ms); }
+.board.moving { overflow: clip; }
 @keyframes fresh {
   0%   { filter: brightness(1.25); box-shadow: 0 0 12px 2px var(--fresh-glow); }
 }

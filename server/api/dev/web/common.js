@@ -28,6 +28,8 @@ const DEV = (window.DEV = {
     sym(ctx, id) {
       return ctx.symbols[id] ?? `#${id}`;
     },
+    // 公版推斷的落下動態，外掛的 motion() 可以拿來改一部分再回傳
+    motion: (ctx) => inferMotion(ctx),
   },
 });
 
@@ -60,12 +62,14 @@ const THEMES = {
 };
 const systemDark = matchMedia("(prefers-color-scheme: dark)");
 
-// 播放速度固定三檔，不開放設定；畫面上以亮幾個箭頭表示第幾檔
+// 播放速度固定三檔，不開放設定；畫面上以亮幾個箭頭表示第幾檔。
+// drop 是格子落下的時間，stagger 是依序落下時每一順位的間隔，spread 是全部順位錯開的上限；turbo 不播落下
 const SPEEDS = [
-  { name: "normal", ms: 1350 },
-  { name: "fast", ms: 650 },
-  { name: "turbo", ms: 200 },
+  { name: "normal", ms: 1350, drop: 320, stagger: 70, spread: 350 },
+  { name: "fast", ms: 650, drop: 220, stagger: 40, spread: 180 },
+  { name: "turbo", ms: 200, drop: 0, stagger: 0, spread: 0 },
 ];
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -710,8 +714,110 @@ function symLook(name) {
   return cls;
 }
 
+// ---------- 落下動態 ----------
+// 每格的起點寫成 {dx, dy, order, fade}：dx、dy 是起點相對終點差幾格（dy 負數是在上方），
+// order 是依序落下的順位（越大越晚），fade 表示新出現的圖標，一邊落下一邊淡入。
+
+// 空格是名稱為 Z 系列的圖標（消除後還沒補的位置）
+function isEmptySym(ctx, id) {
+  return id >= 0 && symLook(ctx.symbols[id])[0] === "sym-Z";
+}
+
+// inferMotion 只比對前後兩張盤面，不看 acttype，推不出來的欄不給動態（照舊只有新圖標亮光）：
+//   - 每個 round 的首盤：整盤從上方落下，由左到右一欄一欄依序落下。
+//   - 某一欄上一步有被拿掉的格子（空格；上一步沒有空格時用上一步的中獎格），而這一步剩下的圖標
+//     順序不變、全部落在這一欄最底下的位置：剩下的圖標從原本的列滑下來，上方新出現的圖標從盤面上緣補進來，
+//     受影響的欄同時落下。負值格（不存在的格子）不動，圖標可以跨過它，與 ops.Gravity 相同。
+function inferMotion(ctx) {
+  const cur = ctx && ctx.act.screen;
+  if (!cur) return null;
+  const { columns, rows } = ctx.modeInfo;
+  const out = new Map();
+  const fresh = !ctx.prevAct || ctx.prevAct.round !== ctx.act.round;
+  if (fresh) {
+    cur.forEach((id, idx) => {
+      if (id >= 0 && !isEmptySym(ctx, id)) out.set(idx, { dy: -rows, order: idx % columns, fade: true });
+    });
+    return out;
+  }
+  const prev = ctx.prevScreen;
+  if (!prev || prev.length !== cur.length) return null;
+  const hits = new Set();
+  ((ctx.prevAct && ctx.prevAct.details) || []).forEach((d) => (d.hits || []).forEach((h) => hits.add(h)));
+  const row = (idx) => Math.floor(idx / columns);
+  for (let c = 0; c < columns; c++) {
+    const slots = [];
+    let same = true;
+    for (let r = 0; r < rows; r++) {
+      const idx = r * columns + c;
+      if ((prev[idx] < 0) !== (cur[idx] < 0)) same = false;
+      if (cur[idx] >= 0) slots.push(idx);
+    }
+    if (!same) continue;
+    const holes = slots.some((i) => isEmptySym(ctx, prev[i]));
+    const keep = slots.filter((i) => (holes ? !isEmptySym(ctx, prev[i]) : !hits.has(i)));
+    if (keep.length === slots.length) continue;
+    const tail = slots.slice(slots.length - keep.length);
+    if (!tail.every((i, j) => cur[i] === prev[keep[j]])) continue;
+    tail.forEach((i, j) => {
+      const dy = row(keep[j]) - row(i);
+      if (dy) out.set(i, { dy });
+    });
+    const added = slots.slice(0, slots.length - keep.length).filter((i) => !isEmptySym(ctx, cur[i]));
+    if (added.length) {
+      const span = row(added[added.length - 1]) + 1;
+      added.forEach((i) => out.set(i, { dy: -span, fade: true }));
+    }
+  }
+  return out;
+}
+
+// 這一步要播的動態：外掛的 motion() 回傳 false 不播，回傳物件或 Map（idx → 起點）就照它播，其他情況用公版推斷
+function boardMotion(ctx, p) {
+  if (!SPEEDS[state.speed].drop || reducedMotion.matches) return null;
+  let m = p.motion ? p.motion(ctx) : undefined;
+  if (m === false) return null;
+  if (m === undefined || m === null || m === true) m = inferMotion(ctx);
+  else if (!(m instanceof Map)) m = new Map(Object.entries(m).map(([k, v]) => [Number(k), v]));
+  return m && m.size ? m : null;
+}
+
+// 依速度換算每格的延遲；順位多的時候縮小間隔，全部錯開不超過 spread
+function motionTiming(motion) {
+  const s = SPEEDS[state.speed];
+  let maxOrder = 0;
+  motion.forEach((m) => (maxOrder = Math.max(maxOrder, m.order || 0)));
+  const stagger = maxOrder ? Math.min(s.stagger, s.spread / maxOrder) : 0;
+  return { drop: s.drop, delay: (m) => Math.round((m.order || 0) * stagger) };
+}
+
+// 格子已經畫好之後再播，用 Web Animations 的 translate，不和 CSS 的 pop（transform）、亮光動畫互相蓋掉。
+// 播的期間盤面裁掉外框以外的部分，從上方進來的格子不會蓋到資訊列
+function playMotion(board, motion, timing, size) {
+  const gs = getComputedStyle(board);
+  const px = size + (parseFloat(gs.columnGap) || 0);
+  const py = size + (parseFloat(gs.rowGap) || 0);
+  const token = (state.motionToken = (state.motionToken || 0) + 1);
+  board.classList.add("moving");
+  const anims = [];
+  motion.forEach((m, idx) => {
+    const el = board.children[idx];
+    if (!el) return;
+    const from = `${(m.dx || 0) * px}px ${(m.dy || 0) * py}px`;
+    const frames = m.fade
+      ? [{ translate: from, opacity: 0 }, { opacity: 1, offset: 0.45 }, { translate: "0px 0px", opacity: 1 }]
+      : [{ translate: from }, { translate: "0px 0px" }];
+    anims.push(el.animate(frames, { duration: timing.drop, delay: timing.delay(m), easing: "cubic-bezier(.25, .7, .35, 1)", fill: "backwards" }).finished);
+  });
+  Promise.allSettled(anims).then(() => {
+    if (state.motionToken === token) board.classList.remove("moving");
+  });
+}
+
 function renderBoard(ctx) {
   const board = $("board");
+  state.motionToken = (state.motionToken || 0) + 1;
+  board.classList.remove("moving");
   if (!ctx || !ctx.screen) {
     board.innerHTML = "";
     return;
@@ -733,6 +839,8 @@ function renderBoard(ctx) {
   board.style.setProperty("--cell", `${size}px`);
   board.style.gridTemplateColumns = `repeat(${columns}, ${size}px)`;
   board.classList.toggle("focus", state.focusDetail >= 0);
+  const motion = animate ? boardMotion(ctx, p) : null;
+  const timing = motion ? motionTiming(motion) : null;
   const cells = [];
   for (let idx = 0; idx < columns * rows; idx++) {
     const id = ctx.screen[idx];
@@ -746,17 +854,21 @@ function renderBoard(ctx) {
     const cls = ["cell", ...symLook(name)];
     if (state.pinned.has(idx)) cls.push("pin");
     if (hits.has(idx)) cls.push(animate ? "hit pop" : "hit");
-    if (animate && ctx.act.screen && (fresh || (ctx.prevScreen && ctx.prevScreen[idx] !== id))) cls.push("changed");
+    // 往下滑的舊圖標不算新圖標，不加亮光；落下的格子等落定後才開始亮光與 pop
+    const mv = motion && motion.get(idx);
+    if (animate && ctx.act.screen && (fresh || (ctx.prevScreen && ctx.prevScreen[idx] !== id)) && !(mv && !mv.fade)) cls.push("changed");
     if (p.cellClass) cls.push(...[].concat(p.cellClass(idx, ctx) || []));
     const badge = p.badge ? p.badge(idx, ctx) : "";
+    const style = mv ? ` style="--after:${timing.delay(mv) + timing.drop}ms"` : "";
     cells.push(
       // 名稱模式下 Z 系列是空格（消除後還沒補的位置），不寫名稱；ID 模式每一格都顯示盤面上的原始數字
-      `<div class="${cls.join(" ")}" data-idx="${idx}" data-sym="${esc(name)}" title="idx ${idx}｜${esc(name)}（id ${id}）"><span class="idx">${idx}</span>` +
+      `<div class="${cls.join(" ")}" data-idx="${idx}" data-sym="${esc(name)}"${style} title="idx ${idx}｜${esc(name)}（id ${id}）"><span class="idx">${idx}</span>` +
       `${state.symMode === "id" ? id : cls[1] === "sym-Z" ? "" : esc(name)}` +
       `${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`
     );
   }
   board.innerHTML = cells.join("");
+  if (motion) playMotion(board, motion, timing, size);
 }
 
 // 格子大小只跟視窗和盤面行列數有關，換步時不變；至少留 TIMELINE_MIN 給時間軸
