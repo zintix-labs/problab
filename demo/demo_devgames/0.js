@@ -1,14 +1,17 @@
-// demo_normal：觸發那一步標出 Scatter；右側面板顯示觸發資訊與 FG 轉數。
+// demo_normal：觸發那一步標出 Scatter，並示範 label：中央改寫成 ★，原圖標名稱移到角標；右側面板顯示觸發資訊與 FG 轉數。
 (() => {
-  const { kv, progress } = DEV.util;
+  const { kv, progress, sym } = DEV.util;
   // ext 只出現在 trigger 那一步：scatter_hits 是 Scatter 的格子位置
   const scatters = (ctx) => (ctx.act.acttype === "trigger" && ctx.act.ext ? ctx.act.ext.scatter_hits || [] : []);
 
   DEV.register(0, {
     title: "demo_normal 資訊",
     modes: { 0: "BaseGame", 1: "FreeGame" },
+    // label 改寫的格子帶 labeled class；★ 在等寬字型裡偏小，這台放大
+    css: ".cell.labeled { font-size: calc(var(--cell, 64px) * 0.42); }",
     cellClass: (idx, ctx) => (scatters(ctx).includes(idx) ? ["mark"] : []),
-    badge: (idx, ctx) => (scatters(ctx).includes(idx) ? "S" : ""),
+    label: (idx, ctx) => scatters(ctx).includes(idx) && "★",
+    badge: (idx, ctx) => (scatters(ctx).includes(idx) ? sym(ctx, ctx.screen[idx]) : ""),
     panel(ctx) {
       const ext = ctx.ext;
       let html = kv([

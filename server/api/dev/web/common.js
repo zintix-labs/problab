@@ -859,11 +859,17 @@ function renderBoard(ctx) {
     if (animate && ctx.act.screen && (fresh || (ctx.prevScreen && ctx.prevScreen[idx] !== id)) && !(mv && !mv.fade)) cls.push("changed");
     if (p.cellClass) cls.push(...[].concat(p.cellClass(idx, ctx) || []));
     const badge = p.badge ? p.badge(idx, ctx) : "";
+    // 外掛的 label 取代中央的圖標名稱；ID 模式是用來和後端陣列逐格比對的，不呼叫 label。
+    // 回傳 ""、null、undefined、false 都用公版預設（false 讓 `cond && "x"` 的寫法也能用）
+    const raw = state.symMode === "id" || !p.label ? "" : p.label(idx, ctx);
+    const label = raw === null || raw === undefined || raw === false ? "" : String(raw);
+    if (label) cls.push("labeled", ...(label.length >= 5 ? ["long"] : []));
     const style = mv ? ` style="--after:${timing.delay(mv) + timing.drop}ms"` : "";
     cells.push(
-      // 名稱模式下 Z 系列是空格（消除後還沒補的位置），不寫名稱；ID 模式每一格都顯示盤面上的原始數字
+      // 名稱模式下 Z 系列是空格（消除後還沒補的位置），不寫名稱；ID 模式每一格都顯示盤面上的原始數字。
+      // data-sym 與 title 一律是原圖標，配色和覆寫規則不受 label 影響
       `<div class="${cls.join(" ")}" data-idx="${idx}" data-sym="${esc(name)}"${style} title="idx ${idx}｜${esc(name)}（id ${id}）"><span class="idx">${idx}</span>` +
-      `${state.symMode === "id" ? id : cls[1] === "sym-Z" ? "" : esc(name)}` +
+      `${state.symMode === "id" ? id : label ? esc(label) : cls[1] === "sym-Z" ? "" : esc(name)}` +
       `${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`
     );
   }

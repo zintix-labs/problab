@@ -128,6 +128,7 @@ DEV.register(2, {
   css: ".cell.blast { outline-color: red; }", // 這台專用的樣式，選填
   panel(ctx) { return "<html>"; },     // 右側面板內容
   cellClass(idx, ctx) { return []; },  // 格子要加的 class，例如 "mark"、"dim" 或自訂的
+  label(idx, ctx) { return ""; },      // 格子中央的文字，空字串用預設
   badge(idx, ctx) { return ""; },      // 格子右下角的小字
   actLabel(act, ctx) { return act.acttype; }, // 時間軸上每一步的文字
   motion(ctx) { return DEV.util.motion(ctx); }, // 盤面的落下動態，見下方「落下動態」
@@ -146,6 +147,15 @@ DEV.register(2, {
 | `ext`、`prevExt` | 這一步和上一步的 ext；這一步沒有 ext 時，沿用這局最近一次出現的值 |
 | `screen`、`prevScreen`、`prevAct` | 這一步和上一步的盤面與 act；沒有盤面的步驟沿用同一個 mode 的前一個盤面 |
 | `modeInfo`、`symbols` | 這個 mode 的行列數和圖標名稱 |
+
+`label` 用在格子帶了比圖標名稱更重要的數值的機台，例如現金、倍數：回傳金額當中央的大字，原圖標名稱改由 `badge` 寫在角標。
+
+- 回傳非空字串時取代中央的圖標名稱；回傳 `""`、`null`、`undefined`、`false` 或沒定義 `label` 時照舊顯示（Z 系列空格不寫名稱）。回傳數字會轉成字串。
+- 文字和 `badge` 一樣當純文字顯示，`<`、`&` 不會變成 HTML。
+- ID 模式（SymbolID，`symmode=id`）不呼叫 `label`，一律顯示原始 ID；ID 模式是用來和後端陣列逐格比對的，不能被外掛蓋掉。
+- 負值格（不存在的格子）不呼叫 `label`。
+- `data-sym`、滑鼠提示（idx、名稱、id）、配色與覆寫規則都照原圖標；`cellClass`、`badge`、中獎框與動態不受影響。
+- 改寫的格子帶 `labeled` class，字級統一為格子寬的 0.24（L 系列也不放大）；5 個字以上再加 `long`，自動縮小。要再調整時在外掛的 `css` 寫 `.cell.labeled { … }`。demo 0 的外掛示範了這個用法。
 
 `modes` 與 `actLabel` 是替玩法和動作取名，屬於畫面的工作，不寫進遊戲設定檔。撰寫外掛時（包括請 AI 協作時），先列出這台每個 ModeID 的行列數、圖標與觸發方式，請使用者決定每個 ModeID 的名稱，並依這些資訊提供建議選項（例如觸發 FG 的 mode 叫 `FreeGame`）；`actLabel` 的文字也先問過再寫。
 
