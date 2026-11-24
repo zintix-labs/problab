@@ -82,7 +82,7 @@ async function api(path, body) {
   return res.json();
 }
 
-// 瀏覽器儲存只記住上次選的機台、圖標的 Name／ID 與主題；無法使用時照常運作
+// 瀏覽器儲存只記住上次選的機台、圖標的 Name／ID、主題與局列表的贏倍篩選；無法使用時照常運作
 function remember(key, value) {
   try {
     if (value === undefined) return localStorage.getItem(key);
@@ -125,6 +125,9 @@ async function init() {
   syncWager();
   state.symMode = (q.get("symmode") ?? remember("dev.symmode")) === "id" ? "id" : "name";
   $("symmode").textContent = symModeText();
+  $("win-filter").checked = remember("dev.winfilter") === "1";
+  const winMin = remember("dev.winmin");
+  if (winMin !== null && winMin !== "") $("win-min").value = winMin;
 
   sel.onchange = selectGame;
   $("symmode").onclick = () => setSymMode(state.symMode === "id" ? "name" : "id");
@@ -150,7 +153,19 @@ async function init() {
   $("choose").onchange = syncInputs;
   $("input").onchange = syncInputs;
   $("spin").onclick = spin;
-  $("only-win").onchange = renderResults;
+  $("win-filter").onchange = () => {
+    remember("dev.winfilter", $("win-filter").checked ? "1" : "0");
+    renderResults();
+  };
+  // 改門檻就是要篩選，順手勾起來
+  $("win-min").oninput = () => {
+    remember("dev.winmin", $("win-min").value);
+    if (!$("win-filter").checked) {
+      $("win-filter").checked = true;
+      remember("dev.winfilter", "1");
+    }
+    renderResults();
+  };
   $("first").onclick = () => go(0);
   $("prev").onclick = () => go(state.stepIdx - 1);
   $("next").onclick = () => go(state.stepIdx + 1);
@@ -250,8 +265,8 @@ async function spin() {
     $("status").textContent = notes.join("｜");
     renderSummary();
     renderResults();
-    const firstWin = state.bets.findIndex((b) => b.win > 0);
-    selectBet($("only-win").checked && firstWin >= 0 ? firstWin : 0);
+    const first = state.bets.findIndex(betVisible());
+    selectBet(first >= 0 ? first : 0);
   } catch (e) {
     $("status").textContent = "錯誤：" + e.message;
   }
@@ -309,11 +324,19 @@ function showBet(i) {
   render();
 }
 
-// 局列表上 dir 方向（-1 上一局、1 下一局）的下一個看得到的局；「只看有贏分」時跳過沒有贏分的局
+// 局列表的贏倍篩選：勾選「只看 ≥ X 倍」時只留贏分 > 0 且贏倍（贏分 ÷ 投注）≥ X 的局，X 為 0 時等於只看有贏分。
+// 局列表、↑↓ 換局、連續播放與 Spin 後自動選的第一局都用這個判斷
+function betVisible() {
+  if (!$("win-filter").checked) return () => true;
+  const min = Math.max(0, Number($("win-min").value) || 0);
+  return (b) => b.win > 0 && b.win >= min * b.bet;
+}
+
+// 局列表上 dir 方向（-1 上一局、1 下一局）的下一個看得到的局
 function nextBet(dir) {
-  const onlyWin = $("only-win").checked;
+  const visible = betVisible();
   for (let i = state.betIdx + dir; i >= 0 && i < state.bets.length; i += dir) {
-    if (!onlyWin || state.bets[i].win > 0) return i;
+    if (visible(state.bets[i])) return i;
   }
   return -1;
 }
@@ -647,10 +670,10 @@ async function copy(text, btn) {
 
 // 局列表只在 Spin、篩選與 player 選擇後重建；切換局只改 active
 function renderResults() {
-  const onlyWin = $("only-win").checked;
+  const visible = betVisible();
   $("results").innerHTML = state.bets
     .map((b, i) => {
-      if (onlyWin && !(b.win > 0)) return "";
+      if (!visible(b)) return "";
       const fg = b.segments.some((s) => (s.gamemodes || []).length > 1) ? `<span class="tag">FG</span>` : "";
       const seg = b.segments.length > 1 ? ` <span class="tag" title="${b.segments.length} 個 Cycle">C×${b.segments.length}</span>` : "";
       const open = b.isend ? "" : ` <span class="tag">進行中</span>`;

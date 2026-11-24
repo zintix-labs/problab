@@ -123,6 +123,9 @@ input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
 .muted { color: var(--muted); }
 label { display: inline-flex; gap: 8px; align-items: center; font-weight: 500; }
 label.inline { font-size: 13px; }
+.win-filter { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.win-filter label { gap: 6px; }
+#win-min { width: 64px; padding: 2px 6px; font-size: 13px; }
 
 /* ---------- 版面 ---------- */
 .bar {

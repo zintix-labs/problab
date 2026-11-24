@@ -72,7 +72,7 @@
     <aside class="panel" id="results-panel">
       <div class="panel-head">
         <span>局列表</span>
-        <label class="inline"><input id="only-win" type="checkbox" /> 只看有贏分</label>
+        <span class="win-filter"><label class="inline" title="只看贏分 > 0 且贏倍（贏分 ÷ 投注）達到門檻的局；門檻 0 等於只看有贏分"><input id="win-filter" type="checkbox" /> 只看 ≥</label><input id="win-min" type="number" min="0" step="0.01" value="0.01" aria-label="贏倍門檻" /><span class="muted">倍</span></span>
       </div>
       <div id="summary" class="summary muted"></div>
       <ol id="results" class="results"></ol>
