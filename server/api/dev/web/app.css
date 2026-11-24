@@ -447,8 +447,17 @@ button.danger:hover { background: #b91c1c; }
 .stats-view button + button { margin-left: -1px; }
 .stats-view button:last-child { border-radius: 0 8px 8px 0; }
 .stats-view button.on { background: var(--primary-soft); color: var(--primary-ink); border-color: var(--primary); position: relative; }
-#stats-hover { margin-left: auto; font-variant-numeric: tabular-nums; }
-.legend { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; }
+.stats-legend { display: inline-flex; align-items: center; gap: 12px; }
+/* 讀數固定兩行高，滑鼠移動或拖曳時圖不會跳 */
+.stats-readout {
+  min-height: 42px; margin-top: 6px; font-size: 13px; line-height: 21px; font-variant-numeric: tabular-nums;
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 0 14px;
+}
+.stats-readout b { font-weight: 600; }
+.stats-readout .up { color: var(--primary-ink); font-weight: 600; }
+.stats-readout .down { color: #dc2626; font-weight: 600; }
+:root:where([data-theme="dark"]) .stats-readout .down { color: #f87171; }
+.legend { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 14px; height: 3px; border-radius: 2px; background: currentColor; }
 .legend.s-a { color: var(--primary-ink); }
 /* 走勢圖用 margin 留邊，clientWidth 才等於實際可畫的寬度 */
@@ -466,6 +475,12 @@ button.danger:hover { background: #b91c1c; }
 .stats-chart .guide { stroke: var(--muted); stroke-width: 1; }
 .stats-chart .guide-dot { stroke: var(--card); stroke-width: 1.5; }
 .stats-chart .bust-dot { fill: #dc2626; stroke: var(--card); stroke-width: 2; }
+/* 區間選取：往上綠、往下紅 */
+.stats > .stats-chart { cursor: crosshair; user-select: none; -webkit-user-select: none; }
+.stats-chart .sel-band { fill: var(--primary-ink); opacity: .12; }
+.stats-chart .sel-band.down { fill: #dc2626; }
+.stats-chart .sel-dot { fill: var(--primary-ink); stroke: var(--card); stroke-width: 2; }
+.stats-chart .sel-dot.down { fill: #dc2626; }
 .stats-empty { height: 100%; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 10px; font-size: 13px; }
 .stats-list-head {
   display: flex; justify-content: space-between; align-items: center;
