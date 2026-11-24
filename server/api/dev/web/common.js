@@ -1,4 +1,4 @@
-// ProbLab Dev 公版：機台與押注選擇、局列表、盤面、逐步播放、中獎明細、player 選擇與回放。
+// ProbLab Dev 公版：機台與押注選擇、局列表、盤面、逐步播放、中獎明細、player 選擇與回放。玩家統計在 stats.js。
 // 機台專屬的畫法放在 games/<gid>.js，透過 DEV.register(gid, plugin) 掛上來，介面見 README.md。
 "use strict";
 
@@ -48,7 +48,8 @@ const state = {
   speed: 0,          // SPEEDS 的索引
   chain: false,      // 播放模式：false 單局（播完這局就停）、true 連續（接著播局列表的下一局）
   theme: "system",   // 主題：system（跟隨系統）、light、dark；記在瀏覽器
-  request: null,     // 產生目前這批的請求（choose、betmode、betmult、input、value、rounds），續段、回放與複製連結沿用
+  request: null,     // 產生目前這批的請求（choose、betmode、betmult、input、value、rounds），續段、回放與複製連結沿用；
+                     // 從歷史局的回放連結載入時 input 為 "replay"，另帶 replay、h、n
   replay: null,      // 目前這局「回放這局」的比對結果
 };
 
@@ -82,7 +83,8 @@ async function api(path, body) {
   return res.json();
 }
 
-// 瀏覽器儲存只記住上次選的機台、圖標的 Name／ID、主題與局列表的贏倍篩選；無法使用時照常運作
+// 瀏覽器儲存只記住上次選的機台、圖標的 Name／ID、主題、局列表與歷史局的贏倍篩選、起始資金；無法使用時照常運作。
+// 玩家統計的紀錄另外存在 IndexedDB（stats.js）
 function remember(key, value) {
   try {
     if (value === undefined) return localStorage.getItem(key);
@@ -110,6 +112,7 @@ async function init() {
   const sel = $("game");
   sel.innerHTML = state.games.map((g, i) => `<option value="${i}">${g.gid} ${esc(g.name)}</option>`).join("");
   // 網址參數可以直接重現某一局某一步：?gid=2&betmode=0&betmult=1&choose=first&input=seed&value=7&rounds=50&spin=1&bet=3&step=10&symmode=id
+  // 歷史局的回放連結改帶 replay（整局的回放輸入）、h（結果雜湊）、n（局號）：?gid=2&betmode=0&betmult=1&replay=…&h=…&n=12&step=3
   const q = new URLSearchParams(location.search);
   const want = q.get("gid") ?? remember("dev.game");
   const idx = state.games.findIndex((g) => String(g.gid) === want);
@@ -152,7 +155,8 @@ async function init() {
   $("betmult").oninput = syncWager;
   $("choose").onchange = syncInputs;
   $("input").onchange = syncInputs;
-  $("spin").onclick = spin;
+  $("spin").onclick = () => spin();
+  initStats();
   $("win-filter").onchange = () => {
     remember("dev.winfilter", $("win-filter").checked ? "1" : "0");
     renderResults();
@@ -182,8 +186,12 @@ async function init() {
     cell.classList.toggle("pin", state.pinned.has(idx));
   });
 
-  if (q.get("spin") === "1") {
-    await spin();
+  // 從網址自動執行的 Spin 與回放連結都在重現已知的局，不計入玩家統計
+  if (q.has("replay")) {
+    await loadReplayLink(q);
+    if (q.has("step")) go(Number(q.get("step")) - 1);
+  } else if (q.get("spin") === "1") {
+    await spin({ fromLink: true });
     if (q.has("bet")) selectBet(Number(q.get("bet")) - 1);
     if (q.has("step")) go(Number(q.get("step")) - 1);
   } else {
@@ -237,9 +245,11 @@ function loadPlugin(game) {
   document.body.appendChild(s);
 }
 
-async function spin() {
+// 手動按 Spin、輸入為 Seed 時，這批的局計入玩家統計（player 的局選到結束才計入）；fromLink 是從網址自動執行，不計入
+async function spin(opts = {}) {
   stop();
   $("status").textContent = "執行中…";
+  $("status").classList.remove("warn");
   const req = {
     gid: state.game.gid,
     betmode: Number($("betmode").value),
@@ -258,6 +268,10 @@ async function spin() {
     $("betmult").value = req.betmult; // 超出範圍的輸入顯示成實際使用的倍數
     syncWager();
     state.bets = rep.bets || [];
+    if (!opts.fromLink && req.input === "seed") {
+      state.bets.forEach((b) => (b.record = true));
+      statsAddEnded(state.bets);
+    }
     const notes = [];
     if (rep.input === "seed") notes.push(`seed ${rep.seed}`);
     else notes.push(rep.partial_replay ? "snap 回放（只保證 Cycle 0）" : "snap 回放");
@@ -432,7 +446,15 @@ function setSymMode(mode) {
 // 快捷鍵一覽在 index.html 的說明面板（#help）。輸入框裡打字和選單操作不攔；Enter 在輸入框裡也執行 Spin。
 function onKey(e) {
   const t = e.target;
-  const typing = t.matches("input:not([type=checkbox]), select");
+  const typing = t instanceof Element && t.matches("input:not([type=checkbox]), select");
+  // 統計面板開著時只處理 S（關閉）；Esc 由 dialog 自己關閉
+  if ($("stats").open) {
+    if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      toggleStats();
+    }
+    return;
+  }
   if (e.key === "Enter" || (e.key === " " && !typing)) {
     e.preventDefault(); // 避免同時觸發焦點所在的按鈕
     spin();
@@ -453,6 +475,8 @@ function onKey(e) {
     "=": () => setSpeed(state.speed + 1), // 美式鍵盤上不按 Shift 的 + 鍵
     i: () => setSymMode(state.symMode === "id" ? "name" : "id"),
     I: () => setSymMode(state.symMode === "id" ? "name" : "id"),
+    s: toggleStats,
+    S: toggleStats,
     "?": () => help.togglePopover(),
     Escape: () => {
       if (help.matches(":popover-open")) return help.hidePopover();
@@ -470,6 +494,7 @@ function onKey(e) {
 function stepLink() {
   const r = state.request;
   if (!r || state.betIdx < 0) return location.origin + location.pathname;
+  if (r.input === "replay") return replayLink(r, state.stepIdx + 1);
   const q = new URLSearchParams({
     gid: r.gid, betmode: r.betmode, betmult: r.betmult, choose: r.choose, input: r.input, value: r.value,
     rounds: r.rounds, spin: 1, bet: state.betIdx + 1, step: state.stepIdx + 1,
@@ -527,6 +552,7 @@ async function pick(position) {
     b.win += rep.segment.win;
     b.isend = rep.segment.isend;
     $("status").textContent = b.isend ? `第 ${b.index} 局結束，總贏分 ${b.win}` : "請選擇下一個 Cycle";
+    if (b.isend) statsAddEnded([b]);
     const from = state.steps.length;
     state.steps = flatten(b);
     state.stepIdx = Math.min(from, state.steps.length - 1);
@@ -632,18 +658,9 @@ function renderDTO(ctx) {
   }
 }
 
-// 回放輸入：每一段的起始快照；續段的 choose_next 與 cp 取自上一段
+// 以每一段的起始快照重跑整局（回放輸入見 stats.js 的 replaySegments），逐段比對
 async function replayBet(b) {
-  const segments = b.segments.map((s, i) => {
-    const seg = { start_b64u: s.spin_state.start_b64u, cycle: i };
-    if (i > 0) {
-      const prev = b.segments[i - 1];
-      seg.choice = s.choice;
-      seg.choose_next = prev.choose_next;
-      if (prev.spin_state.cp !== undefined) seg.cp = prev.spin_state.cp;
-    }
-    return seg;
-  });
+  const segments = replaySegments(b);
   try {
     const rep = await api("replay", { gid: state.request.gid, betmode: state.request.betmode, betmult: state.request.betmult, segments });
     const got = rep.bet.segments;
@@ -674,7 +691,7 @@ function renderResults() {
   $("results").innerHTML = state.bets
     .map((b, i) => {
       if (!visible(b)) return "";
-      const fg = b.segments.some((s) => (s.gamemodes || []).length > 1) ? `<span class="tag">FG</span>` : "";
+      const fg = hasFG(b) ? `<span class="tag">FG</span>` : "";
       const seg = b.segments.length > 1 ? ` <span class="tag" title="${b.segments.length} 個 Cycle">C×${b.segments.length}</span>` : "";
       const open = b.isend ? "" : ` <span class="tag">進行中</span>`;
       const mult = b.bet ? (b.win / b.bet).toFixed(2) : "0";
@@ -683,6 +700,11 @@ function renderResults() {
     .join("");
   $("results").querySelectorAll("li").forEach((li) => (li.onclick = () => selectBet(Number(li.dataset.i))));
   markActiveResult();
+}
+
+// 這局有沒有進 FG：某一段有一個以上的 game mode
+function hasFG(b) {
+  return b.segments.some((s) => (s.gamemodes || []).length > 1);
 }
 
 function markActiveResult() {

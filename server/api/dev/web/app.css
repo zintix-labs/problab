@@ -134,9 +134,11 @@ label.inline { font-size: 13px; }
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
 }
 .brand { font-weight: 600;  margin-right: 8px; }
-/* 主題與說明按鈕靠右；margin 放在第一個，狀態列文字變長變短時它們才不會跟著移動 */
-.theme-btn { margin-left: auto; }
-.help-btn, .theme-btn { padding: 0 8px; display: inline-flex; align-items: center; }
+/* 統計、主題與說明按鈕靠右；margin 放在第一個，狀態列文字變長變短時它們才不會跟著移動 */
+.stats-btn { margin-left: auto; }
+.help-btn, .theme-btn, .stats-btn { padding: 0 8px; display: inline-flex; align-items: center; }
+#status.warn { color: #dc2626; }
+:root:where([data-theme="dark"]) #status.warn { color: #f87171; }
 
 /* 快捷鍵說明：原生 popover，固定在頂部欄右下方 */
 .help {
@@ -402,3 +404,74 @@ kbd {
   white-space: pre-wrap; word-break: break-all; max-height: 320px; overflow: auto;
   background: var(--card-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 6px 0 0;
 }
+
+/* ---------- 玩家統計（stats.js） ---------- */
+.stats {
+  width: min(1100px, calc(100vw - 32px)); height: min(880px, calc(100vh - 32px));
+  max-width: none; max-height: none; padding: 0;
+  background: var(--card); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .25);
+}
+.stats[open] { display: flex; flex-direction: column; }
+.stats::backdrop { background: rgba(0, 0, 0, .4); }
+.stats:focus { outline: none; }
+.stats > * { padding-left: 18px; padding-right: 18px; }
+.stats-head { display: flex; align-items: center; gap: 16px; padding-top: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.stats-head strong { font-size: 16px; font-weight: 600; }
+.stats-head #stats-funds { width: 110px; }
+.stats-head-acts { margin-left: auto; display: inline-flex; gap: 8px; }
+button.danger { color: #fff; background: #dc2626; border-color: #dc2626; }
+button.danger:hover { background: #b91c1c; }
+.stats-nums {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 18px;
+  padding-top: 14px; padding-bottom: 14px; font-variant-numeric: tabular-nums;
+}
+.stats-nums > div { display: flex; flex-direction: column; min-width: 0; }
+.stats-nums > .muted { grid-column: 1 / -1; }
+.stats-nums .muted { font-size: 12px; }
+.stats-nums b { font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stats-nums .bust b { color: #dc2626; }
+:root:where([data-theme="dark"]) .stats-nums .bust b { color: #f87171; }
+.stats-chart-head { display: flex; align-items: center; gap: 16px; font-size: 13px; min-height: 32px; }
+.stats-view { display: inline-flex; }
+.stats-view button { height: 28px; font-size: 13px; border-radius: 0; }
+.stats-view button:first-child { border-radius: 8px 0 0 8px; }
+.stats-view button:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+.stats-view button.on { background: var(--primary-soft); color: var(--primary-ink); border-color: var(--primary); position: relative; }
+#stats-hover { margin-left: auto; font-variant-numeric: tabular-nums; }
+.legend { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; }
+.legend i { width: 14px; height: 3px; border-radius: 2px; background: currentColor; }
+.legend.s-a { color: var(--primary-ink); }
+.legend.s-b { color: #3b82f6; }
+/* 走勢圖用 margin 留邊，clientWidth 才等於實際可畫的寬度 */
+.stats > .stats-chart { height: 220px; flex: none; margin: 6px 18px 0; padding: 0; position: relative; }
+.stats-chart svg { display: block; }
+.stats-chart .line { fill: none; stroke-width: 1.6; stroke-linejoin: round; }
+.stats-chart .s-a { stroke: var(--primary-ink); fill: var(--primary-ink); }
+.stats-chart .s-b { stroke: #3b82f6; fill: #3b82f6; }
+.stats-chart .line.s-a, .stats-chart .line.s-b { fill: none; }
+.stats-chart .grid { stroke: var(--border); stroke-width: 1; }
+.stats-chart .ref { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; opacity: .7; }
+.stats-chart .axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.stats-chart .guide { stroke: var(--muted); stroke-width: 1; }
+.stats-chart .guide-dot { stroke: var(--card); stroke-width: 1.5; }
+.stats-chart .bust-dot { fill: #dc2626; stroke: var(--card); stroke-width: 2; }
+.stats-empty { height: 100%; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 10px; font-size: 13px; }
+.stats-list-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 12px; padding-top: 12px; padding-bottom: 8px; border-top: 1px solid var(--border); font-weight: 500;
+}
+.stats-list { list-style: none; margin: 0; padding-top: 0; padding-bottom: 0; overflow: auto; flex: 1; min-height: 0; }
+.stats-list li {
+  display: grid; grid-template-columns: 80px minmax(100px, 1.6fr) 96px 40px minmax(80px, 1fr) minmax(80px, 1fr) auto;
+  gap: 10px; align-items: center; padding: 4px 8px; border-radius: 6px; font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.stats-list li:hover { background: var(--muted-bg); }
+.stats-list li .g { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stats-list li .num { text-align: right; }
+.stats-list li .acts { display: inline-flex; gap: 6px; }
+.stats-list li button { height: 26px; font-size: 12px; padding: 0 8px; }
+.stats-list li.more { display: block; text-align: center; padding: 10px; }
+.stats-list li.more:hover { background: none; }
+.stats-note { font-size: 12px; padding-top: 10px; padding-bottom: 12px; border-top: 1px solid var(--border); }

@@ -41,6 +41,7 @@
     <label>局數 <input id="rounds" type="number" min="1" value="50" /></label>
     <button id="spin" class="primary" title="Space／Enter">Spin</button>
     <span id="status" class="muted"></span>
+    <button id="stats-btn" class="stats-btn" title="玩家統計（S）" aria-label="玩家統計"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18" /><path d="M7 15l4-5 3 3 5-7" /></svg></button>
     <button id="theme-btn" class="theme-btn"></button>
     <button id="help-btn" class="help-btn" popovertarget="help" title="快捷鍵（?）" aria-label="快捷鍵說明"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8" /></svg></button>
   </header>
@@ -56,6 +57,7 @@
       <tr><td><kbd>P</kbd></td><td>播放／暫停</td></tr>
       <tr><td><kbd>+</kbd></td><td>速度切到下一檔，turbo 之後回到 normal</td></tr>
       <tr><td><kbd>I</kbd></td><td>切換 SymbolName／SymbolID</td></tr>
+      <tr><td><kbd>S</kbd></td><td>開關玩家統計</td></tr>
       <tr><td><kbd>Esc</kbd></td><td>關閉說明；清掉釘住的格子編號</td></tr>
       <tr><td><kbd>?</kbd></td><td>開關這個說明</td></tr>
     </table>
@@ -67,6 +69,33 @@
       <li>點速度的第幾個箭頭：切到第幾檔</li>
     </ul>
   </div>
+
+  <!-- 玩家統計：程式在 stats.js。統計存在瀏覽器的 IndexedDB，所有 dev 分頁共用一份 -->
+  <dialog id="stats" class="stats" aria-labelledby="stats-title" tabindex="-1">
+    <div class="stats-head">
+      <strong id="stats-title">玩家統計</strong>
+      <label class="inline">起始資金 <input id="stats-funds" type="number" min="0" step="1" value="10000" /></label>
+      <span class="stats-head-acts">
+        <button id="stats-reset" title="清空這個瀏覽器的所有統計與歷史局，重新開始累計">歸零</button>
+        <button id="stats-close" title="關閉（S／Esc）" aria-label="關閉">✕</button>
+      </span>
+    </div>
+    <div id="stats-nums" class="stats-nums"></div>
+    <div class="stats-chart-head">
+      <span id="stats-view" class="stats-view" role="group" aria-label="走勢圖">
+        <button data-view="funds">資金</button><button data-view="rtp">RTP</button>
+      </span>
+      <span id="stats-legend"></span>
+      <span id="stats-hover" class="muted"></span>
+    </div>
+    <div id="stats-chart" class="stats-chart"></div>
+    <div class="stats-list-head">
+      <span id="stats-list-title">歷史局</span>
+      <span class="win-filter"><label class="inline" title="只看贏分 > 0 且贏倍（贏分 ÷ 投注）達到門檻的局；門檻 0 等於只看有贏分"><input id="stats-win-filter" type="checkbox" /> 只看 ≥</label><input id="stats-win-min" type="number" min="0" step="0.01" value="0.01" aria-label="贏倍門檻" /><span class="muted">倍</span></span>
+    </div>
+    <ol id="stats-list" class="stats-list"></ol>
+    <div class="stats-note muted">統計存在這個瀏覽器，所有 dev 分頁共用一份；只計入手動按 Spin 的 Seed 局，從連結打開、Snap 與回放的局不計入。</div>
+  </dialog>
 
   <main class="layout">
     <aside class="panel" id="results-panel">
@@ -125,5 +154,6 @@
   </main>
 
   <script src="common.js"></script>
+  <script src="stats.js"></script>
 </body>
 </html>
