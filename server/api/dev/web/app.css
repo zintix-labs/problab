@@ -239,7 +239,7 @@ kbd {
   width: var(--cell, 64px); height: var(--cell, 64px);
   display: flex; align-items: center; justify-content: center;
   border-radius: 8px; background: var(--muted-bg);
-  font-weight: 700; font-size: calc(var(--cell, 64px) * 0.24);
+  font-weight: 700; font-size: calc(var(--cell, 64px) * 0.28);
   transition: background-color .2s, outline-color .2s, opacity .2s;
   outline: 3px solid transparent; outline-offset: -3px;
 }
@@ -275,11 +275,14 @@ kbd {
 .cell.sym-L {
   background-color: color-mix(in srgb, var(--tone) var(--sym-l-bg), var(--card));
   color: color-mix(in srgb, var(--tone) var(--sym-l-text), var(--sym-l-ink));
-  font-size: calc(var(--cell, 64px) * 0.28);
 }
-/* 外掛 label() 改寫的格子：字級統一（L 系列也不放大），5 個字以上再縮小；外掛可以用 .cell.labeled 再調 */
-.cell.labeled { font-size: calc(var(--cell, 64px) * 0.24); }
-.cell.labeled.long { font-size: calc(var(--cell, 64px) * 0.19); letter-spacing: -.02em; }
+/* 外掛 label() 改寫的格子：基準字級和圖標一樣是格子寬 × --label-size（預設 0.28），字太多時自動縮到剛好塞進格子。
+   --len 是 label 的寬度（半形字為 1，由 common.js 寫在格子上）；等寬字型一個半形字 0.6em，留 84% 的格子寬：
+   0.84 ÷ 0.6 = 1.4。外掛在 css 改 --label-size 調基準，或直接寫 font-size 自己接管 */
+.cell.labeled {
+  --label-size: 0.28;
+  font-size: min(calc(var(--cell, 64px) * var(--label-size)), calc(var(--cell, 64px) * 1.4 / var(--len, 1)));
+}
 /* 空格：不寫名稱、不填底色，只留很淡的框 */
 .cell.sym-Z { background: transparent; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent); }
 .cell.sym-X { background: var(--sym-x); }

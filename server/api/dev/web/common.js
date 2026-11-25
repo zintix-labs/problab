@@ -1016,8 +1016,11 @@ function renderBoard(ctx) {
     // 回傳 ""、null、undefined、false 都用公版預設（false 讓 `cond && "x"` 的寫法也能用）
     const raw = state.symMode === "id" || !p.label ? "" : pickLang(p.label(idx, ctx));
     const label = raw === null || raw === undefined || raw === false ? "" : String(raw);
-    if (label) cls.push("labeled", ...(label.length >= 5 ? ["long"] : []));
-    const style = mv ? ` style="--after:${timing.delay(mv) + timing.drop}ms"` : "";
+    if (label) cls.push("labeled");
+    const vars = [];
+    if (mv) vars.push(`--after:${timing.delay(mv) + timing.drop}ms`);
+    if (label) vars.push(`--len:${labelWidth(label)}`);
+    const style = vars.length ? ` style="${vars.join(";")}"` : "";
     cells.push(
       // 名稱模式下 Z 系列是空格（消除後還沒補的位置），不寫名稱；ID 模式每一格都顯示盤面上的原始數字。
       // data-sym 與 title 一律是原圖標，配色和覆寫規則不受 label 影響
@@ -1028,6 +1031,14 @@ function renderBoard(ctx) {
   }
   board.innerHTML = cells.join("");
   if (motion) playMotion(board, motion, timing, size);
+}
+
+// label 的寬度，以等寬字型的半形字為 1：中日韓與全形字約 1em 寬，等寬字型的半形字是 0.6em，算成 1.7。
+// app.css 的 .cell.labeled 用它把字級縮到塞得進格子
+function labelWidth(label) {
+  let w = 0;
+  for (const ch of label) w += /[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/.test(ch) ? 1.7 : 1;
+  return Math.max(1, w);
 }
 
 // 格子大小只跟視窗和盤面行列數有關，換步時不變；至少留 TIMELINE_MIN 給時間軸

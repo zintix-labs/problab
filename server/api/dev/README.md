@@ -184,7 +184,9 @@ DEV.register(2, {
 - ID 模式（SymbolID，`symmode=id`）不呼叫 `label`，一律顯示原始 ID；ID 模式是用來和後端陣列逐格比對的，不能被外掛蓋掉。
 - 負值格（不存在的格子）不呼叫 `label`。
 - `data-sym`、滑鼠提示（idx、名稱、id）、配色與覆寫規則都照原圖標；`cellClass`、`badge`、中獎框與動態不受影響。
-- 改寫的格子帶 `labeled` class，字級統一為格子寬的 0.24（L 系列也不放大）；5 個字以上再加 `long`，自動縮小。要再調整時在外掛的 `css` 寫 `.cell.labeled { … }`。demo 0 的外掛示範了這個用法。
+- 改寫的格子帶 `labeled` class。字級和圖標一樣是格子寬的 0.28，字太多時自動縮到剛好塞進格子（中文、全形字算 1.7 個半形字），不用自己處理長度。
+- 外掛要調整時寫在 `css`：`.cell.labeled { --label-size: 0.42; }` 改基準字級，長的 label 照樣自動縮小；直接寫 `font-size` 則完全自己決定，不再自動縮小。只想調某些格子時，先用 `cellClass` 加上自己的 class，再對那個 class 寫樣式。demo 0 的外掛把 ★ 放大，示範了 `--label-size`。
+- 舊版的 `long` class 已經拿掉，外掛 css 裡的 `.cell.labeled.long` 不再套用。
 
 `modes` 與 `actLabel` 是替玩法和動作取名，屬於畫面的工作，不寫進遊戲設定檔。撰寫外掛時（包括請 AI 協作時），先列出這台每個 ModeID 的行列數、圖標與觸發方式，請使用者決定每個 ModeID 的名稱，並依這些資訊提供建議選項（例如觸發 FG 的 mode 叫 `FreeGame`）；`actLabel` 的文字也先問過再寫。
 

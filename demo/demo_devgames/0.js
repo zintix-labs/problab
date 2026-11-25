@@ -9,8 +9,8 @@
   DEV.register(0, {
     title: { en: "demo_normal info", zh: "demo_normal 資訊" },
     modes: { 0: "BaseGame", 1: "FreeGame" },
-    // label 改寫的格子帶 labeled class；★ 在等寬字型裡偏小，這台放大
-    css: ".cell.labeled { font-size: calc(var(--cell, 64px) * 0.42); }",
+    // label 改寫的格子帶 labeled class；★ 在等寬字型裡偏小，這台把基準字級放大（長的 label 照樣自動縮小）
+    css: ".cell.labeled { --label-size: 0.42; }",
     cellClass: (idx, ctx) => (scatters(ctx).includes(idx) ? ["mark"] : []),
     label: (idx, ctx) => scatters(ctx).includes(idx) && "★",
     badge: (idx, ctx) => (scatters(ctx).includes(idx) ? sym(ctx, ctx.screen[idx]) : ""),
