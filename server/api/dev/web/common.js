@@ -42,7 +42,7 @@ const state = {
   steps: [],
   stepIdx: 0,
   timer: null,       // 自動播放的計時器；播到底就清掉，停下來等
-  autoplay: true,    // 播放意圖：開著時 Spin、換局、選完 player 選項後自動接著播；只有按暫停（P）才關，記在瀏覽器
+  autoplay: true,    // 播放意圖：開著時 Spin、換局、選完 player 選項後自動接著播；用自動／手動播放切換鈕或暫停（P）關掉，記在瀏覽器
   focusDetail: -1,
   pinned: new Set(), // 點一下釘住顯示格子編號的格子
   symMode: "name",   // 格子與中獎明細顯示圖標名稱（name）或盤面上的 ID（id）
@@ -178,6 +178,10 @@ async function init() {
   $("last").onclick = () => go(state.steps.length - 1);
   $("play").onclick = togglePlay;
   state.autoplay = remember("dev.autoplay") !== "0";
+  $("autoplay").onclick = () => {
+    setAutoplay(!state.autoplay);
+    syncPlay();
+  };
   syncPlay();
   document.addEventListener("keydown", onKey);
   window.addEventListener("resize", () => renderBoard(context()));
@@ -465,13 +469,10 @@ function halt() {
   syncPlay();
 }
 
-// 播放鍵顯示計時器的狀態；停著但播放意圖開著時，旁邊註明下一次 Spin（或選完選項）會自動播
+// 播放鍵顯示計時器的狀態；旁邊的切換鈕顯示播放意圖（自動／手動播放），還沒 Spin 時也能先切好
 function syncPlay() {
   $("play").textContent = state.timer ? "⏸ 暫停" : "▶ 播放";
-  const b = state.bets[state.betIdx];
-  const note = state.timer || !state.autoplay ? "" : b && !b.isend && state.stepIdx >= state.steps.length - 1 ? "選完後自動播放" : "Spin 後自動播放";
-  $("play-note").textContent = note;
-  $("play-note").hidden = !note;
+  $("autoplay").textContent = state.autoplay ? "自動播放" : "手動播放";
 }
 
 function symModeText() {

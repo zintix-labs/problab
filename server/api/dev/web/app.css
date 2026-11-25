@@ -322,6 +322,7 @@ kbd {
 /* 兩段切換的按鈕只寫目前的值，寬度固定，切換時不跳動 */
 .controls button.toggle { padding: 0; }
 #chain { width: 56px; }
+#autoplay { width: 88px; }
 #symmode { width: 104px; }
 #play { width: 88px; }
 /* 速度三檔：亮幾個箭頭就是第幾檔 */
@@ -335,7 +336,6 @@ kbd {
 .controls .speed button + button { margin-left: -2px; }
 .controls .speed button.on { color: var(--primary); opacity: 1; }
 .controls .speed button:hover { background: transparent; opacity: 1; }
-.play-note { font-size: 12px; white-space: nowrap; }
 .link-note { color: var(--sym-w-ring); cursor: help; }
 .link-note[hidden] { display: inline; visibility: hidden; } /* 保留位置，⚠ 出現時按鈕不會移動 */
 #pos { display: inline-block; min-width: 72px; text-align: center; font-variant-numeric: tabular-nums; }
