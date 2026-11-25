@@ -276,8 +276,13 @@ async function statsLast() {
 async function renderFundsChip() {
   const last = await statsLast().catch(() => null);
   const v = statsFunds() + (last ? last.net : 0);
+  // 破產過（歷史最低資金跌破 0）就整個標紅，不用打開面板也看得出來
+  const bust = !!last && statsFunds() + last.lo < 0;
   $("funds-val").textContent = fmtNum(v);
-  $("funds-chip").classList.toggle("neg", v < 0);
+  $("funds-chip").classList.toggle("neg", bust);
+  $("funds-chip").title = bust
+    ? `本次統計中破產過（最低資金 ${fmtNum(statsFunds() + last.lo)}）。按一下打開玩家統計`
+    : "玩家剩餘資金：起始資金 + 累計淨輸贏（按一下打開玩家統計）";
 }
 
 // ---------- 面板 ----------
@@ -679,7 +684,6 @@ function renderSelection() {
   band.setAttribute("x", Math.min(c.x(r.A.b), c.x(r.B.b)).toFixed(1));
   band.setAttribute("width", Math.abs(c.x(r.B.b) - c.x(r.A.b)).toFixed(1));
   band.setAttribute("visibility", i === j ? "hidden" : "visible");
-  band.classList.toggle("down", !up);
   [r.A, r.B].forEach((u, k) => {
     const v = s.val(u);
     const d = dots[k];
@@ -687,7 +691,6 @@ function renderSelection() {
     d.setAttribute("cx", c.x(u.b).toFixed(1));
     d.setAttribute("cy", c.y(v + s.off).toFixed(1));
     d.setAttribute("visibility", "visible");
-    d.classList.toggle("down", !up);
   });
   if (i === j) {
     readout(`<b>#${fmtNum(r.A.b)}</b>　拖曳選取區間`);

@@ -475,12 +475,10 @@ button.danger:hover { background: #b91c1c; }
 .stats-chart .guide { stroke: var(--muted); stroke-width: 1; }
 .stats-chart .guide-dot { stroke: var(--card); stroke-width: 1.5; }
 .stats-chart .bust-dot { fill: #dc2626; stroke: var(--card); stroke-width: 2; }
-/* 區間選取：往上綠、往下紅 */
+/* 區間選取：淺色中性底帶，漲跌顏色只留在讀數列 */
 .stats > .stats-chart { cursor: crosshair; user-select: none; -webkit-user-select: none; }
-.stats-chart .sel-band { fill: var(--primary-ink); opacity: .12; }
-.stats-chart .sel-band.down { fill: #dc2626; }
+.stats-chart .sel-band { fill: var(--text); opacity: .07; }
 .stats-chart .sel-dot { fill: var(--primary-ink); stroke: var(--card); stroke-width: 2; }
-.stats-chart .sel-dot.down { fill: #dc2626; }
 .stats-empty { height: 100%; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 10px; font-size: 13px; }
 .stats-list-head {
   display: flex; justify-content: space-between; align-items: center;
