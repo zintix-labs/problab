@@ -322,7 +322,9 @@ kbd {
 /* 兩段切換的按鈕只寫目前的值，寬度固定，切換時不跳動 */
 .controls button.toggle { padding: 0; }
 #chain { width: 56px; }
-#autoplay { width: 88px; }
+/* 自動播放：字固定，亮綠是開、一般按鈕樣式是關 */
+#autoplay { color: var(--muted); }
+#autoplay[aria-pressed="true"] { color: var(--primary-ink); background: var(--primary-soft); border-color: var(--primary); }
 #symmode { width: 104px; }
 #play { width: 88px; }
 /* 速度三檔：亮幾個箭頭就是第幾檔 */

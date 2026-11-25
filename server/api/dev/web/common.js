@@ -42,7 +42,7 @@ const state = {
   steps: [],
   stepIdx: 0,
   timer: null,       // 自動播放的計時器；播到底就清掉，停下來等
-  autoplay: true,    // 播放意圖：開著時 Spin、換局、選完 player 選項後自動接著播；用自動／手動播放切換鈕或暫停（P）關掉，記在瀏覽器
+  autoplay: true,    // 播放意圖：開著時 Spin、換局、選完 player 選項後自動接著播；用「自動」鈕或暫停（P）關掉，記在瀏覽器
   focusDetail: -1,
   pinned: new Set(), // 點一下釘住顯示格子編號的格子
   symMode: "name",   // 格子與中獎明細顯示圖標名稱（name）或盤面上的 ID（id）
@@ -469,10 +469,13 @@ function halt() {
   syncPlay();
 }
 
-// 播放鍵顯示計時器的狀態；旁邊的切換鈕顯示播放意圖（自動／手動播放），還沒 Spin 時也能先切好
+// 播放鍵顯示計時器的狀態；旁邊的「自動」鈕以亮綠表示播放意圖開著，還沒 Spin 時也能先切好
 function syncPlay() {
   $("play").textContent = state.timer ? "⏸ 暫停" : "▶ 播放";
-  $("autoplay").textContent = state.autoplay ? "自動播放" : "手動播放";
+  $("autoplay").setAttribute("aria-pressed", String(state.autoplay));
+  $("autoplay").title = state.autoplay
+    ? "自動播放：開。Spin、換局、選完 player 選項後自動接著播。按一下關閉"
+    : "自動播放：關。Spin 後停在第 1 步，按播放（P）才播。按一下開啟";
 }
 
 function symModeText() {
