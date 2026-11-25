@@ -148,7 +148,7 @@ function statsTx(db, mode, fn) {
     const tx = db.transaction([STATS_STORE, STATS_META], mode);
     let out;
     tx.oncomplete = () => resolve(out);
-    tx.onerror = tx.onabort = () => reject(tx.error || new Error("IndexedDB 交易失敗"));
+    tx.onerror = tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction failed"));
     fn(tx.objectStore(STATS_STORE), tx.objectStore(STATS_META), (v) => (out = v));
   });
 }
@@ -205,7 +205,7 @@ function statsAddEnded(bets) {
       renderFundsChip();
       if ($("stats").open) refreshStats();
     })
-    .catch((e) => ($("status").textContent = "統計寫入失敗：" + e.message));
+    .catch((e) => setStatus("status.statsFail", { e: e.message }));
 }
 
 // ---------- 回放連結 ----------
@@ -234,11 +234,11 @@ function replayLink(r, step) {
 async function loadReplayLink(q) {
   const n = Number(q.get("n")) || 1;
   if (String(state.game.gid) !== q.get("gid")) {
-    $("status").textContent = `錯誤：找不到機台 ${q.get("gid")}`;
+    setStatus("status.noGame", { gid: q.get("gid") });
     render();
     return;
   }
-  $("status").textContent = "重播中…";
+  setStatus("status.replaying");
   try {
     const segments = JSON.parse(fromB64u(q.get("replay")));
     const req = { gid: state.game.gid, betmode: Number($("betmode").value), betmult: betMult(), segments };
@@ -251,15 +251,12 @@ async function loadReplayLink(q) {
     };
     state.bets = [b];
     const same = !q.get("h") || betHash(b) === q.get("h");
-    $("status").textContent = same
-      ? `歷史局 #${n} 重播（不計入統計）`
-      : `⚠ 歷史局 #${n} 的重播結果與紀錄不同：遊戲設定或程式可能改過`;
-    $("status").classList.toggle("warn", !same);
+    setStatus(same ? "status.replayOk" : "status.replayDiff", { n }, !same);
     renderSummary();
     renderResults();
     selectBet(0, false);
   } catch (e) {
-    $("status").textContent = "重播失敗：" + e.message;
+    setStatus("status.replayFail", { e: e.message });
     render();
   }
 }
@@ -280,9 +277,7 @@ async function renderFundsChip() {
   const bust = !!last && statsFunds() + last.lo < 0;
   $("funds-val").textContent = fmtNum(v);
   $("funds-chip").classList.toggle("neg", bust);
-  $("funds-chip").title = bust
-    ? `本次統計中破產過（最低資金 ${fmtNum(statsFunds() + last.lo)}）。按一下打開玩家統計`
-    : "玩家剩餘資金：起始資金 + 累計淨輸贏（按一下打開玩家統計）";
+  $("funds-chip").title = bust ? t("bar.funds.bust", { v: fmtNum(statsFunds() + last.lo) }) : t("bar.funds.tip");
 }
 
 // ---------- 面板 ----------
@@ -372,18 +367,18 @@ async function refreshStats() {
 async function resetStats() {
   const btn = $("stats-reset");
   if (!stats.resetArmed) {
-    btn.textContent = "再按一次確認歸零";
+    btn.textContent = t("stats.reset.confirm");
     btn.classList.add("danger");
     stats.resetArmed = setTimeout(() => {
       stats.resetArmed = null;
-      btn.textContent = "歸零";
+      btn.textContent = t("stats.reset");
       btn.classList.remove("danger");
     }, 3000);
     return;
   }
   clearTimeout(stats.resetArmed);
   stats.resetArmed = null;
-  btn.textContent = "歸零";
+  btn.textContent = t("stats.reset");
   btn.classList.remove("danger");
   const db = await statsDB();
   if (db) await statsTx(db, "readwrite", (st, meta) => { st.clear(); meta.clear(); });
@@ -432,9 +427,9 @@ function statsBust(funds) {
 
 // 三種視圖：一次畫一條線，都用主題綠，靠切換按鈕與圖例標明目前是哪一個。k 是 bucket.v 的索引
 function statsSeries(funds) {
-  if (stats.view === "rtp") return { name: "資金 RTP", hint: "總贏分 ÷ 總押注", k: 1, val: rtpOf, off: 0, refs: [100], fmt: fmtPct, rtp: true };
-  if (stats.view === "mrtp") return { name: "倍率 RTP", hint: "每局贏倍的平均", k: 2, val: mrtpOf, off: 0, refs: [100], fmt: fmtPct, rtp: true };
-  return { name: "資金", hint: "起始資金 + 累計淨輸贏", k: 0, val: (u) => u.net, off: funds, refs: [funds, 0], fmt: (v) => fmtNum(v) };
+  if (stats.view === "rtp") return { name: t("stats.view.rtp"), hint: t("stats.hint.rtp"), k: 1, val: rtpOf, off: 0, refs: [100], fmt: fmtPct, rtp: true };
+  if (stats.view === "mrtp") return { name: t("stats.view.mrtp"), hint: t("stats.hint.mrtp"), k: 2, val: mrtpOf, off: 0, refs: [100], fmt: fmtPct, rtp: true };
+  return { name: t("stats.view.funds"), hint: t("stats.hint.funds"), k: 0, val: (u) => u.net, off: funds, refs: [funds, 0], fmt: (v) => fmtNum(v) };
 }
 
 // units 中局號最接近 n 的點（units 依局號排序）
@@ -458,7 +453,7 @@ function renderStatsChart() {
   const units = stats.units;
   const legend = $("stats-legend");
   if (units.length < 2) {
-    box.innerHTML = `<div class="stats-empty muted">至少兩局才畫走勢</div>`;
+    box.innerHTML = `<div class="stats-empty muted">${esc(t("stats.chartEmpty"))}</div>`;
     legend.innerHTML = "";
     stats.chart = null;
     renderSelection();
@@ -514,12 +509,12 @@ function renderStatsChart() {
   const ticks = [hi - padY, (hi + lo) / 2, lo + padY];
   const base = CHART.t + ph;
   const xStart = x(shown[0][0]), xEnd = x(shown[shown.length - 1][0]);
-  let svg = `<svg width="${W}" height="${CHART.h}" viewBox="0 0 ${W} ${CHART.h}" aria-label="走勢圖">` +
+  let svg = `<svg width="${W}" height="${CHART.h}" viewBox="0 0 ${W} ${CHART.h}" aria-label="${esc(t("stats.chart"))}">` +
     `<defs><linearGradient id="stats-fade" class="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-opacity="0.32" /><stop offset="1" stop-opacity="0" /></linearGradient>` +
     `<clipPath id="stats-clip"><rect x="${CHART.l}" y="${CHART.t}" width="${pw}" height="${ph}" /></clipPath></defs>`;
-  ticks.forEach((t) => {
-    svg += `<line class="grid" x1="${CHART.l}" x2="${W - CHART.r}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}" />` +
-      `<text class="axis" x="${CHART.l - 8}" y="${(y(t) + 4).toFixed(1)}" text-anchor="end">${esc(s.fmt(t))}</text>`;
+  ticks.forEach((tk) => {
+    svg += `<line class="grid" x1="${CHART.l}" x2="${W - CHART.r}" y1="${y(tk).toFixed(1)}" y2="${y(tk).toFixed(1)}" />` +
+      `<text class="axis" x="${CHART.l - 8}" y="${(y(tk) + 4).toFixed(1)}" text-anchor="end">${esc(s.fmt(tk))}</text>`;
   });
   s.refs.forEach((ref) => {
     if (ref < lo || ref > hi) return;
@@ -534,7 +529,7 @@ function renderStatsChart() {
     if (bust) {
       const u = units[bust.index];
       const [n, v] = bust.exact ? [u.b, u.net] : [u.v[0][1], u.v[0][0]];
-      svg += `<circle class="bust-dot" cx="${x(n).toFixed(1)}" cy="${y(v + funds).toFixed(1)}" r="4.5"><title>${esc(bustText(bust))}破產</title></circle>`;
+      svg += `<circle class="bust-dot" cx="${x(n).toFixed(1)}" cy="${y(v + funds).toFixed(1)}" r="4.5"><title>${esc(t("stats.bustDot", { where: bustText(bust) }))}</title></circle>`;
     }
   }
   svg += `<text class="axis" x="${CHART.l}" y="${CHART.h - 6}">#${fmtNum(n0)}</text>` +
@@ -546,13 +541,13 @@ function renderStatsChart() {
   box.innerHTML = svg;
   const coarse = units.some((u) => u.a !== u.b && u.a > 0);
   legend.innerHTML = `<span class="legend s-a"><i></i>${esc(s.name)}</span><span class="muted">${esc(s.hint)}</span>` +
-    (coarse ? `<span class="muted" title="保留範圍（最近 ${fmtNum(STATS_KEEP)} 局）之前的走勢每點涵蓋多局，區間只能選在點上">早期每點 ${fmtNum(stats.series.size)} 局</span>` : "");
+    (coarse ? `<span class="muted" title="${esc(t("stats.coarse.tip", { keep: fmtNum(STATS_KEEP) }))}">${esc(t("stats.coarse", { n: fmtNum(stats.series.size) }))}</span>` : "");
   stats.chart = { x, y, s, pw, n0, n1 };
   renderSelection();
 }
 
 function bustText(bust) {
-  return bust.exact ? `第 ${fmtNum(bust.b)} 局` : `第 ${fmtNum(bust.a)}～${fmtNum(bust.b)} 局之間`;
+  return bust.exact ? t("stats.bustAt", { n: fmtNum(bust.b) }) : t("stats.bustBetween", { a: fmtNum(bust.a), b: fmtNum(bust.b) });
 }
 
 // ---------- 滑鼠讀值與區間選取 ----------
@@ -633,11 +628,11 @@ function statsHover(e) {
     dot.setAttribute("cy", cy.toFixed(1));
     dot.setAttribute("visibility", cy >= CHART.t && cy <= CHART.h - CHART.b ? "visible" : "hidden");
   } else dot.setAttribute("visibility", "hidden");
-  readout(`<b>#${fmtNum(u.b)}</b>${u.a !== u.b && u.a > 0 ? `<span class="muted">（第 ${fmtNum(u.a)}～${fmtNum(u.b)} 局）</span>` : ""}　${esc(c.s.name)} ${Number.isFinite(v) ? esc(c.s.fmt(v + c.s.off)) : "—"}`);
+  readout(`<b>#${fmtNum(u.b)}</b>${u.a !== u.b && u.a > 0 ? `<span class="muted">${esc(t("stats.span", { a: fmtNum(u.a), b: fmtNum(u.b) }))}</span>` : ""}<span>${esc(c.s.name)} ${Number.isFinite(v) ? esc(c.s.fmt(v + c.s.off)) : "—"}</span>`);
 }
 
 function readout(html) {
-  $("stats-readout").innerHTML = html || `<span class="muted">按住滑鼠拖曳，看兩點之間的變化</span>`;
+  $("stats-readout").innerHTML = html || `<span class="muted">${esc(t("stats.idle"))}</span>`;
 }
 
 // 區間 (A, B]：A、B 都是點上的累計值，所以押注、贏分、RTP、FG 次數直接相減；最大回撤與最大贏倍掃過中間的點
@@ -693,26 +688,26 @@ function renderSelection() {
     d.setAttribute("visibility", "visible");
   });
   if (i === j) {
-    readout(`<b>#${fmtNum(r.A.b)}</b>　拖曳選取區間`);
+    readout(`<b>#${fmtNum(r.A.b)}</b><span class="muted">${esc(t("stats.drag"))}</span>`);
     return;
   }
   // 目前這條線的變化：資金寫差額與百分比，RTP 寫百分點
   let change = "—";
   if (Number.isFinite(va) && Number.isFinite(vb)) {
-    const pct = s.rtp ? "" : shownVal(va) > 0 ? `，${fmtSigned((100 * delta) / shownVal(va), 2)}%` : "";
-    change = `${esc(s.fmt(va + s.off))} → ${esc(s.fmt(vb + s.off))} <span class="${up ? "up" : "down"}">${s.rtp ? `${fmtSigned(delta, 2)} 個百分點` : `${fmtSigned(delta)}${pct}`}</span>`;
+    const pct = s.rtp ? "" : shownVal(va) > 0 ? t("stats.pct", { v: fmtSigned((100 * delta) / shownVal(va), 2) }) : "";
+    change = `${esc(s.fmt(va + s.off))} → ${esc(s.fmt(vb + s.off))} <span class="${up ? "up" : "down"}">${esc(s.rtp ? t("stats.pp", { v: fmtSigned(delta, 2) }) : `${fmtSigned(delta)}${pct}`)}</span>`;
   }
-  const item = (k, v, tip) => `<span${tip ? ` title="${esc(tip)}"` : ""}><span class="muted">${k}</span> ${v}</span>`;
+  const item = (k, v, tip) => `<span${tip ? ` title="${esc(t(tip))}"` : ""}><span class="muted">${esc(k)}</span> ${v}</span>`;
   readout(
-    `<b>#${fmtNum(r.A.b)} → #${fmtNum(r.B.b)}</b><span class="muted">（${fmtNum(r.count)} 局）</span>` +
+    `<b>#${fmtNum(r.A.b)} → #${fmtNum(r.B.b)}</b><span class="muted">${esc(t("stats.count", { n: fmtNum(r.count) }))}</span>` +
     item(s.name, change) +
-    item("押注", fmtNum(r.bet)) +
-    item("贏分", fmtNum(r.win)) +
-    item("區間資金 RTP", Number.isFinite(r.rtp) ? fmtPct(r.rtp) : "—", "區間贏分 ÷ 區間押注") +
-    item("區間倍率 RTP", Number.isFinite(r.mrtp) ? fmtPct(r.mrtp) : "—", "區間每局贏倍的平均") +
-    item("FG", `${fmtNum(r.fg)} 次`) +
-    item("最大贏倍", `×${fmtNum(r.pm, 2)}`) +
-    item("最大回撤", fmtNum(r.dd), "區間內資金從高點往後掉最多的幅度"),
+    item(t("stats.r.bet"), fmtNum(r.bet)) +
+    item(t("stats.r.win"), fmtNum(r.win)) +
+    item(t("stats.r.rtp"), Number.isFinite(r.rtp) ? fmtPct(r.rtp) : "—", "stats.r.rtp.tip") +
+    item(t("stats.r.mrtp"), Number.isFinite(r.mrtp) ? fmtPct(r.mrtp) : "—", "stats.r.mrtp.tip") +
+    item(t("stats.r.fg"), esc(t("stats.times", { n: fmtNum(r.fg) }))) +
+    item(t("stats.r.pm"), `×${fmtNum(r.pm, 2)}`) +
+    item(t("stats.r.dd"), fmtNum(r.dd), "stats.r.dd.tip"),
   );
 }
 
@@ -723,29 +718,29 @@ function renderStats() {
   const last = recs[recs.length - 1];
   const funds = statsFunds();
   $("stats-view").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.view === stats.view));
-  $("stats-list-title").textContent = `歷史局（最近 ${fmtNum(STATS_KEEP)} 局）`;
+  $("stats-list-title").textContent = t("stats.historyN", { n: fmtNum(STATS_KEEP) });
   if (!last) {
-    $("stats-nums").innerHTML = `<span class="muted">${stats.db ? "還沒有紀錄。在 Seed 模式按 Spin 後開始累計。" : "這個瀏覽器無法使用 IndexedDB，統計停用。"}</span>`;
+    $("stats-nums").innerHTML = `<span class="muted">${esc(t(stats.db ? "stats.empty" : "stats.noIdb"))}</span>`;
     renderStatsChart();
     renderStatsList();
     return;
   }
   const bust = statsBust(funds);
   const items = [
-    ["轉數", fmtNum(last.n)],
-    ["總押注", fmtNum(last.cb)],
-    ["總贏分", fmtNum(last.cw)],
-    ["資金 RTP", last.cb > 0 ? fmtPct((100 * last.cw) / last.cb) : "—", "總贏分 ÷ 總押注"],
-    ["倍率 RTP", fmtPct((100 * last.cm) / last.n), "每局贏倍（贏分 ÷ 該局押注）的平均"],
-    ["進 FG", last.cf ? `${fmtNum(last.cf)} 次（1/${fmtNum(last.n / last.cf, 1)}）` : "0 次", "進過 FG 的局數；括號是平均幾局一次"],
-    ["目前資金", fmtNum(funds + last.net)],
-    ["最高資金", fmtNum(funds + last.hi)],
-    ["最低資金", fmtNum(funds + last.lo)],
-    ["最大贏倍", `×${fmtNum(last.mx, 2)}`],
+    ["stats.n.spins", fmtNum(last.n)],
+    ["stats.n.bet", fmtNum(last.cb)],
+    ["stats.n.win", fmtNum(last.cw)],
+    ["stats.view.rtp", last.cb > 0 ? fmtPct((100 * last.cw) / last.cb) : "—", "stats.hint.rtp"],
+    ["stats.view.mrtp", fmtPct((100 * last.cm) / last.n), "stats.n.mrtp.tip"],
+    ["stats.n.fg", last.cf ? t("stats.n.fgv", { n: fmtNum(last.cf), avg: fmtNum(last.n / last.cf, 1) }) : t("stats.times", { n: 0 }), "stats.n.fg.tip"],
+    ["stats.n.funds", fmtNum(funds + last.net)],
+    ["stats.n.hi", fmtNum(funds + last.hi)],
+    ["stats.n.lo", fmtNum(funds + last.lo)],
+    ["stats.n.mx", `×${fmtNum(last.mx, 2)}`],
   ];
-  if (bust) items.push(["破產", bustText(bust), "資金第一次跌破 0"]);
+  if (bust) items.push(["stats.n.bust", bustText(bust), "stats.n.bust.tip"]);
   $("stats-nums").innerHTML = items
-    .map(([k, v, tip]) => `<div${tip ? ` title="${esc(tip)}"` : ""}${k === "破產" ? ` class="bust"` : ""}><span class="muted">${k}</span><b>${esc(v)}</b></div>`)
+    .map(([k, v, tip]) => `<div${tip ? ` title="${esc(t(tip))}"` : ""}${k === "stats.n.bust" ? ` class="bust"` : ""}><span class="muted">${esc(t(k))}</span><b>${esc(v)}</b></div>`)
     .join("");
   renderStatsChart();
   renderStatsList();
@@ -769,12 +764,12 @@ function renderStatsList() {
   for (let i = stats.records.length - 1; i >= 0; i--) if (visible(stats.records[i])) rows.push(stats.records[i]);
   const html = rows.slice(0, stats.shown).map((r) => {
     const mult = r.bet > 0 ? r.win / r.bet : 0;
-    return `<li data-n="${r.n}" title="贏分 ${fmtNum(r.win)}｜倍數 ${r.betmult}｜${r.segs.length} 個 Cycle">` +
+    return `<li data-n="${r.n}" title="${esc(t("stats.row.tip", { win: fmtNum(r.win), m: r.betmult, c: r.segs.length }))}">` +
       `<span class="n">#${fmtNum(r.n)}</span><span class="g">${esc(gameName(r.gid))}</span><span>BetMode ${r.betmode}</span>` +
-      `<span>${r.fg ? `<span class="tag">FG</span>` : ""}</span><span class="num">押 ${fmtNum(r.bet)}</span><span class="num">×${fmtNum(mult, 2)}</span>` +
-      `<span class="acts"><button data-act="open">開新視窗</button><button data-act="copy">複製連結</button></span></li>`;
+      `<span>${r.fg ? `<span class="tag">FG</span>` : ""}</span><span class="num">${esc(t("stats.row.bet", { v: fmtNum(r.bet) }))}</span><span class="num">×${fmtNum(mult, 2)}</span>` +
+      `<span class="acts"><button data-act="open">${esc(t("stats.row.open"))}</button><button data-act="copy">${esc(t("ctrl.copyLink"))}</button></span></li>`;
   });
-  if (rows.length > stats.shown) html.push(`<li class="more"><button data-more>顯示更多（還有 ${fmtNum(rows.length - stats.shown)} 局）</button></li>`);
-  if (!rows.length) html.push(`<li class="more muted">${stats.records.length ? "沒有符合篩選的局" : "沒有紀錄"}</li>`);
+  if (rows.length > stats.shown) html.push(`<li class="more"><button data-more>${esc(t("stats.more", { n: fmtNum(rows.length - stats.shown) }))}</button></li>`);
+  if (!rows.length) html.push(`<li class="more muted">${esc(t(stats.records.length ? "stats.noMatch" : "stats.none"))}</li>`);
   $("stats-list").innerHTML = html.join("");
 }

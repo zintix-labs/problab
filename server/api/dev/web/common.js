@@ -4,6 +4,11 @@
 
 const DEV = (window.DEV = {
   plugins: {},
+  // 目前的介面語言（"en" 或 "zh"）；外掛的文字用 DEV.t({ en, zh }) 依語言取，切換語言時公版會重畫外掛的部分
+  get lang() {
+    return i18n.lang;
+  },
+  t: pickLang,
   register(gid, plugin) {
     this.plugins[gid] = plugin;
     if (plugin.css) {
@@ -49,18 +54,19 @@ const state = {
   speed: 0,          // SPEEDS 的索引
   chain: false,      // 播放模式：false 單局（播完這局就停）、true 連續（接著播局列表的下一局）
   theme: "system",   // 主題：system（跟隨系統）、light、dark；記在瀏覽器
+  status: null,      // 狀態列目前的訊息 { key, vars }，切換語言時照新語言重寫
   request: null,     // 產生目前這批的請求（choose、betmode、betmult、input、value、rounds），續段、回放與複製連結沿用；
                      // 從歷史局的回放連結載入時 input 為 "replay"，另帶 replay、h、n
-  replay: null,      // 目前這局「回放這局」的比對結果
+  replay: null,      // 目前這局「回放這局」的比對結果 { ok, key, vars }
 };
 
 const $ = (id) => document.getElementById(id);
 
 // 主題按鈕依序切換：跟隨系統 → 淺色 → 深色
 const THEMES = {
-  system: { label: "跟隨系統", next: "light", icon: `<rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" />` },
-  light: { label: "淺色", next: "dark", icon: `<circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />` },
-  dark: { label: "深色", next: "system", icon: `<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />` },
+  system: { label: "theme.system", next: "light", icon: `<rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" />` },
+  light: { label: "theme.light", next: "dark", icon: `<circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />` },
+  dark: { label: "theme.dark", next: "system", icon: `<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />` },
 };
 const systemDark = matchMedia("(prefers-color-scheme: dark)");
 
@@ -84,7 +90,7 @@ async function api(path, body) {
   return res.json();
 }
 
-// 瀏覽器儲存只記住上次選的機台、圖標的 Name／ID、主題、局列表與歷史局的贏倍篩選、起始資金；無法使用時照常運作。
+// 瀏覽器儲存只記住上次選的機台、圖標的 Name／ID、主題、介面語言、自動播放、局列表與歷史局的贏倍篩選、起始資金；無法使用時照常運作。
 // 玩家統計的紀錄另外存在 IndexedDB（stats.js）
 function remember(key, value) {
   try {
@@ -96,9 +102,48 @@ function remember(key, value) {
   return null;
 }
 
+// 狀態列：記下鍵與代入值，切換語言時重寫；key 為空時清空。warn 加上警告色
+function setStatus(key, vars, warn = false) {
+  state.status = key ? { key, vars, warn } : null;
+  renderStatus();
+}
+
+function renderStatus() {
+  const st = state.status;
+  $("status").textContent = st ? (Array.isArray(st.key) ? st.key.map(([k, v]) => t(k, v)).join(t("status.sep")) : t(st.key, st.vars)) : "";
+  $("status").classList.toggle("warn", !!(st && st.warn));
+}
+
+// 切換介面語言並記住；固定文字由 applyI18n 換掉，程式產生的部分整個重畫
+function setLang(lang) {
+  i18n.lang = LANGS.includes(lang) ? lang : "en";
+  remember("dev.lang", i18n.lang);
+  applyI18n();
+  if (!state.game) return;
+  setTheme(state.theme);
+  setSpeed(state.speed);
+  syncPlay();
+  syncChain();
+  syncInputs();
+  syncWager();
+  syncSeedCopy();
+  renderStatus();
+  renderSummary();
+  renderResults();
+  render();
+  renderFundsChip();
+  if ($("stats").open) renderStats();
+}
+
 // ---------- 載入 ----------
 
 async function init() {
+  i18n.lang = remember("dev.lang") === "zh" ? "zh" : "en";
+  applyI18n();
+  $("lang").onclick = (e) => {
+    const btn = e.target.closest("button[data-lang]");
+    if (btn) setLang(btn.dataset.lang);
+  };
   state.meta = await api("meta");
   state.games = state.meta.games;
   // 應用端注入的主題排在 app.css 之後、外掛的 css 之前
@@ -135,17 +180,17 @@ async function init() {
 
   sel.onchange = selectGame;
   $("symmode").onclick = () => setSymMode(state.symMode === "id" ? "name" : "id");
-  $("chain").textContent = "單局";
+  syncChain();
   $("chain").onclick = () => {
     state.chain = !state.chain;
-    $("chain").textContent = state.chain ? "連續" : "單局";
+    syncChain();
   };
   // 粗的實心箭頭，彼此緊貼
   const chevron = `<svg viewBox="0 0 12 16" width="12" height="16" aria-hidden="true"><path d="M0 0h5.5l6.5 8-6.5 8H0l6.5-8z" fill="currentColor" /></svg>`;
   setTheme(remember("dev.theme"));
   $("theme-btn").onclick = () => setTheme(THEMES[state.theme].next);
   systemDark.addEventListener("change", () => setTheme(state.theme));
-  $("speed").innerHTML = SPEEDS.map((s, i) => `<button data-level="${i}" title="${s.name}" aria-label="速度 ${s.name}">${chevron}</button>`).join("");
+  $("speed").innerHTML = SPEEDS.map((s, i) => `<button data-level="${i}" title="${s.name}">${chevron}</button>`).join("");
   $("speed").onclick = (e) => {
     const btn = e.target.closest("button");
     if (btn) setSpeed(Number(btn.dataset.level));
@@ -229,7 +274,7 @@ function syncInputs() {
   const single = $("input").value === "snap" || $("choose").value === "player";
   $("rounds").disabled = single;
   if (single) $("rounds").value = 1;
-  $("value").placeholder = $("input").value === "snap" ? "某個 Cycle 的 start_b64u（只保證 Cycle 0）" : "空白隨機｜整數｜hex:…｜utf8:…";
+  $("value").placeholder = t($("input").value === "snap" ? "bar.value.snap" : "bar.value.seed");
 }
 
 // 投注倍數 1～max_bet_mult；投注額 = 押注單位 × 倍數
@@ -240,7 +285,7 @@ function betMult() {
 
 function syncWager() {
   const unit = state.game.bet_units[Number($("betmode").value)] ?? 0;
-  $("wager").textContent = `投注額 ${unit * betMult()}`;
+  $("wager").textContent = t("bar.wager", { v: unit * betMult() });
 }
 
 // 只有 /dev/meta 標示 plugin 的機台才載入 games/<gid>.js；其他機台只顯示公版
@@ -249,15 +294,14 @@ function loadPlugin(game) {
   const s = document.createElement("script");
   s.src = `games/${game.gid}.js`;
   s.dataset.gid = game.gid;
-  s.onerror = () => ($("status").textContent = `games/${game.gid}.js 載入失敗，只顯示公版`);
+  s.onerror = () => setStatus("status.pluginFail", { gid: game.gid });
   document.body.appendChild(s);
 }
 
 // 手動按 Spin、輸入為 Seed 時，這批的局計入玩家統計（player 的局選到結束才計入）；fromLink 是從網址自動執行，不計入
 async function spin(opts = {}) {
   halt();
-  $("status").textContent = "執行中…";
-  $("status").classList.remove("warn");
+  setStatus("status.running");
   const req = {
     gid: state.game.gid,
     betmode: Number($("betmode").value),
@@ -281,21 +325,26 @@ async function spin(opts = {}) {
       statsAddEnded(state.bets);
     }
     // 實際使用的 seed 不寫在狀態列，改由「seed」按鈕複製
-    $("seed-copy").hidden = rep.input !== "seed";
-    $("seed-copy").title = rep.input === "seed" ? `複製這批的 seed：${rep.seed}` : "";
     $("seed-copy").dataset.seed = rep.input === "seed" ? rep.seed : "";
+    syncSeedCopy();
     const notes = [];
-    if (rep.input !== "seed") notes.push(rep.partial_replay ? "snap 回放（只保證 Cycle 0）" : "snap 回放");
-    if (rep.clamped) notes.push(`已限制為 ${rep.rounds} 局`);
-    $("status").textContent = notes.join("｜");
+    if (rep.input !== "seed") notes.push([rep.partial_replay ? "status.snapPartial" : "status.snap"]);
+    if (rep.clamped) notes.push(["status.clamped", { n: rep.rounds }]);
+    setStatus(notes.length ? notes : "");
     renderSummary();
     renderResults();
     // 從網址自動執行的不自動播放，停在網址指定的那一步
     const first = state.bets.findIndex(betVisible());
     selectBet(first >= 0 ? first : 0, !opts.fromLink);
   } catch (e) {
-    $("status").textContent = "錯誤：" + e.message;
+    setStatus("status.error", { e: e.message });
   }
+}
+
+function syncSeedCopy() {
+  const seed = $("seed-copy").dataset.seed;
+  $("seed-copy").hidden = !seed;
+  $("seed-copy").title = seed ? t("bar.seed.tip", { seed }) : "";
 }
 
 // 總計只算已結束的局；player 的局選到結束後重新計算
@@ -310,7 +359,7 @@ function renderSummary() {
   const rtp = bet > 0 ? ((100 * win) / bet).toFixed(2) : "0.00";
   const pending = state.bets.length - done;
   $("summary").textContent = state.bets.length
-    ? `${done} 局｜總押 ${bet}｜總贏 ${win}｜RTP ${rtp}%` + (pending ? `｜${pending} 局進行中` : "")
+    ? t("list.summary", { done, bet, win, rtp }) + (pending ? t("list.pending", { n: pending }) : "")
     : "";
 }
 
@@ -449,17 +498,20 @@ function setTheme(theme) {
   remember("dev.theme", state.theme);
   const dark = state.theme === "dark" || (state.theme === "system" && systemDark.matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
-  const t = THEMES[state.theme];
-  $("theme-btn").title = `主題：${t.label}（按一下切換）`;
-  $("theme-btn").setAttribute("aria-label", `主題：${t.label}`);
-  $("theme-btn").innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${t.icon}</svg>`;
+  const th = THEMES[state.theme];
+  $("theme-btn").title = t("theme.tip", { name: t(th.label) });
+  $("theme-btn").setAttribute("aria-label", t("theme.aria", { name: t(th.label) }));
+  $("theme-btn").innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${th.icon}</svg>`;
 }
 
 // 播放中換檔從下一步開始生效
 function setSpeed(level) {
   state.speed = ((level % SPEEDS.length) + SPEEDS.length) % SPEEDS.length;
-  $("speed").title = `速度 ${SPEEDS[state.speed].name}（+）`;
-  $("speed").querySelectorAll("button").forEach((btn, i) => btn.classList.toggle("on", i <= state.speed));
+  $("speed").title = t("ctrl.speed", { name: SPEEDS[state.speed].name });
+  $("speed").querySelectorAll("button").forEach((btn, i) => {
+    btn.classList.toggle("on", i <= state.speed);
+    btn.setAttribute("aria-label", t("ctrl.speed.level", { name: SPEEDS[i].name }));
+  });
 }
 
 // 只停計時器，不動播放意圖
@@ -471,11 +523,13 @@ function halt() {
 
 // 播放鍵顯示計時器的狀態；旁邊的「自動」鈕以亮綠表示播放意圖開著，還沒 Spin 時也能先切好
 function syncPlay() {
-  $("play").textContent = state.timer ? "⏸ 暫停" : "▶ 播放";
+  $("play").textContent = t(state.timer ? "ctrl.pause" : "ctrl.play");
   $("autoplay").setAttribute("aria-pressed", String(state.autoplay));
-  $("autoplay").title = state.autoplay
-    ? "自動播放：開。Spin、換局、選完 player 選項後自動接著播。按一下關閉"
-    : "自動播放：關。Spin 後停在第 1 步，按播放（P）才播。按一下開啟";
+  $("autoplay").title = t(state.autoplay ? "ctrl.auto.on" : "ctrl.auto.off");
+}
+
+function syncChain() {
+  $("chain").textContent = t(state.chain ? "ctrl.chain" : "ctrl.single");
 }
 
 function symModeText() {
@@ -494,8 +548,8 @@ function setSymMode(mode) {
 
 // 快捷鍵一覽在 index.html 的說明面板（#help）。輸入框裡打字和選單操作不攔；Enter 在輸入框裡也執行 Spin。
 function onKey(e) {
-  const t = e.target;
-  const typing = t instanceof Element && t.matches("input:not([type=checkbox]), select");
+  const target = e.target;
+  const typing = target instanceof Element && target.matches("input:not([type=checkbox]), select");
   // 統計面板開著時只處理 S（關閉）；Esc 由 dialog 自己關閉
   if ($("stats").open) {
     if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === "s" || e.key === "S")) {
@@ -562,8 +616,8 @@ function showLinkNote(note) {
 function linkNote() {
   const b = state.bets[state.betIdx];
   if (!b || b.segments.length < 2 || !state.request) return "";
-  if (state.request.choose === "player") return "player 的選擇不在網址裡，只重現到 Cycle 0";
-  if (state.request.input === "snap") return "Snap 只重現到 Cycle 0";
+  if (state.request.choose === "player") return t("link.player");
+  if (state.request.input === "snap") return t("link.snap");
   return "";
 }
 
@@ -582,10 +636,10 @@ async function pick(position) {
   const b = state.bets[state.betIdx];
   const last = b.segments[b.segments.length - 1];
   if (b.segments.length >= state.meta.max_segments) {
-    $("status").textContent = `錯誤：一局最多 ${state.meta.max_segments} 個 Cycle`;
+    setStatus("status.maxSeg", { n: state.meta.max_segments });
     return;
   }
-  $("status").textContent = "執行中…";
+  setStatus("status.running");
   try {
     const req = {
       gid: state.request.gid,
@@ -600,7 +654,8 @@ async function pick(position) {
     b.segments.push(rep.segment);
     b.win += rep.segment.win;
     b.isend = rep.segment.isend;
-    $("status").textContent = b.isend ? `第 ${b.index} 局結束，總贏分 ${b.win}` : "請選擇下一個 Cycle";
+    if (b.isend) setStatus("status.betEnd", { n: b.index, win: b.win });
+    else setStatus("status.pickNext");
     if (b.isend) statsAddEnded([b]);
     const from = state.steps.length;
     state.steps = flatten(b);
@@ -611,7 +666,7 @@ async function pick(position) {
     render();
     resume();
   } catch (e) {
-    $("status").textContent = "錯誤：" + e.message;
+    setStatus("status.error", { e: e.message });
   }
 }
 
@@ -648,7 +703,7 @@ function plugin() {
 // 「State 1 · ModeID 2 [FreeGame]」中 State 後面的部分。State 是這一段 gamemodes 的索引，
 // ModeID 是設定檔 game_mode_settings 的索引；名稱由外掛的 modes 提供，沒有就省略
 function stateLabel(modeIdx, mode) {
-  const name = (plugin().modes || {})[mode.modeid];
+  const name = pickLang((plugin().modes || {})[mode.modeid]);
   return `${modeIdx} · ModeID ${mode.modeid}${name ? ` [${name}]` : ""}`;
 }
 
@@ -667,7 +722,7 @@ function render() {
 function renderDTO(ctx) {
   const b = state.bets[state.betIdx];
   if (!b || !ctx) {
-    $("cycle-title").textContent = "本 Cycle 快照";
+    $("cycle-title").textContent = t("side.cycle");
     $("cycle-dto").innerHTML = "";
     $("dto").innerHTML = "";
     $("raw-dto").textContent = "";
@@ -675,20 +730,20 @@ function renderDTO(ctx) {
   }
   const seg = ctx.segment;
   const st = seg.spin_state || {};
-  $("cycle-title").textContent = `Cycle ${ctx.segIdx} 快照` + (b.segments.length > 1 ? `（共 ${b.segments.length} 個 Cycle）` : "");
+  $("cycle-title").textContent = t("side.cycleN", { i: ctx.segIdx }) + (b.segments.length > 1 ? t("side.cycleOf", { n: b.segments.length }) : "");
   $("cycle-dto").innerHTML =
-    `<div class="muted">start_b64u（起始快照）</div><code class="snap">${esc(st.start_b64u || "")}</code>` +
-    `<div class="muted">after_b64u（結束後）</div><code class="snap">${esc(st.after_b64u || "")}</code>` +
-    (st.cp !== undefined ? `<div class="muted">cp（輸出的 checkpoint）</div><code class="snap">${esc(JSON.stringify(st.cp))}</code>` : "") +
+    `<div class="muted">${esc(t("side.start"))}</div><code class="snap">${esc(st.start_b64u || "")}</code>` +
+    `<div class="muted">${esc(t("side.after"))}</div><code class="snap">${esc(st.after_b64u || "")}</code>` +
+    (st.cp !== undefined ? `<div class="muted">${esc(t("side.cp"))}</div><code class="snap">${esc(JSON.stringify(st.cp))}</code>` : "") +
     `<div class="btns">` +
-    `<button id="dto-copy-snap">複製 start_b64u</button>` +
-    (ctx.segIdx === 0 ? `<button id="dto-snap" title="輸入切到 Snap，只保證 Cycle 0">用這個快照重跑</button>` : "") +
+    `<button id="dto-copy-snap">${esc(t("side.copyStart"))}</button>` +
+    (ctx.segIdx === 0 ? `<button id="dto-snap" title="${esc(t("side.rerun.tip"))}">${esc(t("side.rerun"))}</button>` : "") +
     `</div>`;
   let html =
     `<div class="btns">` +
-    `<button id="dto-replay" title="以每個 Cycle 的快照逐一重跑，整局完全重現">回放這局</button>` +
-    `<button id="dto-copy">複製完整 DTO</button></div>`;
-  if (state.replay) html += `<div class="replay-result ${state.replay.ok ? "ok" : "bad"}">${esc(state.replay.text)}</div>`;
+    `<button id="dto-replay" title="${esc(t("side.replay.tip"))}">${esc(t("side.replay"))}</button>` +
+    `<button id="dto-copy">${esc(t("side.copyDto"))}</button></div>`;
+  if (state.replay) html += `<div class="replay-result ${state.replay.ok ? "ok" : "bad"}">${esc(t(state.replay.key, state.replay.vars))}</div>`;
   $("dto").innerHTML = html;
   const json = JSON.stringify(b.segments, null, 2);
   $("raw-dto").textContent = json;
@@ -716,10 +771,10 @@ async function replayBet(b) {
     const got = rep.bet.segments;
     const bad = b.segments.findIndex((s, i) => JSON.stringify(s) !== JSON.stringify(got[i]));
     state.replay = bad < 0
-      ? { ok: true, text: `回放一致：${got.length} 個 Cycle 完全相同` }
-      : { ok: false, text: `回放不一致：Cycle ${bad} 不同` };
+      ? { ok: true, key: "side.replayOk", vars: { n: got.length } }
+      : { ok: false, key: "side.replayBad", vars: { i: bad } };
   } catch (e) {
-    state.replay = { ok: false, text: "回放失敗：" + e.message };
+    state.replay = { ok: false, key: "side.replayFail", vars: { e: e.message } };
   }
   renderDTO(context());
 }
@@ -728,10 +783,10 @@ async function copy(text, btn) {
   try {
     await navigator.clipboard.writeText(text);
     const old = btn.innerHTML; // 按鈕裡可能有圖示，整段換回
-    btn.textContent = "已複製";
+    btn.textContent = t("copy.done");
     setTimeout(() => (btn.innerHTML = old), 1000);
   } catch {
-    window.prompt("複製下面的內容", text);
+    window.prompt(t("copy.prompt"), text);
   }
 }
 
@@ -742,10 +797,10 @@ function renderResults() {
     .map((b, i) => {
       if (!visible(b)) return "";
       const fg = hasFG(b) ? `<span class="tag">FG</span>` : "";
-      const seg = b.segments.length > 1 ? ` <span class="tag" title="${b.segments.length} 個 Cycle">C×${b.segments.length}</span>` : "";
-      const open = b.isend ? "" : ` <span class="tag">進行中</span>`;
+      const seg = b.segments.length > 1 ? ` <span class="tag" title="${esc(t("list.cycles", { n: b.segments.length }))}">C×${b.segments.length}</span>` : "";
+      const open = b.isend ? "" : ` <span class="tag">${esc(t("list.open"))}</span>`;
       const mult = b.bet ? (b.win / b.bet).toFixed(2) : "0";
-      return `<li data-i="${i}"><span>#${b.index} ${fg}${seg}${open}</span><span>${b.win}（×${mult}）</span></li>`;
+      return `<li data-i="${i}"><span>#${b.index} ${fg}${seg}${open}</span><span>${b.win} (×${mult})</span></li>`;
     })
     .join("");
   $("results").querySelectorAll("li").forEach((li) => (li.onclick = () => selectBet(Number(li.dataset.i))));
@@ -769,25 +824,25 @@ function markActiveResult() {
 
 function renderInfo(ctx) {
   if (!ctx) {
-    $("info").innerHTML = `<span class="muted">按 Spin 產生結果，再從左邊選一局。</span>`;
+    $("info").innerHTML = `<span class="muted">${esc(t("info.empty"))}</span>`;
     $("pos").textContent = "";
     showLinkNote("");
     return;
   }
   const { bet, segIdx, modeIdx, mode, act } = ctx;
   const items = [
-    ["押注", state.request.betmult > 1 ? `${bet.bet}（×${state.request.betmult}）` : bet.bet],
-    ["總贏分", bet.win],
-    ["Cycle", bet.segments.length > 1 ? `${segIdx}（共 ${bet.segments.length}）` : "0"],
-    ["State", stateLabel(modeIdx, mode) + (mode.trigger ? `（觸發 ${mode.trigger}）` : "")],
+    [t("info.bet"), state.request.betmult > 1 ? `${bet.bet} (×${state.request.betmult})` : bet.bet],
+    [t("info.win"), bet.win],
+    ["Cycle", bet.segments.length > 1 ? t("info.cycleOf", { i: segIdx, n: bet.segments.length }) : "0"],
+    ["State", stateLabel(modeIdx, mode) + (mode.trigger ? t("info.trigger", { t: mode.trigger }) : "")],
     ["round", act.round],
     ["step", act.step],
     ["act", `${act.act} ${act.acttype}`],
-    ["本 act", act.actwin],
-    ["step 累積", act.stepaccwin],
-    ["round 累積", act.roundaccwin],
+    [t("info.actwin"), act.actwin],
+    [t("info.stepacc"), act.stepaccwin],
+    [t("info.roundacc"), act.roundaccwin],
   ];
-  $("info").innerHTML = items.map(([k, v]) => `<span title="${esc(`${k} ${v}`)}"><span class="muted">${k}</span> <b>${esc(v)}</b></span>`).join("");
+  $("info").innerHTML = items.map(([k, v]) => `<span title="${esc(`${k} ${v}`)}"><span class="muted">${esc(k)}</span> <b>${esc(v)}</b></span>`).join("");
   $("pos").textContent = `${state.stepIdx + 1} / ${state.steps.length}`;
   showLinkNote(linkNote());
 }
@@ -941,7 +996,7 @@ function renderBoard(ctx) {
     const id = ctx.screen[idx];
     // 負值是不存在的格子：Trim 裁切掉的位置（-1）或遊戲封鎖的格子，畫成空位；名稱模式標一個淡淡的 ×
     if (id < 0) {
-      cells.push(`<div class="cell void${state.pinned.has(idx) ? " pin" : ""}" data-idx="${idx}" title="idx ${idx}｜${id === -1 ? "裁切" : "封鎖"}（${id}）"><span class="idx">${idx}</span>` +
+      cells.push(`<div class="cell void${state.pinned.has(idx) ? " pin" : ""}" data-idx="${idx}" title="idx ${idx} | ${t(id === -1 ? "board.trimmed" : "board.blocked")} (${id})"><span class="idx">${idx}</span>` +
         `${state.symMode === "id" ? id : `<span class="void-x">×</span>`}</div>`);
       continue;
     }
@@ -963,7 +1018,7 @@ function renderBoard(ctx) {
     cells.push(
       // 名稱模式下 Z 系列是空格（消除後還沒補的位置），不寫名稱；ID 模式每一格都顯示盤面上的原始數字。
       // data-sym 與 title 一律是原圖標，配色和覆寫規則不受 label 影響
-      `<div class="${cls.join(" ")}" data-idx="${idx}" data-sym="${esc(name)}"${style} title="idx ${idx}｜${esc(name)}（id ${id}）"><span class="idx">${idx}</span>` +
+      `<div class="${cls.join(" ")}" data-idx="${idx}" data-sym="${esc(name)}"${style} title="idx ${idx} | ${esc(name)} (id ${id})"><span class="idx">${idx}</span>` +
       `${state.symMode === "id" ? id : label ? esc(label) : cls[1] === "sym-Z" ? "" : esc(name)}` +
       `${badge ? `<span class="badge">${esc(badge)}</span>` : ""}</div>`
     );
@@ -1006,7 +1061,7 @@ function renderTimeline() {
   const showSeg = b && (b.segments.length > 1 || !b.isend);
   const modeHTML = (g) => {
     const head = `State ${esc(stateLabel(g.modeIdx, g.mode))}` +
-      ` <span class="muted">贏分 ${g.mode.win}${g.mode.trigger ? `｜觸發 ${g.mode.trigger}` : ""}</span>`;
+      ` <span class="muted">${esc(t("tl.win", { v: g.mode.win }) + (g.mode.trigger ? t("tl.trigger", { t: g.mode.trigger }) : ""))}</span>`;
     const rounds = g.rounds
       .map((r) => {
         const last = r.items[r.items.length - 1][0].act;
@@ -1016,11 +1071,11 @@ function renderTimeline() {
             if (i === state.stepIdx) cls.push("active");
             if (s.act.actwin > 0) cls.push("win");
             const label = p.actLabel && ctxBase ? p.actLabel(s.act, ctxBase) : s.act.acttype;
-            return `<span data-i="${i}" class="${cls.join(" ")}" title="step ${s.act.step}｜act ${s.act.act}｜${esc(s.act.acttype)}">` +
+            return `<span data-i="${i}" class="${cls.join(" ")}" title="step ${s.act.step} | act ${s.act.act} | ${esc(s.act.acttype)}">` +
               `${esc(label)}${s.act.actwin > 0 ? ` +${s.act.actwin}` : ""}</span>`;
           })
           .join("");
-        return `<div class="tl-round"><span class="tl-round-head" title="round 累積 ${last.roundaccwin}">Round ${r.round}</span>` +
+        return `<div class="tl-round"><span class="tl-round-head" title="${esc(t("tl.roundacc", { v: last.roundaccwin }))}">Round ${r.round}</span>` +
           `<span class="tl-acts">${acts}</span></div>`;
       })
       .join("");
@@ -1030,16 +1085,16 @@ function renderTimeline() {
     .map((sg) => {
       const modes = sg.modes.map(modeHTML).join("");
       if (!showSeg) return modes;
-      const picked = sg.segIdx > 0 && sg.segment.choice !== undefined ? `｜選 #${sg.segment.choice}` : "";
-      const head = `Cycle ${sg.segIdx} <span class="muted">贏分 ${sg.segment.win}${picked}${sg.segment.isend ? "" : "｜結束於選擇點"}</span>`;
+      const picked = sg.segIdx > 0 && sg.segment.choice !== undefined ? t("tl.picked", { i: sg.segment.choice }) : "";
+      const head = `Cycle ${sg.segIdx} <span class="muted">${esc(t("tl.win", { v: sg.segment.win }) + picked + (sg.segment.isend ? "" : t("tl.atChoice")))}</span>`;
       return `<div class="tl-seg"><div class="tl-seg-head">${head}</div>${modes}</div>`;
     })
     .join("");
   // player：這局停在選擇點時列出選項
   if (b && !b.isend) {
     const last = b.segments[b.segments.length - 1];
-    html += `<div class="choices"><span class="muted">選擇下一個 Cycle：</span>` +
-      (last.choose_next || []).map((entry, i) => `<button data-choice="${i}" title="位置 ${i}，入口 ${entry}">#${i} → ${esc(entry)}</button>`).join("") +
+    html += `<div class="choices"><span class="muted">${esc(t("tl.choose"))}</span>` +
+      (last.choose_next || []).map((entry, i) => `<button data-choice="${i}" title="${esc(t("tl.choice.tip", { i, e: entry }))}">#${i} → ${esc(entry)}</button>`).join("") +
       `</div>`;
   }
   $("timeline").innerHTML = html;
@@ -1058,17 +1113,17 @@ function renderDetails(ctx) {
   const tbl = $("details");
   const details = (ctx && ctx.act.details) || [];
   if (!details.length) {
-    tbl.innerHTML = `<tbody><tr><td class="muted">無</td></tr></tbody>`;
+    tbl.innerHTML = `<tbody><tr><td class="muted">${esc(t("side.none"))}</td></tr></tbody>`;
     return;
   }
   tbl.innerHTML =
-    `<thead><tr><th>圖標</th><th>數量</th><th>線／組合</th><th>贏分</th></tr></thead><tbody>` +
+    `<thead><tr>${["side.symbol", "side.count", "side.where", "side.winCol"].map((k) => `<th>${esc(t(k))}</th>`).join("")}</tr></thead><tbody>` +
     details
       .map((d, i) => {
-        const where = d.comb ? `${d.comb} 組` : `L${d.line}${d.direction ? " ←" : ""}`;
+        const where = d.comb ? t("side.comb", { n: d.comb }) : `L${d.line}${d.direction ? " ←" : ""}`;
         const name = DEV.util.sym(ctx, d.symbol);
         const sym = state.symMode === "id" ? d.symbol : name;
-        return `<tr data-i="${i}"><td title="${esc(name)}（id ${d.symbol}）">${esc(sym)}</td><td>${d.count}</td>` +
+        return `<tr data-i="${i}"><td title="${esc(name)} (id ${d.symbol})">${esc(sym)}</td><td>${d.count}</td>` +
           `<td>${where}</td><td>${d.win}</td></tr>`;
       })
       .join("") +
@@ -1081,21 +1136,21 @@ function renderDetails(ctx) {
 
 function renderGamePanel(ctx) {
   const p = plugin();
-  $("game-panel-title").textContent = p.title || "機台資訊";
-  $("raw-ext").textContent = ctx && ctx.ext ? JSON.stringify(ctx.ext, null, 2) : "（這一步沒有 ext）";
+  $("game-panel-title").textContent = pickLang(p.title) || t("side.game");
+  $("raw-ext").textContent = ctx && ctx.ext ? JSON.stringify(ctx.ext, null, 2) : t("side.noExt");
   if (!ctx) {
     $("game-panel").innerHTML = "";
     return;
   }
   if (!p.panel) {
-    $("game-panel").innerHTML = `<span class="muted">這台沒有注入外掛，只顯示公版。</span>`;
+    $("game-panel").innerHTML = `<span class="muted">${esc(t("side.noPlugin"))}</span>`;
     return;
   }
   try {
     $("game-panel").innerHTML = p.panel(ctx) || "";
   } catch (e) {
-    $("game-panel").innerHTML = `<span class="muted">games/${state.game.gid}.js 錯誤：${esc(e.message)}</span>`;
+    $("game-panel").innerHTML = `<span class="muted">${esc(t("side.pluginErr", { gid: state.game.gid, e: e.message }))}</span>`;
   }
 }
 
-init().catch((e) => ($("status").textContent = "載入失敗：" + e.message));
+init().catch((e) => setStatus("status.loadFail", { e: e.message }));

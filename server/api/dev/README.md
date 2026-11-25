@@ -21,7 +21,7 @@ Ctrl+C 結束；仍有連線時最多等 5 秒。
 
 ## 操作
 
-頂部欄最右邊的鍵盤圖示（或按 `?`）列出所有快捷鍵與滑鼠操作；它左邊的主題按鈕依序切換跟隨系統、淺色、深色；再左邊的圖表按鈕（或按 `S`）打開玩家統計；最左邊的「資金」是玩家剩餘資金，按一下也會打開玩家統計。
+頂部欄最右邊的「EN／中」切換介面語言，預設英文，瀏覽器會記住；它左邊的鍵盤圖示（或按 `?`）列出所有快捷鍵與滑鼠操作；再左邊的主題按鈕依序切換跟隨系統、淺色、深色；再左邊的圖表按鈕（或按 `S`）打開玩家統計；最左邊的「資金」是玩家剩餘資金，按一下也會打開玩家統計。
 
 | 按鍵 | 功能 |
 | --- | --- |
@@ -151,8 +151,8 @@ http://localhost:5808/dev?gid=2&betmode=0&betmult=1&replay=<整局回放輸入>&
 
 ```js
 DEV.register(2, {
-  title: "demo_choice 資訊",           // 右側面板標題
-  modes: { 0: "BaseGame", 1: "FG-A", 2: "FG-B" }, // 每個 ModeID 的名稱，顯示在時間軸與資訊列
+  title: { en: "demo_choice info", zh: "demo_choice 資訊" }, // 右側面板標題；字串或 { en, zh }
+  modes: { 0: "BaseGame", 1: "FG-A", 2: "FG-B" }, // 每個 ModeID 的名稱，顯示在時間軸與資訊列；字串或 { en, zh }
   css: ".cell.blast { outline-color: red; }", // 這台專用的樣式，選填
   panel(ctx) { return "<html>"; },     // 右側面板內容
   cellClass(idx, ctx) { return []; },  // 格子要加的 class，例如 "mark"、"dim" 或自訂的
@@ -186,6 +186,8 @@ DEV.register(2, {
 - 改寫的格子帶 `labeled` class，字級統一為格子寬的 0.24（L 系列也不放大）；5 個字以上再加 `long`，自動縮小。要再調整時在外掛的 `css` 寫 `.cell.labeled { … }`。demo 0 的外掛示範了這個用法。
 
 `modes` 與 `actLabel` 是替玩法和動作取名，屬於畫面的工作，不寫進遊戲設定檔。撰寫外掛時（包括請 AI 協作時），先列出這台每個 ModeID 的行列數、圖標與觸發方式，請使用者決定每個 ModeID 的名稱，並依這些資訊提供建議選項（例如觸發 FG 的 mode 叫 `FreeGame`）；`actLabel` 的文字也先問過再寫。
+
+介面語言：`DEV.lang` 是目前的語言（`"en"` 或 `"zh"`），`DEV.t({ en, zh })` 依目前語言取字，缺的語言用 `en`；字串原樣回傳。`title` 與 `modes` 的值可以直接寫成 `{ en, zh }`；`panel`、`badge`、`label`、`actLabel` 等函式裡的文字用 `DEV.t` 取。切換語言時公版會重畫整個畫面，外掛不用自己處理。只寫一種語言的外掛照常運作，兩種語言都顯示同一份文字。demo 0～3 的外掛示範了雙語寫法。
 
 工具函式：`DEV.util.kv(rows)`（兩欄表）、`DEV.util.progress(value, total, label)`（進度條）、`DEV.util.sym(ctx, id)`（圖標 ID 轉名稱）、`DEV.util.motion(ctx)`（公版推斷的落下動態）、`DEV.util.esc(s)`。
 

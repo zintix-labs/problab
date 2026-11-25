@@ -144,6 +144,13 @@ label.inline { font-size: 13px; }
 .seed-copy { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; font-size: 13px; color: var(--muted); }
 .seed-copy[hidden] { display: none; }
 .help-btn, .theme-btn, .stats-btn { padding: 0 8px; display: inline-flex; align-items: center; }
+/* 介面語言：兩段按鈕，目前的語言用跟「自動」一樣的綠框 */
+.lang-switch { display: inline-flex; }
+.lang-switch button { padding: 0 9px; font-size: 13px; color: var(--muted); border-radius: 0; }
+.lang-switch button:first-child { border-radius: 8px 0 0 8px; }
+.lang-switch button + button { margin-left: -1px; }
+.lang-switch button:last-child { border-radius: 0 8px 8px 0; }
+.lang-switch button[aria-pressed="true"] { color: var(--primary-hover); border-color: var(--primary); position: relative; }
 #status.warn { color: #dc2626; }
 :root:where([data-theme="dark"]) #status.warn { color: #f87171; }
 
@@ -321,10 +328,10 @@ kbd {
 .controls button { height: 32px; padding: 0 10px; }
 /* 兩段切換的按鈕只寫目前的值，寬度固定，切換時不跳動 */
 .controls button.toggle { padding: 0; }
-#chain { width: 56px; }
+#chain { min-width: 56px; padding: 0 8px; }
 /* 自動播放：字固定，亮綠是開、一般按鈕樣式是關 */
 #autoplay { color: var(--muted); }
-#autoplay[aria-pressed="true"] { color: var(--primary); border-color: var(--primary); } /* 跟速度箭頭同一個綠 */
+#autoplay[aria-pressed="true"] { color: var(--primary-hover); border-color: var(--primary); } /* 框跟速度箭頭同一個綠，字亮一階 */
 #symmode { width: 104px; }
 #play { width: 88px; }
 /* 速度三檔：亮幾個箭頭就是第幾檔 */
