@@ -46,8 +46,9 @@ var (
 	// draw game-specific details (see demo/demo_devgames). Problab ships none;
 	// a game without a plugin, or a nil devGames, uses the common panel only.
 	// An optional theme.css at the same root overrides the panel colors (see
-	// the 自訂配色 section of server/api/dev/README.md). An embed.FS needs a restart after editing a plugin; os.DirFS("devgames")
-	// picks up edits on browser reload.
+	// the Custom colors section of server/api/dev/README.md). An embed.FS
+	// needs a restart after editing a plugin; os.DirFS("devgames") picks up
+	// edits on browser reload.
 	devGames fs.FS = demo_devgames.FS
 )
 
@@ -68,8 +69,9 @@ func run(args []string, output io.Writer) (code int, err error) {
 	flags.SetOutput(io.Discard)
 	addr := flags.String("addr", devcli.DefaultAddr, "listen address")
 	open := flags.Bool("open", true, "open the panel in the default browser")
+	lang := flags.String("lang", "", "default UI language: en or zh")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
-		return 1, fmt.Errorf("cmd/dev accepts only -addr <address> and -open=<bool>")
+		return 1, fmt.Errorf("cmd/dev accepts only -addr <address>, -open=<bool> and -lang <en|zh>")
 	}
 	lab, err := pLab()
 	if err != nil {
@@ -83,5 +85,5 @@ func run(args []string, output io.Writer) (code int, err error) {
 	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return devcli.Run(ctx, devcli.Options{Lab: lab, DevGames: devGames, Addr: *addr, OpenBrowser: *open, Output: output})
+	return devcli.Run(ctx, devcli.Options{Lab: lab, DevGames: devGames, Addr: *addr, OpenBrowser: *open, Output: output, Lang: *lang})
 }

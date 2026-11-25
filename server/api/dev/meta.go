@@ -28,6 +28,7 @@ type metaResponse struct {
 	MaxSegments int        `json:"max_segments"` // 每局的段數上限
 	MaxBetMult  int        `json:"max_bet_mult"` // 投注倍數上限
 	Theme       bool       `json:"theme"`        // 應用端注入了 theme.css；前端排在公版樣式之後載入
+	Lang        string     `json:"lang"`         // 應用端設定的預設介面語言（en、zh）；使用者在面板上選過的語言優先
 }
 
 // gameMeta 只包含畫面需要的欄位。完整設定含盤面產生、賠率與中獎判定，不得送出；
@@ -49,10 +50,13 @@ type modeMeta struct {
 	Symbols []string `json:"symbols"` // 圖標名稱，盤面上的圖標 ID 是它的索引
 }
 
-func buildMeta(pb *problab.Problab, devGames fs.FS) (metaResponse, error) {
+func buildMeta(pb *problab.Problab, devGames fs.FS, lang string) (metaResponse, error) {
+	if lang == "" {
+		lang = "en"
+	}
 	out := metaResponse{
 		Games: []gameMeta{}, MaxRounds: maxRounds, MaxSegments: problab.DefaultMaxSegments,
-		MaxBetMult: maxBetMult, Theme: hasFile(devGames, themeName),
+		MaxBetMult: maxBetMult, Theme: hasFile(devGames, themeName), Lang: lang,
 	}
 	for _, ent := range pb.All() {
 		gs, err := pb.GameSettingById(ent.GID)

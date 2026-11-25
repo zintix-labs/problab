@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -13,66 +13,112 @@
       try { pref = localStorage.getItem("dev.theme") || "system"; } catch (e) {}
       var dark = pref === "dark" || (pref !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
       document.documentElement.dataset.theme = dark ? "dark" : "light";
+      // 介面語言記在 dev.lang（en、zh），預設英文；i18n.js 的 applyI18n 同一套規則
+      var lang = "en";
+      try { lang = localStorage.getItem("dev.lang") === "zh" ? "zh" : "en"; } catch (e) {}
+      document.documentElement.lang = lang === "zh" ? "zh-Hant" : "en";
     })();
   </script>
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
   <header class="bar">
-    <strong class="brand">ProbLab Dev</strong>
-    <label>機台 <select id="game"></select></label>
-    <label>押注模式 <select id="betmode"></select></label>
-    <label>倍數 <input id="betmult" type="number" min="1" max="100" value="1" title="投注倍數；投注額 = 押注單位 × 倍數" /></label>
+    <strong class="brand">ProbLab</strong>
+    <!-- 頂部欄分三組，寬度不夠時整組換行：機台與押注、執行、資金與工具 -->
+    <span class="bar-group">
+    <label><span data-i18n="bar.game">Game</span> <select id="game"></select></label>
+    <label><span data-i18n="bar.betmode">Bet mode</span> <select id="betmode"></select></label>
+    <label><span data-i18n="bar.betmult">Mult</span> <input id="betmult" type="number" min="1" max="100" value="1" data-i18n-title="bar.betmult.tip" /></label>
     <span id="wager" class="muted"></span>
-    <label>選擇方式
-      <select id="choose" title="選擇類遊戲遇到選擇點時的處理方式">
+    </span>
+    <span class="bar-group">
+    <label><span data-i18n="bar.choose">Choice</span>
+      <select id="choose" data-i18n-title="bar.choose.tip">
         <option value="first">first</option>
         <option value="last">last</option>
         <option value="player">player</option>
       </select>
     </label>
-    <label>輸入
-      <select id="input" title="Seed：建立機台的根 seed；Snap：某個 Cycle 的 start_b64u">
+    <label><span data-i18n="bar.input">Input</span>
+      <select id="input" data-i18n-title="bar.input.tip">
         <option value="seed">Seed</option>
         <option value="snap">Snap</option>
       </select>
     </label>
-    <input id="value" placeholder="空白隨機｜整數｜hex:…｜utf8:…" />
-    <label>局數 <input id="rounds" type="number" min="1" value="50" /></label>
+    <input id="value" />
+    <label><span data-i18n="bar.rounds">Bets</span> <input id="rounds" type="number" min="1" value="50" /></label>
     <button id="spin" class="primary" title="Space／Enter">Spin</button>
+    <!-- 這批實際使用的 seed 不直接顯示，按一下複製；滑鼠提示看得到值 -->
+    <button id="seed-copy" class="seed-copy" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></svg> seed</button>
     <span id="status" class="muted"></span>
+    </span>
+    <span class="bar-group bar-tools">
+    <button id="funds-chip" class="funds-chip"><span class="muted" data-i18n="bar.funds">Balance</span> <b id="funds-val">—</b></button>
+    <button id="stats-btn" class="stats-btn" data-i18n-title="bar.stats" data-i18n-aria="bar.stats.aria"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18" /><path d="M7 15l4-5 3 3 5-7" /></svg></button>
     <button id="theme-btn" class="theme-btn"></button>
-    <button id="help-btn" class="help-btn" popovertarget="help" title="快捷鍵（?）" aria-label="快捷鍵說明"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8" /></svg></button>
+    <button id="help-btn" class="help-btn" popovertarget="help" data-i18n-title="bar.help" data-i18n-aria="bar.help.aria"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8" /></svg></button>
+    <span id="lang" class="lang-switch" role="group" data-i18n-aria="bar.lang"><button data-lang="en" aria-pressed="true">EN</button><button data-lang="zh" aria-pressed="false">中</button></span>
+    </span>
   </header>
 
   <div id="help" class="help" popover>
-    <div class="help-title">鍵盤</div>
+    <div class="help-title" data-i18n="help.keyboard">Keyboard</div>
     <table class="help-keys">
       <tr><td><kbd>Space</kbd> <kbd>Enter</kbd></td><td>Spin</td></tr>
-      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>上一步／下一步</td></tr>
-      <tr><td><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>上一個／下一個 round</td></tr>
-      <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>第一步／最後一步</td></tr>
-      <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>上一局／下一局（依局列表的篩選）</td></tr>
-      <tr><td><kbd>P</kbd></td><td>播放／暫停</td></tr>
-      <tr><td><kbd>+</kbd></td><td>速度切到下一檔，turbo 之後回到 normal</td></tr>
-      <tr><td><kbd>I</kbd></td><td>切換 SymbolName／SymbolID</td></tr>
-      <tr><td><kbd>Esc</kbd></td><td>關閉說明；清掉釘住的格子編號</td></tr>
-      <tr><td><kbd>?</kbd></td><td>開關這個說明</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td data-i18n="help.step"></td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td data-i18n="help.round"></td></tr>
+      <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td data-i18n="help.ends"></td></tr>
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td data-i18n="help.bet"></td></tr>
+      <tr><td><kbd>P</kbd></td><td data-i18n="help.play"></td></tr>
+      <tr><td><kbd>+</kbd></td><td data-i18n="help.speed"></td></tr>
+      <tr><td><kbd>I</kbd></td><td data-i18n="help.symmode"></td></tr>
+      <tr><td><kbd>S</kbd></td><td data-i18n="help.stats"></td></tr>
+      <tr><td><kbd>Esc</kbd></td><td data-i18n="help.esc"></td></tr>
+      <tr><td><kbd>?</kbd></td><td data-i18n="help.help"></td></tr>
     </table>
-    <div class="help-title">滑鼠</div>
+    <div class="help-title" data-i18n="help.mouse">Mouse</div>
     <ul class="help-mouse">
-      <li>移到格子上：顯示格子編號與名稱／ID</li>
-      <li>點格子：釘住編號，再點一次取消</li>
-      <li>點時間軸：跳到那一步</li>
-      <li>點速度的第幾個箭頭：切到第幾檔</li>
+      <li data-i18n="help.m.hover"></li>
+      <li data-i18n="help.m.pin"></li>
+      <li data-i18n="help.m.timeline"></li>
+      <li data-i18n="help.m.speed"></li>
+      <li data-i18n="help.m.chart"></li>
     </ul>
   </div>
+
+  <!-- 玩家統計：程式在 stats.js。統計存在瀏覽器的 IndexedDB，所有 dev 分頁共用一份 -->
+  <dialog id="stats" class="stats" aria-labelledby="stats-title" tabindex="-1">
+    <div class="stats-head">
+      <strong id="stats-title" data-i18n="stats.title">Player stats</strong>
+      <label class="inline"><span data-i18n="stats.funds">Starting balance</span> <input id="stats-funds" type="number" min="0" step="1" value="10000" /></label>
+      <span class="stats-head-acts">
+        <button id="stats-reset" data-i18n-title="stats.reset.tip" data-i18n="stats.reset">Reset</button>
+        <button id="stats-close" data-i18n-title="stats.close" data-i18n-aria="stats.close.aria">✕</button>
+      </span>
+    </div>
+    <div id="stats-nums" class="stats-nums"></div>
+    <div class="stats-chart-head">
+      <span id="stats-view" class="stats-view" role="group" data-i18n-aria="stats.chart">
+        <button data-view="funds" data-i18n="stats.view.funds"></button><button data-view="rtp" data-i18n="stats.view.rtp"></button><button data-view="mrtp" data-i18n="stats.view.mrtp"></button>
+      </span>
+      <span id="stats-legend" class="stats-legend"></span>
+    </div>
+    <!-- 讀數：滑鼠所在的點，或按住拖曳選取的區間 -->
+    <div id="stats-readout" class="stats-readout"></div>
+    <div id="stats-chart" class="stats-chart"></div>
+    <div class="stats-list-head">
+      <span id="stats-list-title" data-i18n="stats.history">Bet history</span>
+      <span class="win-filter"><label class="inline" data-i18n-title="filter.tip"><input id="stats-win-filter" type="checkbox" /> <span data-i18n="filter.only">Only ≥</span></label><input id="stats-win-min" type="number" min="0" step="0.01" value="0.01" data-i18n-aria="filter.aria" /><span class="muted" data-i18n="filter.unit">x</span></span>
+    </div>
+    <ol id="stats-list" class="stats-list"></ol>
+    <div class="stats-note muted" data-i18n="stats.note"></div>
+  </dialog>
 
   <main class="layout">
     <aside class="panel" id="results-panel">
       <div class="panel-head">
-        <span>局列表</span>
-        <label class="inline"><input id="only-win" type="checkbox" /> 只看有贏分</label>
+        <span data-i18n="list.title">Bets</span>
+        <span class="win-filter"><label class="inline" data-i18n-title="filter.tip"><input id="win-filter" type="checkbox" /> <span data-i18n="filter.only">Only ≥</span></label><input id="win-min" type="number" min="0" step="0.01" value="0.01" data-i18n-aria="filter.aria" /><span class="muted" data-i18n="filter.unit">x</span></span>
       </div>
       <div id="summary" class="summary muted"></div>
       <ol id="results" class="results"></ol>
@@ -84,20 +130,21 @@
       <!-- 三組：步進（手動移動到哪一步）、播放（自動播放怎麼播）、檢視與分享（不影響播放） -->
       <div class="controls">
         <div class="ctrl-group ctrl-step">
-          <button id="first" title="第一步（Home）">⏮</button>
-          <button id="prev" title="上一步（←）">◀</button>
+          <button id="first" data-i18n-title="ctrl.first">⏮</button>
+          <button id="prev" data-i18n-title="ctrl.prev">◀</button>
           <span id="pos" class="muted"></span>
-          <button id="next" title="下一步（→）">▶</button>
-          <button id="last" title="最後一步（End）">⏭</button>
+          <button id="next" data-i18n-title="ctrl.next">▶</button>
+          <button id="last" data-i18n-title="ctrl.last">⏭</button>
         </div>
         <div class="ctrl-group ctrl-play">
-          <button id="play" title="自動播放（P）">▶ 播放</button>
-          <span id="speed" class="speed" role="group" aria-label="速度"></span>
-          <button id="chain" class="toggle" title="單局：播完這局就停；連續：接著播局列表的下一局。按一下切換"></button>
+          <button id="play" data-i18n-title="ctrl.play.tip"></button>
+          <span id="speed" class="speed" role="group" data-i18n-aria="ctrl.speed.aria"></span>
+          <button id="chain" class="toggle" data-i18n-title="ctrl.chain.tip"></button>
+          <button id="autoplay" aria-pressed="true" data-i18n="ctrl.auto">Auto</button>
         </div>
         <div class="ctrl-group ctrl-view">
-          <button id="symmode" class="toggle" title="格子與中獎明細顯示圖標名稱或盤面上的 ID，按一下切換（I）"></button>
-          <button id="copy-link" title="複製能重現這一步的網址">複製連結</button>
+          <button id="symmode" class="toggle" data-i18n-title="ctrl.symmode.tip"></button>
+          <button id="copy-link" data-i18n-title="ctrl.copyLink.tip" data-i18n="ctrl.copyLink">Copy link</button>
           <span id="link-note" class="link-note" hidden>⚠</span>
         </div>
       </div>
@@ -105,25 +152,27 @@
     </section>
 
     <aside class="panel" id="side-panel">
-      <div class="panel-head"><span>本步中獎</span></div>
+      <div class="panel-head"><span data-i18n="side.wins">Wins this step</span></div>
       <table id="details" class="details"></table>
-      <div class="panel-head"><span id="game-panel-title">機台資訊</span></div>
+      <div class="panel-head"><span id="game-panel-title">Game info</span></div>
       <div id="game-panel" class="game-panel"></div>
       <details class="raw">
-        <summary>ext 原始資料</summary>
+        <summary data-i18n="side.rawExt">Raw ext</summary>
         <pre id="raw-ext"></pre>
       </details>
-      <div class="panel-head"><span id="cycle-title">本 Cycle 快照</span></div>
+      <div class="panel-head"><span id="cycle-title">Cycle snapshot</span></div>
       <div id="cycle-dto" class="dto"></div>
-      <div class="panel-head"><span>本局 DTO</span></div>
+      <div class="panel-head"><span data-i18n="side.dto">Bet DTO</span></div>
       <div id="dto" class="dto"></div>
       <details class="raw">
-        <summary>完整 DTO JSON（所有 Cycle）</summary>
+        <summary data-i18n="side.rawDto">Full DTO JSON (all Cycles)</summary>
         <pre id="raw-dto"></pre>
       </details>
     </aside>
   </main>
 
+  <script src="i18n.js"></script>
   <script src="common.js"></script>
+  <script src="stats.js"></script>
 </body>
 </html>
