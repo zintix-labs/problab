@@ -527,12 +527,12 @@ func TestMetaFieldWhitelist(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := func(m map[string]any) string { return strings.Join(slices.Sorted(maps.Keys(m)), ",") }
-	if got := keys(meta); got != "games,max_bet_mult,max_rounds,max_segments,theme" {
+	if got := keys(meta); got != "games,lang,max_bet_mult,max_rounds,max_segments,theme" {
 		t.Fatalf("top-level keys %s", got)
 	}
 	games := meta["games"].([]any)
 	if len(games) != 4 || meta["max_rounds"].(float64) != maxRounds || meta["max_segments"].(float64) != problab.DefaultMaxSegments ||
-		meta["max_bet_mult"].(float64) != maxBetMult || meta["theme"] != false {
+		meta["max_bet_mult"].(float64) != maxBetMult || meta["theme"] != false || meta["lang"] != "en" {
 		t.Fatalf("meta %v", meta)
 	}
 	for _, g := range games {
@@ -580,5 +580,34 @@ func TestMetaMarksInjectedPlugins(t *testing.T) {
 		if g.Plugin != (g.GID == 2) {
 			t.Fatalf("game %d plugin %v", g.GID, g.Plugin)
 		}
+	}
+}
+
+// DevLang 是面板的預設介面語言，經 /dev/meta 的 lang 傳給前端；只接受 en、zh，空字串視為 en。
+func TestMetaDefaultLang(t *testing.T) {
+	lab := demoLab(t)
+	rt := &testRouter{r: chi.NewRouter()}
+	Register(rt, &svrcfg.SvrCfg{Problab: lab, Mode: svrcfg.ModeDev, DevLang: "zh"})
+	ts := httptest.NewServer(rt.r)
+	t.Cleanup(ts.Close)
+	res, err := ts.Client().Get(ts.URL + "/dev/meta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var meta metaResponse
+	if err := json.NewDecoder(res.Body).Decode(&meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Lang != "zh" {
+		t.Fatalf("lang %q, want zh", meta.Lang)
+	}
+	for _, lang := range []string{"", "en", "zh"} {
+		if err := (&svrcfg.SvrCfg{Problab: lab, DevLang: lang}).Vaild(); err != nil {
+			t.Fatalf("DevLang %q: %v", lang, err)
+		}
+	}
+	if err := (&svrcfg.SvrCfg{Problab: lab, DevLang: "zh-TW"}).Vaild(); err == nil {
+		t.Fatal("DevLang zh-TW accepted")
 	}
 }

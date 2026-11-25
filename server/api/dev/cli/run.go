@@ -48,6 +48,7 @@ const (
 type Options struct {
 	Lab         *problab.Problab // required; borrowed, the caller closes it
 	DevGames    fs.FS            // <gid>.js plugins and an optional theme.css at its root; nil uses the common panel only
+	Lang        string           // default UI language: "en" (when empty) or "zh"; a language picked in the panel takes precedence
 	Addr        string           // listen address; empty selects DefaultAddr
 	OpenBrowser bool             // open the panel in the default browser once it is listening
 	Output      io.Writer        // nil suppresses text (the panel URL and browser warnings)
@@ -70,7 +71,7 @@ func Run(ctx context.Context, o Options) (int, error) {
 	if err != nil {
 		return 1, fmt.Errorf("dev panel: invalid address %q: %w", addr, err)
 	}
-	cfg := &svrcfg.SvrCfg{Log: o.Log, SlotBufSize: 1, Problab: o.Lab, Mode: svrcfg.ModePanel, DevGames: o.DevGames}
+	cfg := &svrcfg.SvrCfg{Log: o.Log, SlotBufSize: 1, Problab: o.Lab, Mode: svrcfg.ModePanel, DevGames: o.DevGames, DevLang: o.Lang}
 	if err := cfg.Vaild(); err != nil {
 		return 1, err
 	}

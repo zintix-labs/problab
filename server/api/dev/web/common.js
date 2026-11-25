@@ -4,7 +4,8 @@
 
 const DEV = (window.DEV = {
   plugins: {},
-  // 目前的介面語言（"en" 或 "zh"）；外掛的文字用 DEV.t({ en, zh }) 依語言取，切換語言時公版會重畫外掛的部分
+  // 目前的介面語言（"en" 或 "zh"）；外掛的文字用 DEV.t({ en, zh }) 依語言取，切換語言時公版會重畫外掛的部分。
+  // title、modes 的值與 panel、badge、label、actLabel 的回傳值也可以直接是 { en, zh }，公版會依語言取
   get lang() {
     return i18n.lang;
   },
@@ -115,9 +116,9 @@ function renderStatus() {
 }
 
 // 切換介面語言並記住；固定文字由 applyI18n 換掉，程式產生的部分整個重畫
-function setLang(lang) {
+function setLang(lang, save = true) {
   i18n.lang = LANGS.includes(lang) ? lang : "en";
-  remember("dev.lang", i18n.lang);
+  if (save) remember("dev.lang", i18n.lang);
   applyI18n();
   if (!state.game) return;
   setTheme(state.theme);
@@ -146,6 +147,8 @@ async function init() {
   };
   state.meta = await api("meta");
   state.games = state.meta.games;
+  // 應用端設定的預設語言：使用者在面板上選過語言（瀏覽器記住的）時以使用者為準，這裡不寫進瀏覽器
+  if (remember("dev.lang") === null && state.meta.lang !== i18n.lang) setLang(state.meta.lang, false);
   // 應用端注入的主題排在 app.css 之後、外掛的 css 之前
   if (state.meta.theme) {
     const link = document.createElement("link");
@@ -1008,10 +1011,10 @@ function renderBoard(ctx) {
     const mv = motion && motion.get(idx);
     if (animate && ctx.act.screen && (fresh || (ctx.prevScreen && ctx.prevScreen[idx] !== id)) && !(mv && !mv.fade)) cls.push("changed");
     if (p.cellClass) cls.push(...[].concat(p.cellClass(idx, ctx) || []));
-    const badge = p.badge ? p.badge(idx, ctx) : "";
+    const badge = p.badge ? pickLang(p.badge(idx, ctx)) : "";
     // 外掛的 label 取代中央的圖標名稱；ID 模式是用來和後端陣列逐格比對的，不呼叫 label。
     // 回傳 ""、null、undefined、false 都用公版預設（false 讓 `cond && "x"` 的寫法也能用）
-    const raw = state.symMode === "id" || !p.label ? "" : p.label(idx, ctx);
+    const raw = state.symMode === "id" || !p.label ? "" : pickLang(p.label(idx, ctx));
     const label = raw === null || raw === undefined || raw === false ? "" : String(raw);
     if (label) cls.push("labeled", ...(label.length >= 5 ? ["long"] : []));
     const style = mv ? ` style="--after:${timing.delay(mv) + timing.drop}ms"` : "";
@@ -1070,7 +1073,7 @@ function renderTimeline() {
             const cls = ["tl-act"];
             if (i === state.stepIdx) cls.push("active");
             if (s.act.actwin > 0) cls.push("win");
-            const label = p.actLabel && ctxBase ? p.actLabel(s.act, ctxBase) : s.act.acttype;
+            const label = p.actLabel && ctxBase ? pickLang(p.actLabel(s.act, ctxBase)) : s.act.acttype;
             return `<span data-i="${i}" class="${cls.join(" ")}" title="step ${s.act.step} | act ${s.act.act} | ${esc(s.act.acttype)}">` +
               `${esc(label)}${s.act.actwin > 0 ? ` +${s.act.actwin}` : ""}</span>`;
           })
@@ -1147,7 +1150,7 @@ function renderGamePanel(ctx) {
     return;
   }
   try {
-    $("game-panel").innerHTML = p.panel(ctx) || "";
+    $("game-panel").innerHTML = pickLang(p.panel(ctx)) || "";
   } catch (e) {
     $("game-panel").innerHTML = `<span class="muted">${esc(t("side.pluginErr", { gid: state.game.gid, e: e.message }))}</span>`;
   }

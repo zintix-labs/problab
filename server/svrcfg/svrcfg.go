@@ -15,6 +15,7 @@
 package svrcfg
 
 import (
+	"fmt"
 	"io/fs"
 	"log/slog"
 
@@ -77,6 +78,10 @@ type SvrCfg struct {
 	// panel's colors. Problab ships no game plugins; a game without one here is
 	// shown with the common panel only.
 	DevGames fs.FS
+	// DevLang is the ProbLab Dev panel's default UI language: "en" (the default
+	// when empty) or "zh" (Traditional Chinese). A language the user picks in
+	// the panel is remembered by the browser and takes precedence.
+	DevLang string
 }
 
 func (sc *SvrCfg) Vaild() error {
@@ -95,6 +100,9 @@ func (sc *SvrCfg) Vaild() error {
 	sc.SlotBufSize = min(10, sc.SlotBufSize)
 	if sc.Problab == nil {
 		return errs.NewFatal("problab is required")
+	}
+	if sc.DevLang != "" && sc.DevLang != "en" && sc.DevLang != "zh" {
+		return errs.NewFatal(fmt.Sprintf("invalid DevLang %q: use \"en\" or \"zh\"", sc.DevLang))
 	}
 	return nil
 }

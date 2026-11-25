@@ -67,7 +67,7 @@ func devMeta(cfg *svrcfg.SvrCfg) http.HandlerFunc {
 			httperr.Errs(w, err)
 			return
 		}
-		meta, err := buildMeta(pb, cfg.DevGames)
+		meta, err := buildMeta(pb, cfg.DevGames, cfg.DevLang)
 		if err != nil {
 			httperr.Errs(w, err)
 			return

@@ -11,6 +11,7 @@
 ```sh
 make dev   # 等於 go run ./cmd/dev，自動開啟 http://localhost:5808/dev
 go run ./cmd/dev -addr :5810 -open=false   # 換埠號、不開瀏覽器（例如同時開兩個）
+go run ./cmd/dev -lang zh                  # 預設介面語言改成中文
 ```
 
 Ctrl+C 結束；仍有連線時最多等 5 秒。
@@ -21,7 +22,7 @@ Ctrl+C 結束；仍有連線時最多等 5 秒。
 
 ## 操作
 
-頂部欄最右邊的「EN／中」切換介面語言，預設英文，瀏覽器會記住；它左邊的鍵盤圖示（或按 `?`）列出所有快捷鍵與滑鼠操作；再左邊的主題按鈕依序切換跟隨系統、淺色、深色；再左邊的圖表按鈕（或按 `S`）打開玩家統計；最左邊的「資金」是玩家剩餘資金，按一下也會打開玩家統計。
+頂部欄最右邊的「EN／中」切換介面語言，瀏覽器會記住；沒選過時用應用端設定的預設語言（`svrcfg.SvrCfg.DevLang`、`devcli.Options.Lang` 或 `cmd/dev -lang`，只接受 `en`、`zh`），沒設定就是英文；它左邊的鍵盤圖示（或按 `?`）列出所有快捷鍵與滑鼠操作；再左邊的主題按鈕依序切換跟隨系統、淺色、深色；再左邊的圖表按鈕（或按 `S`）打開玩家統計；最左邊的「資金」是玩家剩餘資金，按一下也會打開玩家統計。
 
 | 按鍵 | 功能 |
 | --- | --- |
@@ -187,7 +188,14 @@ DEV.register(2, {
 
 `modes` 與 `actLabel` 是替玩法和動作取名，屬於畫面的工作，不寫進遊戲設定檔。撰寫外掛時（包括請 AI 協作時），先列出這台每個 ModeID 的行列數、圖標與觸發方式，請使用者決定每個 ModeID 的名稱，並依這些資訊提供建議選項（例如觸發 FG 的 mode 叫 `FreeGame`）；`actLabel` 的文字也先問過再寫。
 
-介面語言：`DEV.lang` 是目前的語言（`"en"` 或 `"zh"`），`DEV.t({ en, zh })` 依目前語言取字，缺的語言用 `en`；字串原樣回傳。`title` 與 `modes` 的值可以直接寫成 `{ en, zh }`；`panel`、`badge`、`label`、`actLabel` 等函式裡的文字用 `DEV.t` 取。切換語言時公版會重畫整個畫面，外掛不用自己處理。只寫一種語言的外掛照常運作，兩種語言都顯示同一份文字。demo 0～3 的外掛示範了雙語寫法。
+介面語言：外掛不需要處理語系，只寫一種語言的外掛照常運作，兩種語言都顯示同一份文字。要支援雙語時：
+
+- `DEV.lang` 是目前的語言（`"en"` 或 `"zh"`），`DEV.t({ en, zh })` 依目前語言取字，缺的語言用 `en`；字串原樣回傳。
+- `title`、`modes` 的值，以及 `panel`、`badge`、`label`、`actLabel` 的回傳值，都可以直接寫成 `{ en, zh }`，公版會依語言取；組字串時在函式裡用 `DEV.t`。
+- 切換語言時公版會重畫整個畫面，外掛不用自己處理。
+- 外掛可能放到還沒有語言切換的舊版 problab 時，先寫 `const T = DEV.t || ((v) => v.en);` 再用 `T({ en, zh })`；舊版沒有 `DEV.t`，直接呼叫會讓盤面畫不出來。
+
+demo 0～3 的外掛示範了雙語寫法。
 
 工具函式：`DEV.util.kv(rows)`（兩欄表）、`DEV.util.progress(value, total, label)`（進度條）、`DEV.util.sym(ctx, id)`（圖標 ID 轉名稱）、`DEV.util.motion(ctx)`（公版推斷的落下動態）、`DEV.util.esc(s)`。
 
@@ -366,6 +374,7 @@ code, err := devcli.Run(ctx, devcli.Options{
 	Addr:        ":5808",   // 空字串為 devcli.DefaultAddr
 	OpenBrowser: true,
 	Output:      os.Stdout, // nil 時不印網址
+	Lang:        "zh",      // 預設介面語言：空字串或 "en" 是英文，"zh" 是中文
 })
 ```
 
