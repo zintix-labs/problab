@@ -41,7 +41,8 @@ const state = {
   betIdx: -1,
   steps: [],
   stepIdx: 0,
-  timer: null,
+  timer: null,       // 自動播放的計時器；播到底就清掉，停下來等
+  autoplay: true,    // 播放意圖：開著時 Spin、換局、選完 player 選項後自動接著播；只有按暫停（P）才關，記在瀏覽器
   focusDetail: -1,
   pinned: new Set(), // 點一下釘住顯示格子編號的格子
   symMode: "name",   // 格子與中獎明細顯示圖標名稱（name）或盤面上的 ID（id）
@@ -176,6 +177,8 @@ async function init() {
   $("next").onclick = () => go(state.stepIdx + 1);
   $("last").onclick = () => go(state.steps.length - 1);
   $("play").onclick = togglePlay;
+  state.autoplay = remember("dev.autoplay") !== "0";
+  syncPlay();
   document.addEventListener("keydown", onKey);
   window.addEventListener("resize", () => renderBoard(context()));
   // 點格子：釘住／取消顯示該格編號
@@ -193,7 +196,7 @@ async function init() {
     if (q.has("step")) go(Number(q.get("step")) - 1);
   } else if (q.get("spin") === "1") {
     await spin({ fromLink: true });
-    if (q.has("bet")) selectBet(Number(q.get("bet")) - 1);
+    if (q.has("bet")) selectBet(Number(q.get("bet")) - 1, false);
     if (q.has("step")) go(Number(q.get("step")) - 1);
   } else {
     render();
@@ -201,7 +204,7 @@ async function init() {
 }
 
 function selectGame() {
-  stop();
+  halt();
   state.game = state.games[Number($("game").value)];
   document.body.dataset.gid = state.game.gid; // 讓主題與外掛的 css 以 body[data-gid] 限定機台
   state.pinned.clear();
@@ -248,7 +251,7 @@ function loadPlugin(game) {
 
 // 手動按 Spin、輸入為 Seed 時，這批的局計入玩家統計（player 的局選到結束才計入）；fromLink 是從網址自動執行，不計入
 async function spin(opts = {}) {
-  stop();
+  halt();
   $("status").textContent = "執行中…";
   $("status").classList.remove("warn");
   const req = {
@@ -283,8 +286,9 @@ async function spin(opts = {}) {
     $("status").textContent = notes.join("｜");
     renderSummary();
     renderResults();
+    // 從網址自動執行的不自動播放，停在網址指定的那一步
     const first = state.bets.findIndex(betVisible());
-    selectBet(first >= 0 ? first : 0);
+    selectBet(first >= 0 ? first : 0, !opts.fromLink);
   } catch (e) {
     $("status").textContent = "錯誤：" + e.message;
   }
@@ -325,9 +329,11 @@ function flatten(b) {
   return steps;
 }
 
-function selectBet(i) {
-  stop();
+// 換到第 i 局；播放意圖開著時從第 1 步接著播
+function selectBet(i, play = true) {
+  halt();
   showBet(i);
+  if (play) resume();
 }
 
 // 換到第 i 局的第 1 步；連播換局時不停止播放
@@ -382,30 +388,55 @@ function goRound(dir) {
   go(i < 0 ? state.steps.length - 1 : i);
 }
 
+// 手動換步（按鈕、方向鍵、時間軸）：停下這局的播放，但不關播放意圖，下一次 Spin 或換局照樣自動播
 function go(i) {
   if (!state.steps.length) return;
+  halt();
+  showStep(i);
+}
+
+function showStep(i) {
   state.stepIdx = Math.max(0, Math.min(state.steps.length - 1, i));
   state.focusDetail = -1;
   render();
 }
 
+// 播放鍵（P）：播放中按下是暫停並關掉播放意圖；停著時按下是開始播並打開意圖，已在最後一步就從第 1 步重播
 function togglePlay() {
-  if (state.timer) return stop();
-  if (!state.steps.length) return;
-  if (state.stepIdx >= state.steps.length - 1) go(0);
-  $("play").textContent = "⏸ 暫停";
-  // 播完這局：單局模式、這局停在選擇點，或已經是最後一局時停止；否則換到局列表的下一局
-  const tick = () => {
-    if (state.stepIdx < state.steps.length - 1) {
-      go(state.stepIdx + 1);
-    } else {
-      const next = state.chain && state.bets[state.betIdx].isend ? nextBet(1) : -1;
-      if (next < 0) return stop();
-      showBet(next);
-    }
-    state.timer = setTimeout(tick, SPEEDS[state.speed].ms);
-  };
-  state.timer = setTimeout(tick, SPEEDS[state.speed].ms);
+  if (state.timer) {
+    setAutoplay(false);
+    return halt();
+  }
+  setAutoplay(true);
+  if (!state.steps.length) return syncPlay();
+  if (state.stepIdx >= state.steps.length - 1) showStep(0);
+  resume();
+}
+
+function setAutoplay(on) {
+  state.autoplay = on;
+  remember("dev.autoplay", on ? "1" : "0");
+}
+
+// 播放意圖開著就從目前這一步往下播。播到這局最後一步時：連續模式且這局已結束就換到局列表的下一局；
+// 單局模式、這局停在選擇點，或已經是最後一局時清掉計時器停下來等，播放意圖不變
+function resume() {
+  clearTimeout(state.timer);
+  state.timer = null;
+  if (state.autoplay && state.steps.length) {
+    const tick = () => {
+      if (state.stepIdx < state.steps.length - 1) {
+        showStep(state.stepIdx + 1);
+      } else {
+        const next = state.chain && state.bets[state.betIdx].isend ? nextBet(1) : -1;
+        if (next < 0) return halt();
+        showBet(next);
+      }
+      state.timer = setTimeout(tick, SPEEDS[state.speed].ms);
+    };
+    if (state.stepIdx < state.steps.length - 1 || state.chain) state.timer = setTimeout(tick, SPEEDS[state.speed].ms);
+  }
+  syncPlay();
 }
 
 // 套用主題並記住選擇；跟隨系統時依目前的系統設定。index.html 開頭的 script 在畫面出現前先套用一次
@@ -427,10 +458,20 @@ function setSpeed(level) {
   $("speed").querySelectorAll("button").forEach((btn, i) => btn.classList.toggle("on", i <= state.speed));
 }
 
-function stop() {
+// 只停計時器，不動播放意圖
+function halt() {
   clearTimeout(state.timer);
   state.timer = null;
-  $("play").textContent = "▶ 播放";
+  syncPlay();
+}
+
+// 播放鍵顯示計時器的狀態；停著但播放意圖開著時，旁邊註明下一次 Spin（或選完選項）會自動播
+function syncPlay() {
+  $("play").textContent = state.timer ? "⏸ 暫停" : "▶ 播放";
+  const b = state.bets[state.betIdx];
+  const note = state.timer || !state.autoplay ? "" : b && !b.isend && state.stepIdx >= state.steps.length - 1 ? "選完後自動播放" : "Spin 後自動播放";
+  $("play-note").textContent = note;
+  $("play-note").hidden = !note;
 }
 
 function symModeText() {
@@ -564,6 +605,7 @@ async function pick(position) {
     renderSummary();
     renderResults();
     render();
+    resume();
   } catch (e) {
     $("status").textContent = "錯誤：" + e.message;
   }

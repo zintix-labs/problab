@@ -335,6 +335,7 @@ kbd {
 .controls .speed button + button { margin-left: -2px; }
 .controls .speed button.on { color: var(--primary); opacity: 1; }
 .controls .speed button:hover { background: transparent; opacity: 1; }
+.play-note { font-size: 12px; white-space: nowrap; }
 .link-note { color: var(--sym-w-ring); cursor: help; }
 .link-note[hidden] { display: inline; visibility: hidden; } /* 保留位置，⚠ 出現時按鈕不會移動 */
 #pos { display: inline-block; min-width: 72px; text-align: center; font-variant-numeric: tabular-nums; }

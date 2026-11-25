@@ -257,7 +257,7 @@ async function loadReplayLink(q) {
     $("status").classList.toggle("warn", !same);
     renderSummary();
     renderResults();
-    selectBet(0);
+    selectBet(0, false);
   } catch (e) {
     $("status").textContent = "重播失敗：" + e.message;
     render();
